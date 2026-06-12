@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from threading import RLock
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ServiceHealth(BaseModel):
@@ -11,6 +12,7 @@ class ServiceHealth(BaseModel):
     state: str
     last_update: datetime
     last_error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ServiceHealthStore:
@@ -26,12 +28,19 @@ class ServiceHealthStore:
             "telegram": ServiceHealth(name="telegram", state="idle", last_update=now),
         }
 
-    def set(self, name: str, state: str, last_error: str | None = None) -> ServiceHealth:
+    def set(
+        self,
+        name: str,
+        state: str,
+        last_error: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ServiceHealth:
         health = ServiceHealth(
             name=name,
             state=state,
             last_update=utc_now(),
             last_error=last_error,
+            metadata=metadata or {},
         )
         with self._lock:
             self._services[name] = health
@@ -47,4 +56,3 @@ def utc_now() -> datetime:
 
 
 service_health_store = ServiceHealthStore()
-

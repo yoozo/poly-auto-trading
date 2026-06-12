@@ -1,16 +1,15 @@
-import asyncio
-import json
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import StreamingResponse
 
 from app.core.config import settings
 from app.db.session import get_session
 from app.schemas.candle import Candle, IndicatorPoint, Interval
 from app.services.binance_client import BinanceClient
-from app.services.candle_store import list_candles, upsert_candles
+from app.services.candle_store import list_candles, list_candles_between, upsert_candles
 from app.services.indicators import calculate_indicator_points
+from app.services.market_ws_hub import market_ws_hub
 
 router = APIRouter(tags=["candles"])
 
@@ -20,10 +19,27 @@ async def candles(
     symbol: str = settings.binance_symbol,
     interval: Interval = Query("1m"),
     limit: int = Query(300, ge=1, le=1000),
+    start_ms: int | None = Query(None, ge=0),
+    end_ms: int | None = Query(None, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> list[Candle]:
-    fetched = await BinanceClient().fetch_klines(symbol=symbol, interval=interval, limit=limit)
+    if (start_ms is None) != (end_ms is None):
+        raise HTTPException(status_code=400, detail="start_ms and end_ms must be provided together")
+    if start_ms is not None and end_ms is not None and start_ms >= end_ms:
+        raise HTTPException(status_code=400, detail="start_ms must be less than end_ms")
+
+    fetched = await BinanceClient().fetch_klines(
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
     await upsert_candles(session, fetched)
+    if start_ms is not None and end_ms is not None:
+        start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+        return await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
     return await list_candles(session, symbol=symbol, interval=interval, limit=limit)
 
 
@@ -42,37 +58,16 @@ async def indicators(
     return calculate_indicator_points(candles, interval)
 
 
-@router.get("/events/stream")
-async def event_stream(
+@router.websocket("/ws/market")
+async def market_websocket(
+    websocket: WebSocket,
     symbol: str = settings.binance_symbol,
     interval: Interval = Query("1m"),
-) -> StreamingResponse:
-    async def generate():
+) -> None:
+    normalized_symbol = symbol.upper()
+    await market_ws_hub.connect(websocket, normalized_symbol, interval)
+    try:
         while True:
-            async with get_session_context() as session:
-                candles = await list_candles(session, symbol=symbol, interval=interval, limit=300)
-            points = calculate_indicator_points(candles, interval)
-            latest_candle = candles[-1].model_dump(mode="json") if candles else None
-            latest_indicator = points[-1].model_dump(mode="json") if points else None
-            payload = {
-                "type": "candle.updated",
-                "symbol": symbol.upper(),
-                "interval": interval,
-                "candle": latest_candle,
-                "indicator": latest_indicator,
-            }
-            yield f"event: candle.updated\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(5)
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
-
-
-class get_session_context:
-    def __init__(self) -> None:
-        self._generator = get_session()
-
-    async def __aenter__(self) -> AsyncSession:
-        return await self._generator.__anext__()
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        await self._generator.aclose()
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await market_ws_hub.disconnect(websocket, normalized_symbol, interval)

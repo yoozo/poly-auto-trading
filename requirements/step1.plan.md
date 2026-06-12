@@ -50,6 +50,10 @@
 
 ## Phase 2: BTC 看盘 v1
 
+状态：已完成（2026-06-12）
+
+备注：已参考 `polymarket-tool/tools/polymarket-trade-analysis/templates/btc_watch.html` 的周期、RSI、RSI EMA、RSI-EMA diff、BOLL 参数与配色实现。已验证后端测试、ruff、前端 build 和本地 BTC 看盘页面；页面可显示历史 K 线、BOLL、RSI 子图、最新价、收盘倒计时、实时流状态和 K 线 tooltip。
+
 目标：先把 BTC 看盘做成真正可用的核心页面。
 
 后端：

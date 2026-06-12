@@ -1,6 +1,6 @@
 export type Candle = {
   symbol: string;
-  interval: string;
+  interval: CandleInterval;
   open_time: string;
   close_time: string;
   open: number;
@@ -12,6 +12,20 @@ export type Candle = {
 };
 
 export type CandleInterval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+
+export type IndicatorPoint = {
+  symbol: string;
+  interval: CandleInterval;
+  candle_time: string;
+  rsi: number | null;
+  rsi_ema: number | null;
+  rsi_ema_diff: number | null;
+  bollinger: {
+    upper: number | null;
+    middle: number | null;
+    lower: number | null;
+  };
+};
 
 export type HealthStatus = {
   status: "ok" | "degraded";
@@ -40,5 +54,19 @@ export const api = {
   health: () => request<HealthStatus>("/api/health"),
   services: () => request<ServiceHealth[]>("/api/status/services"),
   candles: (interval: CandleInterval, limit = 300) =>
-    request<Candle[]>(`/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}`)
+    request<Candle[]>(`/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
+  candlesRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000) =>
+    request<Candle[]>(
+      `/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
+    ),
+  indicators: (interval: CandleInterval, limit = 300) =>
+    request<IndicatorPoint[]>(`/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
+  marketWsUrl: (interval: CandleInterval) => {
+    const base = API_BASE_URL || window.location.origin;
+    const url = new URL("/api/ws/market", base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.searchParams.set("symbol", "BTCUSDT");
+    url.searchParams.set("interval", interval);
+    return url.toString();
+  }
 };

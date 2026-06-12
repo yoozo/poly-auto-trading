@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,3 +79,37 @@ async def list_candles(
         for model in models
     ]
 
+
+async def list_candles_between(
+    session: AsyncSession,
+    symbol: str,
+    interval: Interval,
+    start: datetime,
+    end: datetime,
+) -> list[Candle]:
+    statement = (
+        select(CandleModel)
+        .where(
+            CandleModel.symbol == symbol.upper(),
+            CandleModel.interval == interval,
+            CandleModel.open_time >= start,
+            CandleModel.open_time <= end,
+        )
+        .order_by(CandleModel.open_time.asc())
+    )
+    result = await session.scalars(statement)
+    return [
+        Candle(
+            symbol=model.symbol,
+            interval=model.interval,  # type: ignore[arg-type]
+            open_time=model.open_time,
+            close_time=model.close_time,
+            open=float(model.open),
+            high=float(model.high),
+            low=float(model.low),
+            close=float(model.close),
+            volume=float(model.volume),
+            is_closed=model.is_closed,
+        )
+        for model in result.all()
+    ]

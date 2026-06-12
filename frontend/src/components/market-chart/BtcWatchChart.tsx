@@ -1,0 +1,944 @@
+import {
+  CandlestickSeries,
+  ColorType,
+  createChart,
+  CrosshairMode,
+  LineSeries,
+  LineStyle,
+  type IChartApi,
+  type ISeriesApi,
+  type Logical,
+  type LogicalRange,
+  type MouseEventParams,
+  type Time,
+  type UTCTimestamp
+} from "lightweight-charts";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import type { CandleInterval } from "../../api/client";
+import type { MarketCandle, MarketIndicatorPoint, StreamStatus } from "./types";
+import {
+  candleTime,
+  formatFixed,
+  formatPrice,
+  formatSigned,
+  formatTooltipTime,
+  indicatorTime,
+  initialLookbackMs,
+  intervalMs,
+  nearestTimeValue,
+  type TimeValue
+} from "./utils";
+
+type Props = {
+  symbol: string;
+  interval: CandleInterval;
+  candles: MarketCandle[];
+  indicators: MarketIndicatorPoint[];
+  showBollinger: boolean;
+  showRsi: boolean;
+  onLoadMore?: (startMs: number, endMs: number) => Promise<void>;
+  isLoadingMore?: boolean;
+  latestStreamStatus: StreamStatus;
+  fitAnchorVersion?: number;
+};
+
+type BollKey = "middle" | "upper" | "lower";
+type RsiKey = "rsi" | "rsi_ema";
+type DiffKey = "rsi_ema_diff";
+type RsiSeriesKey = RsiKey | "ref70" | "ref30";
+type DiffSeriesKey = DiffKey | "ref0" | "ref12" | "ref-12";
+
+const BOLL_LINES: Array<{ key: BollKey; color: string; label: string }> = [
+  { key: "middle", color: "#64748b", label: "BOLL Mid" },
+  { key: "upper", color: "#9333ea", label: "BOLL Upper" },
+  { key: "lower", color: "#ea580c", label: "BOLL Lower" }
+];
+
+const RSI_LINES: Array<{ key: RsiKey; color: string; label: string }> = [
+  { key: "rsi", color: "#ec4899", label: "RSI14" },
+  { key: "rsi_ema", color: "#0ea5e9", label: "EMA14" }
+];
+
+const DIFF_LINES: Array<{ key: DiffKey; color: string; label: string }> = [
+  { key: "rsi_ema_diff", color: "#f97316", label: "RSI-EMA" }
+];
+
+const DEFAULT_VISIBLE_CANDLES = 100;
+const ANCHOR_RIGHT_RATIO = 0.2;
+const LOAD_MORE_THRESHOLD = 24;
+const TARGET_BAR_WIDTH = 8;
+const MAX_BAR_WIDTH = 12;
+
+export default function BtcWatchChart({
+  symbol,
+  interval,
+  candles,
+  indicators,
+  showBollinger,
+  showRsi,
+  onLoadMore,
+  isLoadingMore = false,
+  latestStreamStatus,
+  fitAnchorVersion = 0
+}: Props) {
+  const mainContainerRef = useRef<HTMLDivElement | null>(null);
+  const rsiContainerRef = useRef<HTMLDivElement | null>(null);
+  const diffContainerRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const countdownRef = useRef<HTMLDivElement | null>(null);
+
+  const mainChartRef = useRef<IChartApi | null>(null);
+  const rsiChartRef = useRef<IChartApi | null>(null);
+  const diffChartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const bollSeriesRef = useRef<Partial<Record<BollKey, ISeriesApi<"Line">>>>({});
+  const rsiSeriesRef = useRef<Partial<Record<RsiSeriesKey, ISeriesApi<"Line">>>>({});
+  const diffSeriesRef = useRef<Partial<Record<DiffSeriesKey, ISeriesApi<"Line">>>>({});
+  const rsiPrimarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const diffPrimarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+
+  const candlesRef = useRef<MarketCandle[]>([]);
+  const indicatorsRef = useRef<MarketIndicatorPoint[]>([]);
+  const candleByTimeRef = useRef<Map<number, MarketCandle>>(new Map());
+  const bollByTimeRef = useRef<Map<number, MarketIndicatorPoint["bollinger"]>>(new Map());
+  const indicatorByTimeRef = useRef<Map<number, MarketIndicatorPoint>>(new Map());
+  const mainCrosshairDataRef = useRef<TimeValue[]>([]);
+  const rsiCrosshairDataRef = useRef<TimeValue[]>([]);
+  const diffCrosshairDataRef = useRef<TimeValue[]>([]);
+
+  const initializedRef = useRef(false);
+  const syncingRangeRef = useRef(false);
+  const pendingRangeRef = useRef<{ targets: IChartApi[]; range: LogicalRange } | null>(null);
+  const rangeSyncFrameRef = useRef<number>(0);
+  const syncingCrosshairRef = useRef(false);
+  const draggingRef = useRef(false);
+  const loadMoreQueuedRef = useRef(false);
+  const previousFirstTimeRef = useRef<number | null>(null);
+  const previousLengthRef = useRef(0);
+  const latestRangeRef = useRef<LogicalRange | null>(null);
+  const resizeFrameRef = useRef<number>(0);
+  const lastMainWidthRef = useRef(0);
+
+  const intervalRef = useRef(interval);
+  const showRsiRef = useRef(showRsi);
+  const isLoadingMoreRef = useRef(isLoadingMore);
+  const onLoadMoreRef = useRef(onLoadMore);
+
+  const latestCandle = candles.at(-1);
+  const latestIndicator = indicators.at(-1);
+  const streamLabel = useMemo(() => {
+    if (latestStreamStatus === "connected") return "实时流 已连接";
+    if (latestStreamStatus === "reconnecting") return "实时流 重连中";
+    if (latestStreamStatus === "closed") return "实时流 已关闭";
+    return "实时流 连接中";
+  }, [latestStreamStatus]);
+  const rsiStatus =
+    latestIndicator?.rsi !== null && latestIndicator?.rsi !== undefined
+      ? `RSI14 ${formatFixed(latestIndicator.rsi)} · EMA14 ${formatFixed(latestIndicator.rsi_ema)} · RSI-EMA ${formatSigned(latestIndicator.rsi_ema_diff)}`
+      : showRsi
+        ? "RSI 样本不足"
+        : "";
+
+  const chartOptions = useCallback(
+    (container: HTMLDivElement, showTimeScale: boolean, priceScaleMargins = { top: 0.12, bottom: 0.12 }) => ({
+      autoSize: true,
+      width: Math.max(320, container.clientWidth),
+      height: Math.max(120, container.clientHeight),
+      localization: {
+        locale: "zh-CN",
+        timeFormatter: (time: Time) => {
+          if (typeof time === "number") return formatTooltipTime(time);
+          if (typeof time === "object" && "year" in time) {
+            return `${time.year}-${String(time.month).padStart(2, "0")}-${String(time.day).padStart(2, "0")}`;
+          }
+          return "";
+        }
+      },
+      layout: {
+        background: { type: ColorType.Solid, color: "#080b10" },
+        textColor: "#94a3b8",
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      },
+      grid: {
+        vertLines: { color: "#111827" },
+        horzLines: { color: "#111827" }
+      },
+      rightPriceScale: {
+        borderColor: "#1f2937",
+        minimumWidth: 86,
+        scaleMargins: priceScaleMargins
+      },
+      timeScale: {
+        visible: showTimeScale,
+        borderColor: "#1f2937",
+        timeVisible: true,
+        secondsVisible: false,
+        allowShiftVisibleRangeOnWhitespace: true
+      },
+      crosshair: { mode: CrosshairMode.Normal }
+    }),
+    []
+  );
+
+  useEffect(() => {
+    if (!mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
+
+    const mainChart = createChart(mainContainerRef.current, chartOptions(mainContainerRef.current, !showRsiRef.current));
+    const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }));
+    const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }));
+    const candleSeries = mainChart.addSeries(CandlestickSeries, {
+      upColor: "#0f7a4f",
+      downColor: "#b42318",
+      borderUpColor: "#0f7a4f",
+      borderDownColor: "#b42318",
+      wickUpColor: "#0f7a4f",
+      wickDownColor: "#b42318",
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+    });
+
+    mainChartRef.current = mainChart;
+    rsiChartRef.current = rsiChart;
+    diffChartRef.current = diffChart;
+    candleSeriesRef.current = candleSeries;
+
+    mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      const normalizedRange = normalizeVisibleRange(range);
+      if (normalizedRange && range !== normalizedRange) {
+        setVisibleRange(normalizedRange);
+        return;
+      }
+      latestRangeRef.current = normalizedRange;
+      syncTimeRange([rsiChart, diffChart], normalizedRange);
+      maybeLoadMore(normalizedRange);
+    });
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      const normalizedRange = normalizeVisibleRange(range);
+      if (normalizedRange && range !== normalizedRange) {
+        setVisibleRange(normalizedRange);
+        return;
+      }
+      latestRangeRef.current = normalizedRange;
+      syncTimeRange([mainChart, diffChart], normalizedRange);
+    });
+    diffChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      const normalizedRange = normalizeVisibleRange(range);
+      if (normalizedRange && range !== normalizedRange) {
+        setVisibleRange(normalizedRange);
+        return;
+      }
+      latestRangeRef.current = normalizedRange;
+      syncTimeRange([mainChart, rsiChart], normalizedRange);
+    });
+
+    mainChart.subscribeCrosshairMove((param) => {
+      updateTooltipFromParam(param);
+      syncCrosshair(param.time, rsiChart, rsiPrimarySeriesRef.current, rsiCrosshairDataRef.current);
+      syncCrosshair(param.time, diffChart, diffPrimarySeriesRef.current, diffCrosshairDataRef.current);
+    });
+    rsiChart.subscribeCrosshairMove((param) => {
+      updateTooltipFromParam(param);
+      syncCrosshair(param.time, mainChart, candleSeries, mainCrosshairDataRef.current);
+      syncCrosshair(param.time, diffChart, diffPrimarySeriesRef.current, diffCrosshairDataRef.current);
+    });
+    diffChart.subscribeCrosshairMove((param) => {
+      updateTooltipFromParam(param);
+      syncCrosshair(param.time, mainChart, candleSeries, mainCrosshairDataRef.current);
+      syncCrosshair(param.time, rsiChart, rsiPrimarySeriesRef.current, rsiCrosshairDataRef.current);
+    });
+
+    const unbindMainDom = bindChartDom(mainContainerRef.current);
+    const unbindRsiDom = bindChartDom(rsiContainerRef.current);
+    const unbindDiffDom = bindChartDom(diffContainerRef.current);
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const width = Math.round(entry.contentRect.width);
+      handleMainWidthChange(width);
+    });
+    resizeObserver.observe(mainContainerRef.current);
+
+    return () => {
+      unbindMainDom();
+      unbindRsiDom();
+      unbindDiffDom();
+      if (rangeSyncFrameRef.current) window.cancelAnimationFrame(rangeSyncFrameRef.current);
+      if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeObserver.disconnect();
+      mainChart.remove();
+      rsiChart.remove();
+      diffChart.remove();
+      mainChartRef.current = null;
+      rsiChartRef.current = null;
+      diffChartRef.current = null;
+      candleSeriesRef.current = null;
+      bollSeriesRef.current = {};
+      rsiSeriesRef.current = {};
+      diffSeriesRef.current = {};
+      rsiPrimarySeriesRef.current = null;
+      diffPrimarySeriesRef.current = null;
+    };
+  }, [chartOptions]);
+
+  useEffect(() => {
+    intervalRef.current = interval;
+    showRsiRef.current = showRsi;
+    isLoadingMoreRef.current = isLoadingMore;
+    onLoadMoreRef.current = onLoadMore;
+  }, [interval, showRsi, isLoadingMore, onLoadMore]);
+
+  useEffect(() => {
+    initializedRef.current = false;
+    loadMoreQueuedRef.current = false;
+    previousFirstTimeRef.current = null;
+    previousLengthRef.current = 0;
+    latestRangeRef.current = null;
+    hideTooltip();
+  }, [symbol, interval]);
+
+  useEffect(() => {
+    indicatorsRef.current = indicators;
+    rebuildMaps();
+  }, [indicators]);
+
+  useEffect(() => {
+    const mainChart = mainChartRef.current;
+    const rsiChart = rsiChartRef.current;
+    const diffChart = diffChartRef.current;
+    const candleSeries = candleSeriesRef.current;
+    if (!mainChart || !rsiChart || !diffChart || !candleSeries) return;
+    if (candles.some((candle) => candle.interval !== interval)) return;
+    if (indicators.some((point) => point.interval !== interval)) return;
+
+    const chartCandles = uniqueCandlesByChartTime(candles);
+    const previousRange = mainChart.timeScale().getVisibleLogicalRange();
+    const previousFirst = previousFirstTimeRef.current;
+    const nextFirst = chartCandles[0] ? candleTime(chartCandles[0]) : null;
+    const previousLast = previousLengthRef.current > 0 ? candleTime(candlesRef.current[previousLengthRef.current - 1]) : null;
+    const nextLast = chartCandles.at(-1) ? candleTime(chartCandles.at(-1) as MarketCandle) : null;
+    const addedBefore =
+      previousFirst !== null && nextFirst !== null && nextFirst < previousFirst
+        ? chartCandles.filter((candle) => candleTime(candle) < previousFirst).length
+        : 0;
+    const appendedAfter =
+      previousLast !== null && nextLast !== null && nextLast > previousLast
+        ? chartCandles.filter((candle) => candleTime(candle) > previousLast).length
+        : 0;
+    const wasAtRight = isNearRightEdge(previousRange, previousLengthRef.current);
+
+    candlesRef.current = chartCandles;
+    candleByTimeRef.current = new Map(chartCandles.map((candle) => [candleTime(candle), candle]));
+    mainCrosshairDataRef.current = chartCandles.map((candle) => ({ time: candleTime(candle), value: candle.close }));
+    rebuildMaps();
+
+    candleSeries.setData(
+      chartCandles.map((candle) => ({
+        time: candleTime(candle) as UTCTimestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close
+      }))
+    );
+    renderBollinger();
+    renderRsi();
+    renderDiff();
+
+    if (!initializedRef.current && chartCandles.length > 0) {
+      initializedRef.current = true;
+      setInitialVisibleRange();
+    } else if (addedBefore > 0 && previousRange) {
+      setVisibleRange({
+        from: (previousRange.from + addedBefore) as Logical,
+        to: (previousRange.to + addedBefore) as Logical
+      });
+    } else if (appendedAfter > 0 && wasAtRight && previousRange && !draggingRef.current) {
+      const width = previousRange.to - previousRange.from;
+      setVisibleRange({
+        from: (chartCandles.length + anchorRightPaddingBars(width) - width) as Logical,
+        to: (chartCandles.length + anchorRightPaddingBars(width)) as Logical
+      });
+    } else if (previousRange) {
+      setVisibleRange(previousRange);
+    }
+
+    previousFirstTimeRef.current = nextFirst;
+    previousLengthRef.current = candles.length;
+  }, [candles, indicators, showBollinger, showRsi, interval]);
+
+  useEffect(() => {
+    const mainChart = mainChartRef.current;
+    const rsiChart = rsiChartRef.current;
+    const diffChart = diffChartRef.current;
+    if (!mainChart || !rsiChart || !diffChart) return;
+    mainChart.applyOptions({ timeScale: { visible: !showRsi } });
+    rsiChart.applyOptions({ timeScale: { visible: false } });
+    diffChart.applyOptions({ timeScale: { visible: true } });
+    window.requestAnimationFrame(() => {
+      resizeCharts();
+      renderRsi();
+      renderDiff();
+      if (latestRangeRef.current) setVisibleRange(latestRangeRef.current);
+    });
+  }, [showRsi]);
+
+  useEffect(() => {
+    const timer = window.setInterval(updateCountdown, 1000);
+    updateCountdown();
+    return () => window.clearInterval(timer);
+  }, [interval, latestCandle]);
+
+  useEffect(() => {
+    if (fitAnchorVersion > 0 && candlesRef.current.length > 0) {
+      window.requestAnimationFrame(() => setInitialVisibleRange());
+    }
+  }, [fitAnchorVersion]);
+
+  function syncTimeRange(target: IChartApi | IChartApi[], range: LogicalRange | null) {
+    if (!range || syncingRangeRef.current) return;
+    pendingRangeRef.current = { targets: Array.isArray(target) ? target : [target], range };
+    if (rangeSyncFrameRef.current) return;
+    rangeSyncFrameRef.current = window.requestAnimationFrame(() => {
+      rangeSyncFrameRef.current = 0;
+      const pending = pendingRangeRef.current;
+      pendingRangeRef.current = null;
+      if (!pending) return;
+      syncingRangeRef.current = true;
+      try {
+        for (const target of pending.targets) {
+          target.timeScale().setVisibleLogicalRange(pending.range);
+        }
+      } finally {
+        syncingRangeRef.current = false;
+      }
+    });
+  }
+
+  function bindChartDom(element: HTMLDivElement) {
+    const onPointerDown = () => {
+      draggingRef.current = true;
+      hideTooltip();
+    };
+    const onPointerUp = () => {
+      draggingRef.current = false;
+    };
+    const onMouseMove = (event: MouseEvent) => {
+      if (event.buttons) return;
+      const chart =
+        element === mainContainerRef.current
+          ? mainChartRef.current
+          : element === rsiContainerRef.current
+            ? rsiChartRef.current
+            : diffChartRef.current;
+      const scale = chart?.timeScale();
+      if (!scale) return;
+      const rect = element.getBoundingClientRect();
+      const rawTime = scale.coordinateToTime(event.clientX - rect.left);
+      const time = Number(rawTime);
+      if (!Number.isFinite(time)) {
+        hideTooltip();
+        return;
+      }
+      const nearest = nearestTimeValue(mainCrosshairDataRef.current, time);
+      updateTooltipAt(nearest?.time ?? time);
+    };
+
+    element.addEventListener("pointerdown", onPointerDown, { passive: true });
+    element.addEventListener("mousemove", onMouseMove, { passive: true });
+    element.addEventListener("mouseleave", hideTooltip);
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
+    window.addEventListener("pointercancel", onPointerUp, { passive: true });
+    window.addEventListener("blur", onPointerUp, { passive: true });
+
+    return () => {
+      element.removeEventListener("pointerdown", onPointerDown);
+      element.removeEventListener("mousemove", onMouseMove);
+      element.removeEventListener("mouseleave", hideTooltip);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("blur", onPointerUp);
+    };
+  }
+
+  function updateTooltipFromParam(param: MouseEventParams<Time>) {
+    if (draggingRef.current || param.time === undefined) return;
+    const nearest = nearestTimeValue(mainCrosshairDataRef.current, Number(param.time));
+    if (!nearest) {
+      hideTooltip();
+      return;
+    }
+    updateTooltipAt(nearest.time);
+  }
+
+  function syncCrosshair(
+    time: Time | undefined,
+    targetChart: IChartApi,
+    targetSeries: ISeriesApi<"Line"> | ISeriesApi<"Candlestick"> | null,
+    targetData: TimeValue[]
+  ) {
+    if (syncingCrosshairRef.current || !targetSeries || time === undefined) return;
+    const sourceTime = Number(time);
+    if (!Number.isFinite(sourceTime)) return;
+    syncingCrosshairRef.current = true;
+    try {
+      const nearest = nearestTimeValue(targetData, sourceTime);
+      if (!nearest || !Number.isFinite(nearest.value)) {
+        targetChart.clearCrosshairPosition();
+        return;
+      }
+      targetChart.setCrosshairPosition(nearest.value, sourceTime as UTCTimestamp, targetSeries);
+    } finally {
+      syncingCrosshairRef.current = false;
+    }
+  }
+
+  function maybeLoadMore(range: LogicalRange | null) {
+    const loadMore = onLoadMoreRef.current;
+    if (!range || !loadMore || isLoadingMoreRef.current || loadMoreQueuedRef.current || !candlesRef.current.length) {
+      return;
+    }
+    if (range.from > LOAD_MORE_THRESHOLD) return;
+    const first = candlesRef.current[0];
+    const currentInterval = intervalRef.current;
+    const endMs = new Date(first.open_time).getTime() - intervalMs(currentInterval);
+    const startMs = Math.max(0, endMs - initialLookbackMs(currentInterval));
+    loadMoreQueuedRef.current = true;
+    window.setTimeout(() => {
+      void loadMore(startMs, endMs).finally(() => {
+        loadMoreQueuedRef.current = false;
+      });
+    }, 120);
+  }
+
+  function rebuildMaps() {
+    const activeIndicators = indicatorsRef.current;
+    const bollByTime = new Map<number, MarketIndicatorPoint["bollinger"]>();
+    const indicatorByTime = new Map<number, MarketIndicatorPoint>();
+    for (const point of activeIndicators) {
+      const nearest = nearestTimeValue(mainCrosshairDataRef.current, indicatorTime(point));
+      if (!nearest) continue;
+      if (point.bollinger.middle !== null) bollByTime.set(nearest.time, point.bollinger);
+      if (point.rsi !== null) indicatorByTime.set(nearest.time, point);
+    }
+    bollByTimeRef.current = bollByTime;
+    indicatorByTimeRef.current = indicatorByTime;
+  }
+
+  function renderBollinger() {
+    const chart = mainChartRef.current;
+    if (!chart) return;
+    for (const line of BOLL_LINES) {
+      let series = bollSeriesRef.current[line.key];
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: showBollinger,
+          priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+        });
+        bollSeriesRef.current[line.key] = series;
+      }
+      series.applyOptions({ visible: showBollinger });
+      const valuesByTime = new Map<number, number>();
+      for (const point of indicators) {
+        const value = point.bollinger[line.key];
+        if (value === null || !Number.isFinite(value)) continue;
+        const nearest = nearestTimeValue(mainCrosshairDataRef.current, indicatorTime(point));
+        if (nearest) valuesByTime.set(nearest.time, value);
+      }
+      if (valuesByTime.size === 0) {
+        series.setData([]);
+        continue;
+      }
+      series.setData(
+        candlesRef.current.map((candle) => {
+          const time = candleTime(candle) as UTCTimestamp;
+          const value = valuesByTime.get(time);
+          return Number.isFinite(value) ? { time, value } : { time };
+        })
+      );
+    }
+  }
+
+  function renderRsi() {
+    const chart = rsiChartRef.current;
+    if (!chart) return;
+    for (const line of RSI_LINES) {
+      let series = rsiSeriesRef.current[line.key];
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: showRsi,
+          priceScaleId: "right",
+          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) }
+        });
+        rsiSeriesRef.current[line.key] = series;
+        if (line.key === "rsi") rsiPrimarySeriesRef.current = series;
+      }
+      series.applyOptions({ visible: showRsi });
+      const lineData = projectedIndicatorLineData(line.key);
+      if (lineData.length === 0) {
+        series.setData([]);
+        if (line.key === "rsi") rsiCrosshairDataRef.current = [];
+        continue;
+      }
+      series.setData(fullTimelineLineData(lineData));
+      if (line.key === "rsi") rsiCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
+    }
+    renderRsiReferenceLines(chart, showRsi);
+    chart.priceScale("right").applyOptions({
+      autoScale: false,
+      mode: 0,
+      scaleMargins: { top: 0.06, bottom: 0.08 }
+    });
+    chart.priceScale("right").setVisibleRange({ from: 0, to: 100 });
+  }
+
+  function renderDiff() {
+    const chart = diffChartRef.current;
+    if (!chart) return;
+    for (const line of DIFF_LINES) {
+      let series = diffSeriesRef.current[line.key];
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: showRsi,
+          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) }
+        });
+        diffSeriesRef.current[line.key] = series;
+        diffPrimarySeriesRef.current = series;
+      }
+      series.applyOptions({ visible: showRsi });
+      const lineData = projectedIndicatorLineData(line.key);
+      if (lineData.length === 0) {
+        series.setData([]);
+        diffCrosshairDataRef.current = [];
+        continue;
+      }
+      series.setData(fullTimelineLineData(lineData));
+      diffCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
+    }
+    renderDiffReferenceLines(chart, showRsi);
+    chart.priceScale("right").applyOptions({
+      autoScale: false,
+      mode: 0,
+      scaleMargins: { top: 0.12, bottom: 0.12 }
+    });
+    chart.priceScale("right").setVisibleRange({ from: -25, to: 25 });
+  }
+
+  function renderRsiReferenceLines(chart: IChartApi, shouldRender: boolean) {
+    const first = candlesRef.current[0];
+    const last = candlesRef.current.at(-1);
+    const refs = [
+      { key: "ref70", value: 70, color: "#94a3b8", lineStyle: LineStyle.Dashed },
+      { key: "ref30", value: 30, color: "#94a3b8", lineStyle: LineStyle.Dashed }
+    ] as const;
+    for (const refLine of refs) {
+      let series = rsiSeriesRef.current[refLine.key];
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          color: refLine.color,
+          lineStyle: refLine.lineStyle,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: shouldRender
+        });
+        rsiSeriesRef.current[refLine.key] = series;
+      }
+      series.applyOptions({ visible: shouldRender });
+      if (!first || !last) {
+        series.setData([]);
+      } else if (candleTime(first) === candleTime(last)) {
+        series.setData([{ time: candleTime(first) as UTCTimestamp, value: refLine.value }]);
+      } else {
+        series.setData([
+          { time: candleTime(first) as UTCTimestamp, value: refLine.value },
+          { time: candleTime(last) as UTCTimestamp, value: refLine.value }
+        ]);
+      }
+    }
+  }
+
+  function renderDiffReferenceLines(chart: IChartApi, shouldRender: boolean) {
+    const first = candlesRef.current[0];
+    const last = candlesRef.current.at(-1);
+    const refs = [
+      { key: "ref0", value: 0, color: "#64748b", lineStyle: LineStyle.Dashed },
+      { key: "ref12", value: 12, color: "#cbd5e1", lineStyle: LineStyle.Solid },
+      { key: "ref-12", value: -12, color: "#cbd5e1", lineStyle: LineStyle.Solid }
+    ] as const;
+    for (const refLine of refs) {
+      let series = diffSeriesRef.current[refLine.key];
+      if (!series) {
+        series = chart.addSeries(LineSeries, {
+          color: refLine.color,
+          lineStyle: refLine.lineStyle,
+          lineWidth: 1,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          visible: shouldRender
+        });
+        diffSeriesRef.current[refLine.key] = series;
+      }
+      series.applyOptions({ visible: shouldRender });
+      if (!first || !last) {
+        series.setData([]);
+      } else if (candleTime(first) === candleTime(last)) {
+        series.setData([{ time: candleTime(first) as UTCTimestamp, value: refLine.value }]);
+      } else {
+        series.setData([
+          { time: candleTime(first) as UTCTimestamp, value: refLine.value },
+          { time: candleTime(last) as UTCTimestamp, value: refLine.value }
+        ]);
+      }
+    }
+  }
+
+  function fullTimelineCrosshairData(validData: TimeValue[]) {
+    const result: TimeValue[] = [];
+    if (!validData.length) return result;
+    let cursor = 0;
+    let latestValue = validData[0].value;
+    for (const candle of candlesRef.current) {
+      const time = candleTime(candle);
+      while (cursor < validData.length && validData[cursor].time <= time) {
+        latestValue = validData[cursor].value;
+        cursor += 1;
+      }
+      result.push({ time, value: latestValue });
+    }
+    return result;
+  }
+
+  function fullTimelineLineData(validData: TimeValue[]) {
+    const valuesByTime = new Map(validData.map((point) => [point.time, point.value]));
+    return candlesRef.current.map((candle) => {
+      const time = candleTime(candle) as UTCTimestamp;
+      const value = valuesByTime.get(time);
+      return Number.isFinite(value) ? { time, value } : { time };
+    });
+  }
+
+  function projectedIndicatorLineData(key: RsiKey | DiffKey) {
+    const valuesByTime = new Map<number, number>();
+    for (const point of indicators) {
+      const value = point[key];
+      if (value === null || !Number.isFinite(value)) continue;
+      const nearest = nearestTimeValue(mainCrosshairDataRef.current, indicatorTime(point));
+      if (nearest) valuesByTime.set(nearest.time, value);
+    }
+    return Array.from(valuesByTime.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([time, value]) => ({ time, value }));
+  }
+
+  function setInitialVisibleRange() {
+    const visibleBars = Math.min(candlesRef.current.length, DEFAULT_VISIBLE_CANDLES);
+    const rightPadding = anchorRightPaddingBars(visibleBars);
+    setVisibleRange({
+      from: (candlesRef.current.length - visibleBars - 0.5) as Logical,
+      to: (candlesRef.current.length + rightPadding) as Logical
+    });
+  }
+
+  function handleMainWidthChange(nextWidth: number) {
+    const previousWidth = lastMainWidthRef.current;
+    lastMainWidthRef.current = nextWidth;
+    if (previousWidth <= 0 || nextWidth <= 0 || Math.abs(nextWidth - previousWidth) < 24) return;
+    if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current);
+    resizeFrameRef.current = window.requestAnimationFrame(() => {
+      resizeFrameRef.current = 0;
+      const range = mainChartRef.current?.timeScale().getVisibleLogicalRange();
+      if (!range || candlesRef.current.length <= 0) return;
+      const currentBars = range.to - range.from;
+      if (!Number.isFinite(currentBars) || currentBars <= 0) return;
+      const nextBars = Math.min(candlesRef.current.length, Math.max(minimumVisibleBars(), currentBars * (nextWidth / previousWidth)));
+      const wasAtRight = isNearRightEdge(range, candlesRef.current.length);
+      if (wasAtRight) {
+        const rightPadding = anchorRightPaddingBars(nextBars);
+        setVisibleRange({
+          from: (candlesRef.current.length + rightPadding - nextBars) as Logical,
+          to: (candlesRef.current.length + rightPadding) as Logical
+        });
+        return;
+      }
+      const center = (range.from + range.to) / 2;
+      setVisibleRange({
+        from: (center - nextBars / 2) as Logical,
+        to: (center + nextBars / 2) as Logical
+      });
+    });
+  }
+
+  function anchorRightPaddingBars(visibleBars: number) {
+    return Math.max(1, Math.round(visibleBars * (ANCHOR_RIGHT_RATIO / (1 - ANCHOR_RIGHT_RATIO))));
+  }
+
+  function normalizeVisibleRange(range: LogicalRange | null) {
+    if (!range || syncingRangeRef.current || candlesRef.current.length <= 0) return range;
+    const minVisibleBars = minimumVisibleBars();
+    const currentBars = range.to - range.from;
+    if (!Number.isFinite(currentBars) || currentBars >= minVisibleBars) return range;
+
+    const center = (range.from + range.to) / 2;
+    const half = minVisibleBars / 2;
+    return {
+      from: (center - half) as Logical,
+      to: (center + half) as Logical
+    };
+  }
+
+  function minimumVisibleBars() {
+    const mainWidth = mainContainerRef.current?.clientWidth ?? 0;
+    if (mainWidth <= 0) return 80;
+    return Math.min(candlesRef.current.length, Math.max(40, Math.ceil(mainWidth / MAX_BAR_WIDTH)));
+  }
+
+  function setVisibleRange(range: LogicalRange) {
+    latestRangeRef.current = range;
+    mainChartRef.current?.timeScale().setVisibleLogicalRange(range);
+    rsiChartRef.current?.timeScale().setVisibleLogicalRange(range);
+    diffChartRef.current?.timeScale().setVisibleLogicalRange(range);
+  }
+
+  function resizeCharts() {
+    const main = mainContainerRef.current;
+    const rsi = rsiContainerRef.current;
+    const diff = diffContainerRef.current;
+    if (main && mainChartRef.current) {
+      mainChartRef.current.resize(Math.max(320, main.clientWidth), Math.max(120, main.clientHeight), true);
+    }
+    if (rsi && rsiChartRef.current && showRsiRef.current) {
+      rsiChartRef.current.resize(Math.max(320, rsi.clientWidth), Math.max(120, rsi.clientHeight), true);
+    }
+    if (diff && diffChartRef.current && showRsiRef.current) {
+      diffChartRef.current.resize(Math.max(320, diff.clientWidth), Math.max(80, diff.clientHeight), true);
+    }
+  }
+
+  function updateCountdown() {
+    const element = countdownRef.current;
+    const latest = candlesRef.current.at(-1);
+    if (!element || !latest) {
+      if (element) element.hidden = true;
+      return;
+    }
+    const closeAt = new Date(latest.open_time).getTime() + intervalMs(intervalRef.current);
+    const remainingSeconds = Math.max(0, Math.ceil((closeAt - Date.now()) / 1000));
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+    element.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;
+    element.hidden = false;
+  }
+
+  function updateTooltipAt(time: number) {
+    const tooltip = tooltipRef.current;
+    if (!tooltip) return;
+    const candle = candleByTimeRef.current.get(time);
+    const boll = bollByTimeRef.current.get(time);
+    const indicator = indicatorByTimeRef.current.get(time);
+    if (!candle && !indicator) {
+      hideTooltip();
+      return;
+    }
+
+    const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval}</span>`];
+    if (candle) {
+      rows.push(
+        `O ${formatPrice(candle.open)} · H ${formatPrice(candle.high)} · L ${formatPrice(candle.low)} · C ${formatPrice(candle.close)}`
+      );
+    }
+    if (boll) {
+      rows.push(
+        `BOLL20 U ${formatPrice(boll.upper)} · M ${formatPrice(boll.middle)} · L ${formatPrice(boll.lower)}`
+      );
+    }
+    if (indicator) {
+      rows.push(
+        `RSI14 ${formatFixed(indicator.rsi)} · EMA14 ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
+      );
+    }
+    tooltip.innerHTML = rows.join("<br />");
+    tooltip.hidden = false;
+  }
+
+  function hideTooltip() {
+    if (tooltipRef.current) tooltipRef.current.hidden = true;
+  }
+
+  return (
+    <div className={showRsi ? "btc-watch-chart" : "btc-watch-chart btc-watch-chart-single"}>
+      <section className="btc-chart-panel">
+        <div className="btc-chart-title">
+          <strong>{symbol} K-line</strong>
+          <div className="btc-chart-legend">
+            {showBollinger &&
+              BOLL_LINES.map((line) => (
+                <span className="legend-item" key={line.key}>
+                  <span className="dot" style={{ "--color": line.color } as React.CSSProperties} />
+                  {line.label}
+                </span>
+              ))}
+          </div>
+          <div className="btc-chart-status">
+            {isLoadingMore ? "加载历史中..." : streamLabel}
+            {rsiStatus ? ` · ${rsiStatus}` : ""}
+          </div>
+        </div>
+        <div className="btc-chart-canvas btc-main-chart" ref={mainContainerRef}>
+          <div className="kline-countdown" ref={countdownRef} hidden />
+        </div>
+      </section>
+      <section className="btc-chart-panel" hidden={!showRsi}>
+        <div className="btc-chart-canvas btc-rsi-chart" ref={rsiContainerRef} />
+      </section>
+      <section className="btc-chart-panel" hidden={!showRsi}>
+        <div className="btc-chart-canvas btc-diff-chart" ref={diffContainerRef} />
+      </section>
+      <div className="chart-tooltip" ref={tooltipRef} hidden />
+    </div>
+  );
+}
+
+function isNearRightEdge(range: LogicalRange | null, length: number) {
+  if (!range || length <= 0) return true;
+  const viewportStillContainsLatestBars = range.from < length - 1;
+  const rightEdgeNearLatestBars = range.to >= length - 4;
+  return viewportStillContainsLatestBars && rightEdgeNearLatestBars;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => {
+    if (char === "&") return "&amp;";
+    if (char === "<") return "&lt;";
+    if (char === ">") return "&gt;";
+    if (char === '"') return "&quot;";
+    return "&#039;";
+  });
+}
+
+function formatDiffHtml(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '<span class="diff-normal">n/a</span>';
+  }
+  const abs = Math.abs(value);
+  const className = abs > 15 ? "diff-strong" : abs > 12 ? "diff-watch" : "diff-normal";
+  return `<span class="${className}">${value.toFixed(2)}</span>`;
+}
+
+function uniqueCandlesByChartTime(candles: MarketCandle[]) {
+  const byTime = new Map<number, MarketCandle>();
+  for (const candle of candles) {
+    byTime.set(candleTime(candle), candle);
+  }
+  return Array.from(byTime.values()).sort((left, right) => candleTime(left) - candleTime(right));
+}

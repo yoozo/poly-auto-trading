@@ -38,6 +38,13 @@ dev-api: ## Start FastAPI dev server.
 dev-web: ## Start Vite dev server.
 	cd $(FRONTEND_DIR) && npm run dev -- --host $(WEB_HOST)
 
+dev: ## Show dev server commands.
+	@echo "Run these in two terminals:"
+	@echo "  make dev-api"
+	@echo "  make dev-web"
+	@echo ""
+	@echo "Stop each server with Ctrl+C in its own terminal."
+
 db-up: ## Start PostgreSQL with docker compose.
 	docker compose up -d postgres
 

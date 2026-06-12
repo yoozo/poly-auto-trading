@@ -30,6 +30,7 @@ function renderPage(pathname: RouteKey) {
 
 export default function App() {
   const [pathname, setPathname] = useState<RouteKey>("/dashboard");
+  const pageTitle = pathname === "/btc-watch" ? false : route.routes.find((item) => item.path === pathname)?.name;
 
   return (
     <ProLayout
@@ -49,7 +50,7 @@ export default function App() {
       layout="mix"
       contentStyle={{ padding: 0 }}
     >
-      <PageContainer title={route.routes.find((item) => item.path === pathname)?.name}>
+      <PageContainer title={pageTitle}>
         {renderPage(pathname)}
       </PageContainer>
     </ProLayout>
