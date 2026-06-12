@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     binance_intervals_raw: str = "1m,5m,15m,30m,1h,4h,1d"
     candle_history_limit: int = 500
     binance_ws_enabled: bool = True
+    polymarket_gamma_base_url: str = "https://gamma-api.polymarket.com"
+    polymarket_data_base_url: str = "https://data-api.polymarket.com"
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

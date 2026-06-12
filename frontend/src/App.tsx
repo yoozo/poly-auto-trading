@@ -8,6 +8,7 @@ import { PageContainer, ProLayout } from "@ant-design/pro-components";
 import { useState } from "react";
 import BTCWatchPage from "./pages/BTCWatchPage";
 import DashboardPage from "./pages/DashboardPage";
+import ReportsPage from "./pages/ReportsPage";
 import SystemStatusPage from "./pages/SystemStatusPage";
 
 type RouteKey = "/dashboard" | "/btc-watch" | "/reports" | "/settings";
@@ -24,6 +25,7 @@ const route = {
 
 function renderPage(pathname: RouteKey) {
   if (pathname === "/btc-watch") return <BTCWatchPage />;
+  if (pathname === "/reports") return <ReportsPage />;
   if (pathname === "/settings") return <SystemStatusPage />;
   return <DashboardPage />;
 }

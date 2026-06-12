@@ -73,7 +73,6 @@ const MAX_BAR_WIDTH = 12;
 const RSI_DEFAULT_RANGE = { from: 20, to: 80 };
 const RSI_MAX_RANGE = { minValue: 0, maxValue: 100 };
 const DIFF_DEFAULT_RANGE = { from: -15, to: 15 };
-const DIFF_MAX_RANGE = { minValue: -25, maxValue: 25 };
 
 export default function MarketTechnicalChart({
   symbol,
@@ -630,8 +629,7 @@ export default function MarketTechnicalChart({
           lastValueVisible: false,
           priceLineVisible: false,
           visible: showRsi,
-          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) },
-          autoscaleInfoProvider: () => ({ priceRange: DIFF_MAX_RANGE })
+          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) }
         });
         diffSeriesRef.current[line.key] = series;
         diffPrimarySeriesRef.current = series;
@@ -645,6 +643,7 @@ export default function MarketTechnicalChart({
       }
       series.setData(fullTimelineLineData(lineData));
       diffCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
+      updateDiffVisibleRange(lineData);
     }
     renderDiffReferenceLines(chart, showRsi);
     chart.priceScale("right").applyOptions({
@@ -656,6 +655,30 @@ export default function MarketTechnicalChart({
       chart.priceScale("right").setVisibleRange(DIFF_DEFAULT_RANGE);
       diffScaleInitializedRef.current = true;
     }
+  }
+
+  function updateDiffVisibleRange(lineData: TimeValue[]) {
+    const chart = diffChartRef.current;
+    if (!chart || !showRsi || !lineData.length) return;
+    const currentRange = calculateDiffVisibleRange(lineData);
+    chart.priceScale("right").setVisibleRange(currentRange);
+    diffScaleInitializedRef.current = true;
+  }
+
+  function calculateDiffVisibleRange(lineData: TimeValue[]) {
+    let minValue = DIFF_DEFAULT_RANGE.from;
+    let maxValue = DIFF_DEFAULT_RANGE.to;
+    for (const point of lineData) {
+      if (!Number.isFinite(point.value)) continue;
+      minValue = Math.min(minValue, point.value);
+      maxValue = Math.max(maxValue, point.value);
+    }
+    const span = Math.max(maxValue - minValue, 1);
+    const padding = Math.max(span * 0.15, 2);
+    return {
+      from: minValue - padding,
+      to: maxValue + padding
+    };
   }
 
   function renderRsiReferenceLines(chart: IChartApi, shouldRender: boolean) {

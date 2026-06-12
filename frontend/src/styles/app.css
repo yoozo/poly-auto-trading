@@ -23,6 +23,9 @@ body {
 .watch-page {
   display: grid;
   gap: 10px;
+  height: calc(100vh - 112px);
+  min-height: 680px;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .watch-page-fullscreen {
@@ -41,6 +44,323 @@ body {
 .page-stack {
   display: grid;
   gap: 16px;
+}
+
+.reports-input-item {
+  flex: 1 1 360px;
+}
+
+.reports-input-item .ant-form-item-control {
+  min-width: min(520px, 100%);
+}
+
+.reports-task-panel {
+  width: 100%;
+}
+
+.account-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.account-note-button {
+  max-width: 190px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-note-button:hover {
+  text-decoration: underline;
+}
+
+.reports-page .ant-card {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.reports-page,
+.reports-page .ant-card-body,
+.reports-page .ant-card-head,
+.reports-page .ant-card-head-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.market-details-card .ant-card-head {
+  align-items: flex-start;
+}
+
+.market-details-card .ant-card-head-wrapper {
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.market-details-card .ant-card-extra {
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: 0;
+  white-space: normal;
+}
+
+.report-stats {
+  display: grid;
+  gap: 10px;
+}
+
+.report-stats-main,
+.report-stats-recent {
+  display: grid;
+  gap: 10px;
+}
+
+.report-stats-main {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.report-stats-recent {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.report-metric-card {
+  min-height: 78px;
+  border-color: #dbe3ed;
+}
+
+.report-metric-positive {
+  border-color: #b7ebd0;
+  background: #edf9f2;
+}
+
+.report-metric-negative {
+  border-color: #ffccc7;
+  background: #fff1f0;
+}
+
+.report-metric-neutral {
+  background: #ffffff;
+}
+
+.report-metric-label {
+  margin-bottom: 6px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.report-metric-value {
+  overflow-wrap: anywhere;
+  color: #1f2937;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.report-metric-positive .report-metric-value {
+  color: #087443;
+}
+
+.report-metric-negative .report-metric-value {
+  color: #c7211f;
+}
+
+.report-filters {
+  max-width: 100%;
+  justify-content: flex-end;
+}
+
+.report-filters .ant-input {
+  width: 150px;
+}
+
+.table-wrap {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.wide table {
+  min-width: max-content;
+}
+
+.market-matrix-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.market-matrix-table th,
+.market-matrix-table td {
+  padding: 8px 10px;
+  border-right: 1px solid #d8dee8;
+  border-bottom: 1px solid #d8dee8;
+  color: #2f3a4a;
+  font-weight: 600;
+  text-align: right;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.market-matrix-table th {
+  background: #eef2f7;
+  color: #17202a;
+  font-weight: 800;
+  text-align: center;
+}
+
+.market-matrix-table th:first-child,
+.market-matrix-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 136px;
+  background: #eef2f7;
+  color: #17202a;
+  font-weight: 800;
+  text-align: left;
+  white-space: normal;
+}
+
+.market-matrix-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  max-width: 260px;
+  white-space: normal;
+}
+
+.market-matrix-table thead th:first-child {
+  z-index: 4;
+}
+
+.market-matrix-table tbody tr:nth-child(even) td:not(:first-child) {
+  background: #fbfcfe;
+}
+
+.market-matrix-table td.profit {
+  color: #0f7a4f;
+  font-weight: 800;
+}
+
+.market-matrix-table td.loss {
+  color: #b42318;
+  font-weight: 800;
+}
+
+.market-matrix-table td.up-side {
+  color: #0f7a4f;
+  font-weight: 800;
+}
+
+.market-matrix-table td.down-side {
+  color: #b42318;
+  font-weight: 800;
+}
+
+.market-matrix-table td.outcome-profit {
+  background: #eaf7f0 !important;
+  box-shadow: inset -3px 0 0 #0f7a4f;
+}
+
+.market-matrix-table td.outcome-loss {
+  background: #fff1ef !important;
+  box-shadow: inset -3px 0 0 #b42318;
+}
+
+.market-matrix-table td.matched-result {
+  background: #f2f4f7 !important;
+  box-shadow: inset -3px 0 0 #98a2b3;
+}
+
+.market-column-title {
+  max-width: 260px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+
+.market-result-cell {
+  display: flex;
+  justify-content: flex-end;
+  margin: -8px -10px;
+  padding: 8px 10px;
+}
+
+.market-result-open {
+  background: #fff1ef;
+  box-shadow: inset -3px 0 0 #b42318;
+}
+
+.market-result-settled {
+  background: #eaf7f0;
+  box-shadow: inset -3px 0 0 #0f7a4f;
+}
+
+.outcome-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.outcome-tag.up {
+  background: #e7f6ee;
+  color: #0f7a4f;
+}
+
+.outcome-tag.down {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.outcome-tag.neutral {
+  background: #eef2f7;
+  color: #475467;
+}
+
+.matrix-empty {
+  padding: 28px;
+  color: #667085;
+  text-align: center;
+}
+
+@media (max-width: 1180px) {
+  .report-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .report-stats-main,
+  .report-stats-recent {
+    grid-template-columns: 1fr;
+  }
+
+  .report-filters {
+    justify-content: flex-start;
+  }
 }
 
 .watch-toolbar {
@@ -82,16 +402,13 @@ body {
 }
 
 .watch-chart-card {
+  min-height: 0;
   overflow: hidden;
   border-radius: 6px;
   background: #0b1017;
 }
 
-.watch-page-fullscreen .watch-chart-card {
-  min-height: 0;
-}
-
-.watch-page-fullscreen .ant-card-body {
+.watch-chart-card .ant-card-body {
   height: 100%;
 }
 
@@ -102,8 +419,8 @@ body {
 .btc-watch-chart {
   position: relative;
   display: grid;
-  height: clamp(600px, calc(100vh - 220px), 780px);
-  min-height: 0;
+  height: 100%;
+  min-height: 600px;
   background: #080b10;
   color: #d7e0ea;
   grid-template-rows: minmax(0, 2.4fr) minmax(0, 0.52fr) minmax(0, 0.52fr);
