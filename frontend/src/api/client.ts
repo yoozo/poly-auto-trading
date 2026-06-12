@@ -61,6 +61,10 @@ export const api = {
     ),
   indicators: (interval: CandleInterval, limit = 300) =>
     request<IndicatorPoint[]>(`/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
+  indicatorsRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000) =>
+    request<IndicatorPoint[]>(
+      `/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
+    ),
   marketWsUrl: (interval: CandleInterval) => {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/market", base);

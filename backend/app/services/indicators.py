@@ -29,7 +29,7 @@ def calculate_indicator_points(candles: list[Candle], interval: Interval) -> lis
             IndicatorPoint(
                 symbol=candle.symbol,
                 interval=interval,
-                candle_time=candle.close_time,
+                candle_time=candle.open_time,
                 rsi=round(rsi, 4) if rsi is not None else None,
                 rsi_ema=round(rsi_ema, 4) if rsi_ema is not None else None,
                 rsi_ema_diff=round(rsi_ema_diff, 4) if rsi_ema_diff is not None else None,
@@ -112,4 +112,3 @@ def calculate_bollinger_series(closes: list[float]) -> list[BollingerBands]:
             )
         )
     return values
-

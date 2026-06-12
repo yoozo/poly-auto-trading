@@ -106,7 +106,7 @@ body {
   min-height: 0;
   background: #080b10;
   color: #d7e0ea;
-  grid-template-rows: minmax(0, 2.4fr) minmax(0, 0.78fr) minmax(0, 0.52fr);
+  grid-template-rows: minmax(0, 2.4fr) minmax(0, 0.52fr) minmax(0, 0.52fr);
 }
 
 .btc-watch-chart-single {
@@ -227,8 +227,8 @@ a#tv-attr-logo {
 .chart-tooltip {
   position: absolute;
   z-index: 20;
-  top: 138px;
-  left: 28px;
+  top: 14px;
+  left: 14px;
   min-width: 260px;
   max-width: 420px;
   padding: 8px 10px;

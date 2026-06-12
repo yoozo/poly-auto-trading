@@ -1,4 +1,4 @@
-import { FullscreenExitOutlined, FullscreenOutlined, ReloadOutlined } from "@ant-design/icons";
+import { FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
 import { Button, Card, Segmented, Space, Switch, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
@@ -28,7 +28,7 @@ export default function BTCWatchPage() {
   const [fitAnchorVersion, setFitAnchorVersion] = useState(0);
   const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
 
-  const { data: latestCandles = [], error, isFetching, refetch } = useQuery({
+  const { data: latestCandles = [], error } = useQuery({
     queryKey: ["candles", interval],
     queryFn: () => api.candles(interval, 300),
   });
@@ -110,16 +110,16 @@ export default function BTCWatchPage() {
       try {
         const older = await api.candlesRange(interval, startMs, endMs);
         setCandles((current) => mergeCandles(current, older));
-        const refreshedIndicators = await queryClient.fetchQuery({
-          queryKey: ["indicators", interval, Math.min(Math.max(older.length + candles.length, 300), 1000)],
-          queryFn: () => api.indicators(interval, Math.min(Math.max(older.length + candles.length, 300), 1000)),
+        const olderIndicators = await queryClient.fetchQuery({
+          queryKey: ["indicators-range", interval, startMs, endMs],
+          queryFn: () => api.indicatorsRange(interval, startMs, endMs),
         });
-        setIndicatorPoints((current) => mergeIndicators(current, refreshedIndicators as MarketIndicatorPoint[]));
+        setIndicatorPoints((current) => mergeIndicators(current, olderIndicators as MarketIndicatorPoint[]));
       } finally {
         setIsLoadingMore(false);
       }
     },
-    [candles.length, interval, queryClient]
+    [interval, queryClient]
   );
 
   const toggleFullscreen = useCallback(() => {
@@ -142,9 +142,6 @@ export default function BTCWatchPage() {
               value={interval}
               onChange={(value) => setInterval(value as CandleInterval)}
             />
-            <Button size="small" icon={<ReloadOutlined />} loading={isFetching} onClick={() => refetch()}>
-              刷新
-            </Button>
             <Button
               size="small"
               icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
@@ -177,6 +174,7 @@ export default function BTCWatchPage() {
       </Card>
       <Card className="watch-chart-card btc-watch-card" styles={{ body: { padding: 0 } }}>
         <BtcWatchChart
+          key={`BTCUSDT-${interval}`}
           symbol="BTCUSDT"
           interval={interval}
           candles={activeCandles}

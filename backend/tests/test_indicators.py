@@ -25,6 +25,7 @@ def test_calculate_indicator_points() -> None:
     points = calculate_indicator_points(candles, "1m")
 
     assert len(points) == len(candles)
+    assert points[-1].candle_time == candles[-1].open_time
     assert points[-1].rsi is not None
     assert points[-1].rsi_ema is not None
     assert points[-1].rsi_ema_diff is not None
