@@ -1,4 +1,0 @@
-interface:
-  display_name: "Poly Auto Trading Start"
-  short_description: "Start the poly-auto-trading backend and frontend dev servers."
-  default_prompt: "Start the poly-auto-trading project and report the backend and frontend URLs."

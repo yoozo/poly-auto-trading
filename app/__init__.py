@@ -1,2 +1,0 @@
-"""Polymarket auto trading service."""
-
