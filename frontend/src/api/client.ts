@@ -144,6 +144,13 @@ export type MarketPerformance = {
   incomplete: boolean;
 };
 
+export type MarketPerformancePage = {
+  items: MarketPerformance[];
+  total: number;
+  offset: number;
+  limit: number;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -191,7 +198,26 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   accountSummary: (accountId: string) => request<AccountSummary>(`/api/reports/accounts/${accountId}/summary`),
-  accountMarkets: (accountId: string) => request<MarketPerformance[]>(`/api/reports/accounts/${accountId}/markets`),
+  accountMarkets: (
+    accountId: string,
+    params: {
+      offset?: number;
+      limit?: number;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+      onlyBilateral?: boolean;
+    } = {},
+  ) => {
+    const query = new URLSearchParams();
+    query.set("offset", String(params.offset ?? 0));
+    query.set("limit", String(params.limit ?? 20));
+    if (params.search) query.set("search", params.search);
+    if (params.startDate) query.set("start_date", params.startDate);
+    if (params.endDate) query.set("end_date", params.endDate);
+    if (params.onlyBilateral) query.set("only_bilateral", "true");
+    return request<MarketPerformancePage>(`/api/reports/accounts/${accountId}/markets?${query.toString()}`);
+  },
   marketWsUrl: (interval: CandleInterval) => {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/market", base);

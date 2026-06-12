@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import re
 from statistics import median
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 from zoneinfo import ZoneInfo
 
 from app.schemas.report import AccountSummary, DailyPerformance, MarketPerformance, RecentPerformance
@@ -66,6 +66,15 @@ class ActivityLike(Protocol):
     usdc_size: Decimal | None
 
 
+class MarketMetadataLike(Protocol):
+    slug: str
+    closed: bool
+    outcome: str | None
+    raw_outcome: str | None
+    event: dict[str, Any]
+    market: dict[str, Any]
+
+
 @dataclass
 class OutcomePosition:
     cost: Decimal = ZERO
@@ -100,6 +109,9 @@ class MarketAccumulator:
     market_date: datetime | None = None
     first_activity_at: datetime | None = None
     last_activity_at: datetime | None = None
+    metadata_closed: bool = False
+    metadata_outcome: str | None = None
+    metadata_raw_outcome: str | None = None
     outcomes: dict[str, OutcomePosition] = field(default_factory=dict)
     incomplete: bool = False
 
@@ -112,8 +124,12 @@ class MarketAccumulator:
         return self.pnl + self.maker_rebate
 
 
-def build_account_summary(account_id: str, activities: list[ActivityLike]) -> AccountSummary:
-    markets = aggregate_markets(activities)
+def build_account_summary(
+    account_id: str,
+    activities: list[ActivityLike],
+    market_metadata: Mapping[str, MarketMetadataLike] | None = None,
+) -> AccountSummary:
+    markets = aggregate_markets(activities, market_metadata=market_metadata)
     market_items = list(markets.values())
     data_start = min((activity.timestamp for activity in activities), default=None)
     data_end = max((activity.timestamp for activity in activities), default=None)
@@ -162,8 +178,11 @@ def build_account_summary(account_id: str, activities: list[ActivityLike]) -> Ac
     )
 
 
-def build_market_performance(activities: list[ActivityLike]) -> list[MarketPerformance]:
-    markets = aggregate_markets(activities).values()
+def build_market_performance(
+    activities: list[ActivityLike],
+    market_metadata: Mapping[str, MarketMetadataLike] | None = None,
+) -> list[MarketPerformance]:
+    markets = aggregate_markets(activities, market_metadata=market_metadata).values()
     return sorted(
         [serialize_market(market) for market in markets],
         key=lambda item: item.market_date or datetime.min.replace(tzinfo=timezone.utc),
@@ -171,7 +190,10 @@ def build_market_performance(activities: list[ActivityLike]) -> list[MarketPerfo
     )
 
 
-def aggregate_markets(activities: list[ActivityLike]) -> dict[str, MarketAccumulator]:
+def aggregate_markets(
+    activities: list[ActivityLike],
+    market_metadata: Mapping[str, MarketMetadataLike] | None = None,
+) -> dict[str, MarketAccumulator]:
     markets: dict[str, MarketAccumulator] = {}
     for activity in sorted(activities, key=lambda item: item.timestamp):
         market_id = market_key(activity)
@@ -194,7 +216,30 @@ def aggregate_markets(activities: list[ActivityLike]) -> dict[str, MarketAccumul
         market.first_activity_at = min_date(market.first_activity_at, activity.timestamp)
         market.last_activity_at = max_date(market.last_activity_at, activity.timestamp)
         apply_activity(market, activity)
+    if market_metadata:
+        for market in markets.values():
+            apply_market_metadata(market, market_metadata)
     return markets
+
+
+def apply_market_metadata(
+    market: MarketAccumulator,
+    market_metadata: Mapping[str, MarketMetadataLike],
+) -> None:
+    if not market.slug:
+        return
+    metadata = market_metadata.get(market.slug)
+    if metadata is None:
+        return
+    market.metadata_closed = metadata.closed
+    market.metadata_outcome = metadata.outcome
+    market.metadata_raw_outcome = metadata.raw_outcome
+    title = string_or_none(metadata.market.get("question")) or string_or_none(metadata.market.get("title"))
+    if title:
+        market.title = title
+    market_date = parse_metadata_date(metadata.market) or parse_metadata_date(metadata.event)
+    if market_date:
+        market.market_date = market_date
 
 
 def apply_activity(market: MarketAccumulator, activity: ActivityLike) -> None:
@@ -360,7 +405,7 @@ def market_detail_time(market: MarketAccumulator) -> datetime | None:
 
 
 def is_settled(market: MarketAccumulator) -> bool:
-    return open_exposure(market) <= DUST or market.redeem_count > 0 or market.sell_return > ZERO or market.merge_count > 0
+    return market.metadata_closed or open_exposure(market) <= DUST or market.redeem_count > 0 or market.sell_return > ZERO or market.merge_count > 0
 
 
 def is_reliable_settled(market: MarketAccumulator) -> bool:
@@ -368,10 +413,14 @@ def is_reliable_settled(market: MarketAccumulator) -> bool:
 
 
 def is_open_market(market: MarketAccumulator) -> bool:
-    return open_exposure(market) > DUST and max(ZERO, market.cost - market.recovery) > ZERO
+    return not market.metadata_closed and open_exposure(market) > DUST and max(ZERO, market.cost - market.recovery) > ZERO
 
 
 def inferred_result(market: MarketAccumulator) -> str:
+    if market.metadata_closed and market.metadata_outcome:
+        return translate_outcome(market.metadata_outcome)
+    if market.metadata_closed:
+        return "已结算"
     if market.redeem_count <= 0:
         return "未结算"
     if market.incomplete:
@@ -492,6 +541,27 @@ def parse_market_close_time(title: str, reference: datetime) -> datetime | None:
     return local_dt.astimezone(timezone.utc)
 
 
+def parse_metadata_date(payload: dict[str, Any]) -> datetime | None:
+    for key in ("endDateIso", "endDate", "closedTime", "umaEndDateIso", "umaEndDate"):
+        value = string_or_none(payload.get(key))
+        if not value:
+            continue
+        parsed = parse_iso_datetime(value)
+        if parsed:
+            return parsed
+    return None
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def parse_title_time(value: str) -> tuple[int, int] | None:
     match = re.fullmatch(r"\s*(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<period>am|pm)\s*", value, re.IGNORECASE)
     if not match:
@@ -535,3 +605,10 @@ def min_date(left: datetime | None, right: datetime) -> datetime:
 
 def max_date(left: datetime | None, right: datetime) -> datetime:
     return right if left is None or right > left else left
+
+
+def string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

@@ -113,3 +113,31 @@ async def list_candles_between(
         )
         for model in result.all()
     ]
+
+
+async def get_latest_candle(
+    session: AsyncSession,
+    symbol: str,
+    interval: Interval,
+) -> Candle | None:
+    statement = (
+        select(CandleModel)
+        .where(CandleModel.symbol == symbol.upper(), CandleModel.interval == interval)
+        .order_by(CandleModel.open_time.desc())
+        .limit(1)
+    )
+    model = await session.scalar(statement)
+    if model is None:
+        return None
+    return Candle(
+        symbol=model.symbol,
+        interval=model.interval,  # type: ignore[arg-type]
+        open_time=model.open_time,
+        close_time=model.close_time,
+        open=float(model.open),
+        high=float(model.high),
+        low=float(model.low),
+        close=float(model.close),
+        volume=float(model.volume),
+        is_closed=model.is_closed,
+    )

@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.api.routes_candles import router as candles_router
 from app.api.routes_health import router as health_router
@@ -17,6 +18,7 @@ def create_app(enable_lifespan: bool = True) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan if enable_lifespan else None,
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

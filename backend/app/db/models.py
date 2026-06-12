@@ -68,7 +68,7 @@ class Activity(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class MarketMetadata(Base, TimestampMixin):
+class MarketMetadata(Base):
     __tablename__ = "market_metadata"
 
     slug: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -78,6 +78,7 @@ class MarketMetadata(Base, TimestampMixin):
     event: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     market: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Candle(Base, TimestampMixin):
@@ -134,4 +135,3 @@ class ServiceEvent(Base):
     message: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-

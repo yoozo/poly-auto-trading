@@ -1,0 +1,4 @@
+interface:
+  display_name: "Batch Data Pipeline"
+  short_description: "Streaming, safe batch data work."
+  default_prompt: "Use this skill when changing batch downloads, external API sync, report backfills, or bulk database writes in this project."

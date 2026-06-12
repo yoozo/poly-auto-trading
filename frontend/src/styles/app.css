@@ -183,6 +183,14 @@ body {
   width: 150px;
 }
 
+.inline-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .table-wrap {
   display: block;
   width: 100%;
@@ -344,6 +352,28 @@ body {
   padding: 28px;
   color: #667085;
   text-align: center;
+}
+
+.matrix-loading {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.matrix-loading-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid #d8dee8;
+  color: #667085;
+  font-size: 13px;
 }
 
 @media (max-width: 1180px) {

@@ -134,3 +134,10 @@ class MarketPerformance(BaseModel):
     if_down_pnl: float | None
     if_down_roi: float | None
     incomplete: bool
+
+
+class MarketPerformancePage(BaseModel):
+    items: list[MarketPerformance]
+    total: int
+    offset: int
+    limit: int

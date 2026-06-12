@@ -8,12 +8,13 @@ import {
   InputNumber,
   Progress,
   Space,
+  Spin,
   Table,
   Tag,
   Typography,
 } from "antd";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   api,
@@ -26,7 +27,7 @@ import {
 
 const ACTIVITY_LIMIT_KEY = "poly-auto.reports.activityLimit";
 const SELECTED_ACCOUNT_KEY = "poly-auto.reports.selectedAccountId";
-const MARKET_MATRIX_BATCH_SIZE = 20;
+const MARKET_PAGE_SIZE = 20;
 const MARKET_MATRIX_LOAD_THRESHOLD_PX = 96;
 
 type AnalyzeForm = {
@@ -60,10 +61,23 @@ export default function ReportsPage() {
     queryFn: () => api.accountSummary(selectedAccountId as string),
     enabled: Boolean(selectedAccountId),
   });
-  const marketsQuery = useQuery({
-    queryKey: ["account-markets", selectedAccountId],
-    queryFn: () => api.accountMarkets(selectedAccountId as string),
+  const marketsQuery = useInfiniteQuery({
+    queryKey: ["account-markets", selectedAccountId, searchText, startDate, endDate, onlyBilateral],
+    queryFn: ({ pageParam = 0 }) =>
+      api.accountMarkets(selectedAccountId as string, {
+        offset: pageParam,
+        limit: MARKET_PAGE_SIZE,
+        search: searchText,
+        startDate,
+        endDate,
+        onlyBilateral,
+      }),
     enabled: Boolean(selectedAccountId),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => {
+      const nextOffset = lastPage.offset + lastPage.items.length;
+      return nextOffset < lastPage.total ? nextOffset : undefined;
+    },
   });
   const taskQuery = useQuery({
     queryKey: ["report-task", taskId],
@@ -87,10 +101,11 @@ export default function ReportsPage() {
 
   const task = taskQuery.data;
   const isRunning = task?.status === "running" || analyzeMutation.isPending;
-  const filteredMarkets = useMemo(
-    () => filterMarkets(marketsQuery.data ?? [], { searchText, startDate, endDate, onlyBilateral }),
-    [marketsQuery.data, searchText, startDate, endDate, onlyBilateral],
-  );
+  const markets = useMemo(() => marketsQuery.data?.pages.flatMap((page) => page.items) ?? [], [marketsQuery.data]);
+  const loadNextMarketPage = useCallback(() => {
+    if (!marketsQuery.hasNextPage || marketsQuery.isFetchingNextPage) return;
+    void marketsQuery.fetchNextPage();
+  }, [marketsQuery.fetchNextPage, marketsQuery.hasNextPage, marketsQuery.isFetchingNextPage]);
 
   useEffect(() => {
     if (task?.status === "done") {
@@ -184,10 +199,20 @@ export default function ReportsPage() {
       {selectedAccountId && (
         <>
           {summaryQuery.error instanceof Error && <Alert type="error" message={summaryQuery.error.message} showIcon />}
+          {summaryQuery.isLoading && <Alert type="info" message="正在加载账户统计..." showIcon />}
           <ReportStats summary={summaryQuery.data} loading={summaryQuery.isLoading} />
           <Card
             className="market-details-card"
-            title="市场明细"
+            title={
+              <Space size={8}>
+                <span>市场明细</span>
+                {marketsQuery.isFetching && (
+                  <Typography.Text type="secondary" className="inline-loading">
+                    <Spin size="small" /> 加载中
+                  </Typography.Text>
+                )}
+              </Space>
+            }
             extra={
               <ReportFilters
                 searchText={searchText}
@@ -202,7 +227,13 @@ export default function ReportsPage() {
             }
           >
             {marketsQuery.error instanceof Error && <Alert type="error" message={marketsQuery.error.message} showIcon />}
-            <MarketMatrix loading={marketsQuery.isLoading} markets={filteredMarkets} />
+            <MarketMatrix
+              loading={marketsQuery.isLoading}
+              markets={markets}
+              hasMore={marketsQuery.hasNextPage}
+              loadingMore={marketsQuery.isFetchingNextPage}
+              onLoadMore={loadNextMarketPage}
+            />
           </Card>
         </>
       )}
@@ -449,9 +480,20 @@ function ReportFilters({
   );
 }
 
-function MarketMatrix({ loading, markets }: { loading: boolean; markets: MarketPerformance[] }) {
+function MarketMatrix({
+  loading,
+  markets,
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  loading: boolean;
+  markets: MarketPerformance[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const [visibleCount, setVisibleCount] = useState(MARKET_MATRIX_BATCH_SIZE);
   const rows = useMemo<MatrixRow[]>(
     () => [
       { key: "result", label: "实际结果", render: (market) => <ResultCell market={market} /> },
@@ -497,26 +539,30 @@ function MarketMatrix({ loading, markets }: { loading: boolean; markets: MarketP
     ],
     [],
   );
-  const visibleMarkets = useMemo(() => markets.slice(0, visibleCount), [markets, visibleCount]);
-
-  useEffect(() => {
-    setVisibleCount(MARKET_MATRIX_BATCH_SIZE);
-  }, [markets]);
 
   useEffect(() => {
     const element = wrapRef.current;
-    if (!element || visibleCount >= markets.length) return;
+    if (!element || !hasMore || loadingMore) return;
     if (element.scrollWidth <= element.clientWidth + MARKET_MATRIX_LOAD_THRESHOLD_PX) {
-      setVisibleCount((current) => Math.min(current + MARKET_MATRIX_BATCH_SIZE, markets.length));
+      onLoadMore();
     }
-  }, [markets.length, visibleCount]);
+  }, [hasMore, loadingMore, markets.length, onLoadMore]);
 
   function loadMoreIfNearRight(element: HTMLDivElement) {
-    if (visibleCount >= markets.length) return;
+    if (!hasMore || loadingMore) return;
     const distanceToRight = element.scrollWidth - element.scrollLeft - element.clientWidth;
     if (distanceToRight <= MARKET_MATRIX_LOAD_THRESHOLD_PX) {
-      setVisibleCount((current) => Math.min(current + MARKET_MATRIX_BATCH_SIZE, markets.length));
+      onLoadMore();
     }
+  }
+
+  if (loading && markets.length === 0) {
+    return (
+      <div className="matrix-loading" aria-busy="true">
+        <Spin />
+        <Typography.Text type="secondary">正在加载市场明细...</Typography.Text>
+      </div>
+    );
   }
 
   return (
@@ -530,7 +576,7 @@ function MarketMatrix({ loading, markets }: { loading: boolean; markets: MarketP
         <thead>
           <tr>
             <th>市场</th>
-            {visibleMarkets.map((market, index) => (
+            {markets.map((market, index) => (
               <th key={market.market_id} data-market-title={market.title} data-market-date={market.market_date ?? ""}>
                 <div className="market-column-title">
                   {index + 1}. {market.title}
@@ -543,7 +589,7 @@ function MarketMatrix({ loading, markets }: { loading: boolean; markets: MarketP
           {rows.map((row) => (
             <tr key={row.key}>
               <td>{row.label}</td>
-              {visibleMarkets.map((market) => (
+              {markets.map((market) => (
                 <td key={market.market_id} className={row.className?.(market) ?? detailCellClass(row.key, market)}>
                   {row.render(market)}
                 </td>
@@ -553,6 +599,11 @@ function MarketMatrix({ loading, markets }: { loading: boolean; markets: MarketP
         </tbody>
       </table>
       {!loading && markets.length === 0 && <div className="matrix-empty">暂无市场</div>}
+      {!loading && markets.length > 0 && loadingMore && (
+        <div className="matrix-loading-footer">
+          <Spin size="small" /> 加载下一页...
+        </div>
+      )}
     </div>
   );
 }
@@ -565,26 +616,6 @@ function ResultCell({ market }: { market: MarketPerformance }) {
       <span className={`outcome-tag ${tagClass}`}>{market.result || "n/a"}</span>
     </div>
   );
-}
-
-function filterMarkets(
-  markets: MarketPerformance[],
-  filters: { searchText: string; startDate: string; endDate: string; onlyBilateral: boolean },
-) {
-  const keyword = filters.searchText.trim().toLowerCase();
-  const start = filters.startDate ? new Date(`${filters.startDate}T00:00:00`).getTime() : null;
-  const end = filters.endDate ? new Date(`${filters.endDate}T23:59:59`).getTime() : null;
-  return markets.filter((market) => {
-    if (keyword) {
-      const haystack = [market.title, market.slug, market.condition_id, market.event_slug].filter(Boolean).join(" ").toLowerCase();
-      if (!haystack.includes(keyword)) return false;
-    }
-    const marketTime = market.market_date ? new Date(market.market_date).getTime() : null;
-    if (start !== null && (marketTime === null || marketTime < start)) return false;
-    if (end !== null && (marketTime === null || marketTime > end)) return false;
-    if (filters.onlyBilateral && !(market.up_shares > 0 && market.down_shares > 0)) return false;
-    return true;
-  });
 }
 
 function TaskStatusTag({ status }: { status: ReportTask["status"] }) {

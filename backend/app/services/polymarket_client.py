@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -127,28 +128,82 @@ class PolymarketClient:
             return {"proxyWallet": wallet}
 
     async def fetch_activity(self, wallet: str, activity_limit: int) -> list[NormalizedActivity]:
+        activities: list[NormalizedActivity] = []
+        async for batch in self.iter_activity_batches(wallet, activity_limit):
+            activities.extend(batch)
+        return activities[:activity_limit]
+
+    async def iter_activity_batches(
+        self,
+        wallet: str,
+        activity_limit: int,
+        end: int | None = None,
+    ) -> AsyncIterator[list[NormalizedActivity]]:
         if activity_limit <= 0:
-            return []
+            return
         page_size = activity_page_size(activity_limit)
+        remaining = activity_limit
+        seen: set[str] = set()
         async with httpx.AsyncClient(base_url=self._data_base_url, timeout=self._timeout) as client:
             rows, exhausted = await self.fetch_parallel_offset_pages(
                 client=client,
                 wallet=wallet,
                 activity_limit=activity_limit,
                 page_size=page_size,
+                end=end,
             )
-            rows = dedupe_activity_rows(rows)
-            if not exhausted and len(rows) < activity_limit:
-                rows.extend(
-                    await self.fetch_cursor_pages(
-                        client=client,
-                        wallet=wallet,
-                        activity_limit=activity_limit - len(rows),
-                        page_size=page_size,
-                        end=oldest_timestamp(rows),
-                    )
+            batch, remaining = self.normalize_activity_batch(
+                rows=rows,
+                wallet=wallet,
+                seen=seen,
+                remaining=remaining,
+            )
+            if batch:
+                yield batch
+            cursor_end = oldest_timestamp(rows)
+            while not exhausted and remaining > 0 and cursor_end is not None:
+                page_count = offset_batch_page_count(remaining, page_size)
+                rows, exhausted = await self.fetch_offset_page_batch(
+                    client=client,
+                    wallet=wallet,
+                    page_size=page_size,
+                    page_count=page_count,
+                    end=cursor_end,
                 )
-        return [normalize_activity(row, wallet) for row in dedupe_activity_rows(rows)[:activity_limit]]
+                if not rows:
+                    break
+                batch, remaining = self.normalize_activity_batch(
+                    rows=rows,
+                    wallet=wallet,
+                    seen=seen,
+                    remaining=remaining,
+                )
+                if batch:
+                    yield batch
+                next_end = oldest_timestamp(rows)
+                if next_end is None or next_end >= cursor_end:
+                    break
+                cursor_end = next_end
+
+    def normalize_activity_batch(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        wallet: str,
+        seen: set[str],
+        remaining: int,
+    ) -> tuple[list[NormalizedActivity], int]:
+        activities: list[NormalizedActivity] = []
+        for row in rows:
+            key = row_identity(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            activities.append(normalize_activity(row, wallet))
+            remaining -= 1
+            if remaining <= 0:
+                break
+        return activities, remaining
 
     async def fetch_parallel_offset_pages(
         self,
@@ -157,6 +212,7 @@ class PolymarketClient:
         wallet: str,
         activity_limit: int,
         page_size: int,
+        end: int | None = None,
     ) -> tuple[list[dict[str, Any]], bool]:
         page_count = offset_batch_page_count(activity_limit, page_size)
         rows, reached_end = await self.fetch_offset_page_batch(
@@ -164,7 +220,7 @@ class PolymarketClient:
             wallet=wallet,
             page_size=page_size,
             page_count=page_count,
-            end=None,
+            end=end,
         )
         if reached_end:
             return rows, True

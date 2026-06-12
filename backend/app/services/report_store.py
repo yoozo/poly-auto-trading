@@ -6,8 +6,9 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
-from app.db.models import Account, Activity, AnalysisTask
+from app.db.models import Account, Activity, AnalysisTask, MarketMetadata
 from app.schemas.report import ReportAccount, ReportTask, TaskStatus
 from app.services.polymarket_client import NormalizedActivity, ResolvedPolymarketAccount, account_id_for_wallet
 
@@ -210,11 +211,78 @@ async def get_account_activity_count(session: AsyncSession, account_id: str) -> 
     return int(result or 0)
 
 
+async def get_account_activity_bounds(session: AsyncSession, account_id: str) -> tuple[int, datetime | None, datetime | None]:
+    statement = select(
+        func.count(Activity.id),
+        func.min(Activity.timestamp),
+        func.max(Activity.timestamp),
+    ).where(Activity.account_id == account_id)
+    count, oldest, newest = (await session.execute(statement)).one()
+    return int(count or 0), oldest, newest
+
+
 async def list_account_activities(session: AsyncSession, account_id: str) -> list[Activity]:
     result = await session.scalars(
-        select(Activity).where(Activity.account_id == account_id).order_by(Activity.timestamp.asc())
+        select(Activity)
+        .options(
+            load_only(
+                Activity.id,
+                Activity.timestamp,
+                Activity.type,
+                Activity.condition_id,
+                Activity.slug,
+                Activity.event_slug,
+                Activity.title,
+                Activity.side,
+                Activity.outcome,
+                Activity.asset,
+                Activity.price,
+                Activity.size,
+                Activity.usdc_size,
+            )
+        )
+        .where(Activity.account_id == account_id)
+        .order_by(Activity.timestamp.asc())
     )
     return list(result.all())
+
+
+async def list_account_activity_slugs(session: AsyncSession, account_id: str) -> set[str]:
+    result = await session.scalars(
+        select(Activity.slug)
+        .where(Activity.account_id == account_id, Activity.slug.is_not(None))
+        .distinct()
+    )
+    return {slug for slug in result.all() if slug}
+
+
+async def list_market_metadata(session: AsyncSession, slugs: set[str]) -> dict[str, MarketMetadata]:
+    if not slugs:
+        return {}
+    result = await session.scalars(select(MarketMetadata).where(MarketMetadata.slug.in_(slugs)))
+    return {metadata.slug: metadata for metadata in result.all()}
+
+
+async def upsert_market_metadata_rows(session: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    statement = insert(MarketMetadata).values(rows)
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[MarketMetadata.slug],
+            set_={
+                "closed": statement.excluded.closed,
+                "outcome": statement.excluded.outcome,
+                "raw_outcome": statement.excluded.raw_outcome,
+                "event": statement.excluded.event,
+                "market": statement.excluded.market,
+                "fetched_at": statement.excluded.fetched_at,
+                "updated_at": func.now(),
+            },
+        )
+    )
+    await session.commit()
+    return len(rows)
 
 
 def serialize_task(task: AnalysisTask) -> ReportTask:

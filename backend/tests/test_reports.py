@@ -9,8 +9,12 @@ import pytest
 from app.api import routes_reports
 from app.db.session import get_session
 from app.main import create_app
+from app.schemas.report import MarketPerformance
 from app.services.report_analysis import build_account_summary, build_market_performance
+from app.services import market_metadata
+from app.services.market_metadata import market_metadata_row
 from app.services.polymarket_client import NormalizedActivity, PolymarketClient, normalize_polymarket_input
+from app.services import report_snapshot
 from app.services import report_store
 
 
@@ -133,6 +137,65 @@ def test_patch_account_updates_note(monkeypatch) -> None:
     assert calls["note"] == "主号"
 
 
+def test_account_markets_returns_paginated_filtered_page(monkeypatch) -> None:
+    async def fake_account_exists(session, account_id):
+        return True
+
+    async def fake_get_report_snapshot(session, account_id):
+        return SimpleNamespace(
+            markets=[
+                make_market_performance("btc", "BTC Up or Down"),
+                make_market_performance("eth", "ETH Up or Down"),
+                make_market_performance("sol", "SOL Up or Down"),
+            ]
+        )
+
+    monkeypatch.setattr(routes_reports, "account_exists", fake_account_exists)
+    monkeypatch.setattr(routes_reports, "get_report_snapshot", fake_get_report_snapshot)
+
+    client = make_client()
+    response = client.get("/api/reports/accounts/0xabc/markets?search=up%20or%20down&offset=1&limit=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["offset"] == 1
+    assert body["limit"] == 1
+    assert [item["market_id"] for item in body["items"]] == ["eth"]
+
+
+@pytest.mark.asyncio
+async def test_report_snapshot_coalesces_concurrent_requests(monkeypatch) -> None:
+    calls = 0
+    newest = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    async def fake_get_account_activity_bounds(session, account_id):
+        return 10, None, newest
+
+    async def fake_build_report_snapshot(key):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return report_snapshot.ReportSnapshot(
+            key=key,
+            summary=None,
+            markets=[],
+            cached_at=datetime.now(timezone.utc),
+        )
+
+    report_snapshot.clear_report_snapshot_cache()
+    monkeypatch.setattr(report_snapshot, "get_account_activity_bounds", fake_get_account_activity_bounds)
+    monkeypatch.setattr(report_snapshot, "build_report_snapshot", fake_build_report_snapshot)
+
+    left, right = await asyncio.gather(
+        report_snapshot.get_report_snapshot(object(), "0xabc"),
+        report_snapshot.get_report_snapshot(object(), "0xabc"),
+    )
+
+    assert left is right
+    assert calls == 1
+
+
 def test_report_summary_aggregates_activity_rules() -> None:
     activities = [
         make_activity("a1", "TRADE", "BUY", "Up", "100", "0", "10"),
@@ -222,6 +285,58 @@ def test_recent_performance_uses_full_market_cost_when_buy_is_outside_window() -
     assert recent_1d.roi == -0.4
 
 
+def test_market_metadata_overrides_inferred_market_result() -> None:
+    activities = [
+        make_activity(
+            "buy",
+            "TRADE",
+            "BUY",
+            "Up",
+            "100",
+            "0",
+            "100",
+            timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+    ]
+    metadata = SimpleNamespace(
+        slug="btc-up-down",
+        closed=True,
+        outcome="down",
+        raw_outcome="Down",
+        event={"endDate": "2026-01-01T01:00:00Z"},
+        market={"question": "Bitcoin Up or Down", "endDateIso": "2026-01-01T00:30:00Z"},
+    )
+
+    markets = build_market_performance(activities, market_metadata={"btc-up-down": metadata})
+
+    assert markets[0].result == "下跌"
+    assert markets[0].title == "Bitcoin Up or Down"
+    assert markets[0].market_date == datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+
+
+def test_market_metadata_row_infers_winning_outcome_from_prices() -> None:
+    row = market_metadata_row(
+        "btc-up-down",
+        {
+            "slug": "btc-up-down",
+            "closed": True,
+            "outcomes": '["Up", "Down"]',
+            "outcomePrices": '["0", "1"]',
+            "events": [{"slug": "btc", "closed": True}],
+        },
+    )
+
+    assert row["closed"] is True
+    assert row["outcome"] == "down"
+    assert row["raw_outcome"] == "Down"
+
+
+def test_activity_resume_end_uses_second_before_oldest_timestamp() -> None:
+    oldest = datetime(2026, 1, 1, 0, 0, 10, tzinfo=timezone.utc)
+
+    assert routes_reports.activity_resume_end(oldest) == 1767225609
+
+
 @pytest.mark.asyncio
 async def test_fetch_activity_uses_parallel_io_windows_after_offset_limit() -> None:
     calls = []
@@ -273,6 +388,48 @@ async def test_fetch_activity_uses_parallel_io_windows_after_offset_limit() -> N
 
 
 @pytest.mark.asyncio
+async def test_iter_activity_batches_starts_from_resume_end() -> None:
+    calls = []
+
+    class FakePolymarketClient(PolymarketClient):
+        async def fetch_activity_page(self, wallet, limit, offset, end=None, client=None):
+            calls.append({"limit": limit, "offset": offset, "end": end})
+            return [
+                {
+                    "proxyWallet": wallet,
+                    "timestamp": 1_000 - index,
+                    "conditionId": "0x" + "1" * 64,
+                    "type": "TRADE",
+                    "size": "1",
+                    "usdcSize": "1",
+                    "transactionHash": f"{offset}-{end}-{index}",
+                    "price": "1",
+                    "asset": "asset",
+                    "side": "BUY",
+                    "title": "BTC Up or Down",
+                    "slug": "btc-up-down",
+                    "eventSlug": "btc",
+                    "outcome": "Up",
+                }
+                for index in range(limit)
+            ]
+
+    client = FakePolymarketClient(data_base_url="https://example.com")
+    batches = [
+        batch
+        async for batch in client.iter_activity_batches(
+            "0x1111111111111111111111111111111111111111",
+            100,
+            end=12345,
+        )
+    ]
+
+    assert len(batches) == 1
+    assert len(batches[0]) == 100
+    assert calls == [{"limit": 100, "offset": 0, "end": 12345}]
+
+
+@pytest.mark.asyncio
 async def test_upsert_activities_batches_writes(monkeypatch) -> None:
     batch_sizes = []
 
@@ -289,12 +446,63 @@ async def test_upsert_activities_batches_writes(monkeypatch) -> None:
     monkeypatch.setattr(report_store, "upsert_activity_rows", fake_upsert_activity_rows)
 
     session = FakeSession()
-    activities = [make_normalized_activity(index) for index in range(501)]
+    activities = [make_normalized_activity(index) for index in range(2501)]
     saved_count = await report_store.upsert_activities(session, "0xabc", activities)
 
-    assert saved_count == 501
-    assert batch_sizes == [501]
-    assert session.commit_count == 1
+    assert saved_count == 2501
+    assert batch_sizes == [1000, 1000, 501]
+    assert session.commit_count == 3
+
+
+@pytest.mark.asyncio
+async def test_ensure_market_metadata_batches_upserts(monkeypatch) -> None:
+    batch_sizes = []
+    fetch_sizes = []
+
+    async def fake_list_market_metadata(session, slugs):
+        return {}
+
+    async def fake_fetch_market_metadata_rows(slugs):
+        fetch_sizes.append(len(slugs))
+        return [{"slug": slug} for slug in slugs]
+
+    async def fake_upsert_market_metadata_rows(session, rows):
+        batch_sizes.append(len(rows))
+        return len(rows)
+
+    monkeypatch.setattr(market_metadata, "list_market_metadata", fake_list_market_metadata)
+    monkeypatch.setattr(market_metadata, "fetch_market_metadata_rows", fake_fetch_market_metadata_rows)
+    monkeypatch.setattr(market_metadata, "upsert_market_metadata_rows", fake_upsert_market_metadata_rows)
+
+    await market_metadata.ensure_market_metadata_for_slugs(
+        object(),
+        {f"market-{index}" for index in range(250)},
+    )
+
+    assert fetch_sizes == [100, 100, 50]
+    assert batch_sizes == [100, 100, 50]
+
+
+@pytest.mark.asyncio
+async def test_market_metadata_fetch_coalesces_in_flight_slug(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_fetch_market_metadata_row(client, semaphore, slug):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return {"slug": slug}
+
+    monkeypatch.setattr(market_metadata, "fetch_market_metadata_row", fake_fetch_market_metadata_row)
+
+    left, right = await asyncio.gather(
+        market_metadata.fetch_market_metadata_rows(["same-slug"]),
+        market_metadata.fetch_market_metadata_rows(["same-slug"]),
+    )
+
+    assert calls == 1
+    assert left == [{"slug": "same-slug"}]
+    assert right == [{"slug": "same-slug"}]
 
 
 def make_activity(
@@ -346,4 +554,39 @@ def make_normalized_activity(index: int) -> NormalizedActivity:
         usdc_size=Decimal("1"),
         transaction_hash=f"0x{index}",
         raw={"index": index},
+    )
+
+
+def make_market_performance(market_id: str, title: str) -> MarketPerformance:
+    return MarketPerformance(
+        market_id=market_id,
+        title=title,
+        slug=market_id,
+        condition_id="0x" + "1" * 64,
+        event_slug=market_id,
+        result="未结算",
+        position_status="无持仓",
+        activity_count=1,
+        redeem_count=0,
+        merge_count=0,
+        market_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        redeem_time=None,
+        up_cost=0,
+        up_shares=0,
+        up_average_cost=None,
+        down_cost=0,
+        down_shares=0,
+        down_average_cost=None,
+        cost=0,
+        recovery=0,
+        merge_return=0,
+        maker_rebate=0,
+        pnl=0,
+        pnl_with_rebate=0,
+        roi=None,
+        if_up_pnl=None,
+        if_up_roi=None,
+        if_down_pnl=None,
+        if_down_roi=None,
+        incomplete=False,
     )
