@@ -6,6 +6,7 @@ import {
   LineSeries,
   LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type Logical,
   type LogicalRange,
@@ -15,7 +16,7 @@ import {
 } from "lightweight-charts";
 import { useCallback, useEffect, useRef } from "react";
 import type { CandleInterval } from "../../api/client";
-import type { MarketCandle, MarketIndicatorPoint } from "./types";
+import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
 import {
   candleTime,
   formatFixed,
@@ -42,6 +43,7 @@ export type MarketTechnicalChartProps = {
   indicatorStatusText?: string;
   loadingText?: string;
   fitAnchorVersion?: number;
+  comparisonLine?: ChartComparisonLine | null;
 };
 
 type BollKey = "middle" | "upper" | "lower";
@@ -86,7 +88,8 @@ export default function MarketTechnicalChart({
   statusText,
   indicatorStatusText,
   loadingText = "加载历史中...",
-  fitAnchorVersion = 0
+  fitAnchorVersion = 0,
+  comparisonLine = null
 }: MarketTechnicalChartProps) {
   const mainContainerRef = useRef<HTMLDivElement | null>(null);
   const rsiContainerRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +101,7 @@ export default function MarketTechnicalChart({
   const rsiChartRef = useRef<IChartApi | null>(null);
   const diffChartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const comparisonPriceLineRef = useRef<IPriceLine | null>(null);
   const bollSeriesRef = useRef<Partial<Record<BollKey, ISeriesApi<"Line">>>>({});
   const rsiSeriesRef = useRef<Partial<Record<RsiSeriesKey, ISeriesApi<"Line">>>>({});
   const diffSeriesRef = useRef<Partial<Record<DiffSeriesKey, ISeriesApi<"Line">>>>({});
@@ -280,6 +284,7 @@ export default function MarketTechnicalChart({
       rsiChartRef.current = null;
       diffChartRef.current = null;
       candleSeriesRef.current = null;
+      comparisonPriceLineRef.current = null;
       bollSeriesRef.current = {};
       rsiSeriesRef.current = {};
       diffSeriesRef.current = {};
@@ -412,6 +417,11 @@ export default function MarketTechnicalChart({
       window.requestAnimationFrame(() => setInitialVisibleRange());
     }
   }, [fitAnchorVersion]);
+
+  useEffect(() => {
+    renderComparisonLine();
+    return () => removeComparisonLine();
+  }, [comparisonLine]);
 
   function syncTimeRange(target: IChartApi | IChartApi[], range: LogicalRange | null) {
     if (!range || syncingRangeRef.current) return;
@@ -581,6 +591,29 @@ export default function MarketTechnicalChart({
         })
       );
     }
+  }
+
+  function renderComparisonLine() {
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries) return;
+    removeComparisonLine();
+    if (!comparisonLine || !Number.isFinite(comparisonLine.price)) return;
+    // 比较线来自 Polymarket 当前窗口的起始 K 线 open，属于业务基准价而不是交易概率。
+    comparisonPriceLineRef.current = candleSeries.createPriceLine({
+      price: comparisonLine.price,
+      color: comparisonLine.color,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: comparisonLine.title,
+    });
+  }
+
+  function removeComparisonLine() {
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries || !comparisonPriceLineRef.current) return;
+    candleSeries.removePriceLine(comparisonPriceLineRef.current);
+    comparisonPriceLineRef.current = null;
   }
 
   function renderRsi() {

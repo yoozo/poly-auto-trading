@@ -25,6 +25,7 @@ body {
   gap: 10px;
   height: calc(100vh - 112px);
   min-height: 680px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -38,6 +39,7 @@ body {
   padding: 12px;
   overflow: hidden;
   background: #f4f6fa;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -394,6 +396,20 @@ body {
 }
 
 @media (max-width: 1180px) {
+  .watch-page {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .watch-chart-card,
+  .polymarket-panel {
+    grid-column: 1;
+  }
+
+  .polymarket-outcomes {
+    grid-template-columns: 1fr;
+  }
+
   .report-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -411,6 +427,7 @@ body {
 }
 
 .watch-toolbar {
+  grid-column: 1 / -1;
   border-radius: 6px;
 }
 
@@ -449,6 +466,7 @@ body {
 }
 
 .watch-chart-card {
+  grid-column: 1;
   min-height: 0;
   overflow: hidden;
   border-radius: 6px;
@@ -463,10 +481,175 @@ body {
   border-color: #1f2937;
 }
 
+.polymarket-panel {
+  grid-column: 2;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.polymarket-panel .ant-card-body {
+  height: 100%;
+  overflow: auto;
+}
+
+.polymarket-panel-head,
+.polymarket-market {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.polymarket-panel-head {
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.polymarket-market-selector {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  margin: 10px 0;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.polymarket-market-selector .ant-select {
+  min-width: 0;
+}
+
+.polymarket-market-meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.polymarket-market-meta .ant-typography {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-outcomes {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr;
+}
+
+.polymarket-outcome {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.polymarket-outcome.up {
+  border-color: #b7ebd0;
+}
+
+.polymarket-outcome.down {
+  border-color: #ffccc7;
+}
+
+.polymarket-outcome-title,
+.polymarket-quote-grid {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+}
+
+.polymarket-outcome-title {
+  grid-template-columns: minmax(0, 1fr) auto;
+  font-size: 14px;
+}
+
+.polymarket-outcome-title span,
+.polymarket-outcome-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-outcome.up .polymarket-outcome-title strong {
+  color: #0f7a4f;
+}
+
+.polymarket-outcome.down .polymarket-outcome-title strong {
+  color: #b42318;
+}
+
+.polymarket-quote-grid {
+  grid-template-columns: repeat(3, auto minmax(52px, 1fr));
+  color: #667085;
+  font-size: 12px;
+}
+
+.polymarket-quote-grid strong {
+  color: #17202a;
+  font-variant-numeric: tabular-nums;
+}
+
+.polymarket-orderbook {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #eef1f5;
+  border-radius: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.polymarket-orderbook-head,
+.polymarket-orderbook-row {
+  display: grid;
+  align-items: center;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.polymarket-orderbook-head {
+  padding: 5px 6px;
+  background: #f8fafc;
+  color: #667085;
+  font-weight: 600;
+}
+
+.polymarket-orderbook-row {
+  padding: 3px 6px;
+  border-top: 1px solid #f1f3f6;
+  color: #344054;
+}
+
+.polymarket-orderbook-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-orderbook-row .bid {
+  color: #0f7a4f;
+}
+
+.polymarket-orderbook-row .ask {
+  color: #b42318;
+}
+
 .telegram-panel {
   min-width: 0;
   width: 100%;
   max-width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .polymarket-outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .telegram-status-row {
@@ -511,6 +694,12 @@ body {
 }
 
 @media (max-width: 720px) {
+  .polymarket-panel-head,
+  .polymarket-market-selector,
+  .polymarket-outcomes {
+    grid-template-columns: 1fr;
+  }
+
   .telegram-status-row {
     align-items: flex-start;
     flex-direction: column;

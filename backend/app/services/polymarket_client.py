@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -25,6 +25,24 @@ ACTIVITY_PARALLEL_REQUESTS = 15
 # The public docs still show a wider offset range, but the live data API rejects
 # historical activity windows at the 3000 boundary.
 ACTIVITY_MAX_OFFSET = 3000
+UP_DOWN_INTERVAL_TAGS = {
+    "5m": "5M",
+    "15m": "15M",
+    "1h": "1H",
+    "4h": "4H",
+}
+UP_DOWN_INTERVAL_SERIES = {
+    "5m": "btc-up-or-down-5m",
+    "15m": "btc-up-or-down-15m",
+    "1h": "btc-up-or-down-1h",
+    "4h": "btc-up-or-down-4h",
+}
+UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
+    "5m": 5 * 60,
+    "15m": 15 * 60,
+    "1h": 60 * 60,
+    "4h": 4 * 60 * 60,
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +73,48 @@ class NormalizedActivity:
     raw: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PolymarketOrderLevel:
+    price: Decimal | None
+    size: Decimal | None
+
+
+@dataclass(frozen=True)
+class PolymarketOutcomeQuote:
+    name: str
+    token_id: str | None
+    price: Decimal | None
+    buy_price: Decimal | None
+    sell_price: Decimal | None
+    best_bid: Decimal | None
+    best_ask: Decimal | None
+    last_trade_price: Decimal | None
+    updated_at: datetime | None
+    bids: list[PolymarketOrderLevel]
+    asks: list[PolymarketOrderLevel]
+
+
+@dataclass(frozen=True)
+class PolymarketUpDownMarket:
+    id: str
+    condition_id: str | None
+    slug: str | None
+    title: str
+    series_slug: str | None
+    interval: str
+    start_time: datetime | None
+    end_time: datetime | None
+    window: str
+    seconds_to_start: int | None
+    seconds_to_end: int | None
+    accepting_orders: bool
+    volume: Decimal | None
+    liquidity: Decimal | None
+    outcome_quotes: list[PolymarketOutcomeQuote]
+    updated_at: datetime | None
+    raw_event: dict[str, Any]
+
+
 class PolymarketInputError(ValueError):
     pass
 
@@ -64,10 +124,12 @@ class PolymarketClient:
         self,
         gamma_base_url: str | None = None,
         data_base_url: str | None = None,
+        clob_base_url: str | None = None,
         timeout: float = 15.0,
     ) -> None:
         self._gamma_base_url = (gamma_base_url or settings.polymarket_gamma_base_url).rstrip("/")
         self._data_base_url = (data_base_url or settings.polymarket_data_base_url).rstrip("/")
+        self._clob_base_url = (clob_base_url or settings.polymarket_clob_base_url).rstrip("/")
         self._timeout = timeout
 
     async def resolve_account(self, raw_input: str) -> ResolvedPolymarketAccount:
@@ -334,6 +396,96 @@ class PolymarketClient:
             )
             raise
 
+    async def fetch_btc_up_down_markets(
+        self,
+        *,
+        interval: str = "5m",
+        limit: int = 6,
+        include_recent_closed: bool = True,
+        now: datetime | None = None,
+    ) -> list[PolymarketUpDownMarket]:
+        if interval not in UP_DOWN_INTERVAL_TAGS:
+            raise PolymarketInputError(f"暂不支持 Polymarket up/down 周期: {interval}")
+        current_time = normalize_datetime(now or datetime.now(timezone.utc))
+        events = await self.fetch_up_down_events(
+            interval=interval,
+            now=current_time,
+            limit=max(limit * 8, 20),
+            include_recent_closed=include_recent_closed,
+        )
+        candidates = [
+            event
+            for event in events
+            if is_btc_up_down_event(event, interval=interval)
+        ]
+        selected = select_up_down_windows(candidates, now=current_time, limit=limit)
+        books = await self.fetch_order_books(token_ids_for_events(selected))
+        markets = [
+            normalize_up_down_market(event, interval=interval, books=books, now=current_time)
+            for event in selected
+        ]
+        return assign_up_down_windows(markets)
+
+    async def fetch_up_down_events(
+        self,
+        *,
+        interval: str,
+        now: datetime,
+        limit: int,
+        include_recent_closed: bool = True,
+    ) -> list[dict[str, Any]]:
+        tag_slug = UP_DOWN_INTERVAL_TAGS[interval]
+        end_date_min = now
+        if include_recent_closed:
+            lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
+            end_date_min = now.replace() - timedelta(seconds=lookback_seconds)
+        params = {
+            "active": "true",
+            "closed": "false",
+            "limit": limit,
+            "offset": 0,
+            "tag_slug": tag_slug,
+            "related_tags": "true",
+            "end_date_min": end_date_min.isoformat().replace("+00:00", "Z"),
+            "order": "end_date",
+            "ascending": "true",
+        }
+        try:
+            async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
+                response = await client.get("/events", params=params)
+                response.raise_for_status()
+                payload = response.json()
+            service_health_store.set("polymarket", "running", metadata={"endpoint": "events"})
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected Polymarket events response")
+            return [row for row in payload if isinstance(row, dict)]
+        except Exception as exc:
+            service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "events"})
+            logger.warning("Polymarket up/down events fetch failed", extra={"interval": interval}, exc_info=exc)
+            raise
+
+    async def fetch_order_books(self, token_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not token_ids:
+            return {}
+        body = [{"token_id": token_id} for token_id in token_ids]
+        try:
+            async with httpx.AsyncClient(base_url=self._clob_base_url, timeout=self._timeout) as client:
+                response = await client.post("/books", json=body)
+                response.raise_for_status()
+                payload = response.json()
+            service_health_store.set("polymarket", "running", metadata={"endpoint": "books"})
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected Polymarket order books response")
+            return {
+                str(book.get("asset_id")): book
+                for book in payload
+                if isinstance(book, dict) and book.get("asset_id") is not None
+            }
+        except Exception as exc:
+            service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "books"})
+            logger.warning("Polymarket order books fetch failed", extra={"token_count": len(token_ids)}, exc_info=exc)
+            raise
+
 
 def normalize_polymarket_input(raw_input: str) -> str:
     value = raw_input.strip()
@@ -426,6 +578,229 @@ def raise_for_activity_status(response: httpx.Response) -> None:
         request=response.request,
         response=response,
     )
+
+
+def is_btc_up_down_event(event: dict[str, Any], *, interval: str) -> bool:
+    expected_series = UP_DOWN_INTERVAL_SERIES[interval]
+    series_slug = string_or_none(event.get("seriesSlug"))
+    title = (string_or_none(event.get("title")) or "").lower()
+    slug = (string_or_none(event.get("slug")) or "").lower()
+    if series_slug == expected_series:
+        return True
+    normalized_interval = interval.replace("m", "-minute").replace("h", "-hour")
+    return (
+        "bitcoin up or down" in title
+        and (
+            f"btc-updown-{interval}" in slug
+            or f"btc-up-or-down-{interval}" in slug
+            or f"btc-up-or-down-{normalized_interval}" in slug
+            or interval in title
+        )
+    )
+
+
+def select_up_down_windows(
+    events: list[dict[str, Any]],
+    *,
+    now: datetime,
+    limit: int,
+) -> list[dict[str, Any]]:
+    ordered = sorted(events, key=lambda event: event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc))
+    # Up/Down 市场按多个时间窗口返回；保留刚结束、当前和未来，供前端按时间段选择。
+    return [
+        event
+        for event in ordered
+        if event_end_time(event) is not None
+    ][:limit]
+
+
+def normalize_up_down_market(
+    event: dict[str, Any],
+    *,
+    interval: str,
+    books: dict[str, dict[str, Any]],
+    now: datetime,
+) -> PolymarketUpDownMarket:
+    market = first_market(event)
+    outcomes = parse_json_list(market.get("outcomes"))
+    token_ids = [str(token_id) for token_id in parse_json_list(market.get("clobTokenIds")) if token_id is not None]
+    prices = [decimal_or_none(price) for price in parse_json_list(market.get("outcomePrices"))]
+    start_time = event_start_time(event)
+    end_time = event_end_time(event)
+    return PolymarketUpDownMarket(
+        id=str(market.get("id") or event.get("id") or ""),
+        condition_id=string_or_none(market.get("conditionId")),
+        slug=string_or_none(market.get("slug") or event.get("slug")),
+        title=string_or_none(market.get("question") or event.get("title")) or "Bitcoin Up or Down",
+        series_slug=string_or_none(event.get("seriesSlug")),
+        interval=interval,
+        start_time=start_time,
+        end_time=end_time,
+        window=market_window(start_time=start_time, end_time=end_time, now=now),
+        seconds_to_start=seconds_between(now, start_time),
+        seconds_to_end=seconds_between(now, end_time),
+        accepting_orders=bool(market.get("acceptingOrders")),
+        volume=decimal_or_none(market.get("volumeNum") or market.get("volume")),
+        liquidity=decimal_or_none(market.get("liquidityNum") or market.get("liquidity")),
+        outcome_quotes=[
+            normalize_outcome_quote(
+                name=str(outcome),
+                token_id=token_ids[index] if index < len(token_ids) else None,
+                price=prices[index] if index < len(prices) else None,
+                books=books,
+            )
+            for index, outcome in enumerate(outcomes)
+        ],
+        updated_at=now,
+        raw_event=event,
+    )
+
+
+def normalize_outcome_quote(
+    *,
+    name: str,
+    token_id: str | None,
+    price: Decimal | None,
+    books: dict[str, dict[str, Any]],
+) -> PolymarketOutcomeQuote:
+    book = books.get(token_id or "") or {}
+    bids = normalize_order_levels(book.get("bids"))
+    asks = normalize_order_levels(book.get("asks"))
+    return PolymarketOutcomeQuote(
+        name=name,
+        token_id=token_id,
+        price=price,
+        buy_price=best_ask(asks),
+        sell_price=best_bid(bids),
+        best_bid=best_bid(bids),
+        best_ask=best_ask(asks),
+        last_trade_price=decimal_or_none(book.get("last_trade_price")),
+        updated_at=optional_timestamp_ms(book.get("timestamp")),
+        bids=bids[:10],
+        asks=asks[:10],
+    )
+
+
+def normalize_order_levels(value: Any) -> list[PolymarketOrderLevel]:
+    if not isinstance(value, list):
+        return []
+    levels = []
+    for row in value:
+        if not isinstance(row, dict):
+            continue
+        levels.append(
+            PolymarketOrderLevel(
+                price=decimal_or_none(row.get("price")),
+                size=decimal_or_none(row.get("size")),
+            )
+        )
+    return levels
+
+
+def best_bid(levels: list[PolymarketOrderLevel]) -> Decimal | None:
+    prices = [level.price for level in levels if level.price is not None]
+    return max(prices) if prices else None
+
+
+def best_ask(levels: list[PolymarketOrderLevel]) -> Decimal | None:
+    prices = [level.price for level in levels if level.price is not None]
+    return min(prices) if prices else None
+
+
+def first_market(event: dict[str, Any]) -> dict[str, Any]:
+    markets = event.get("markets")
+    if isinstance(markets, list):
+        for market in markets:
+            if isinstance(market, dict):
+                return market
+    return event
+
+
+def token_ids_for_events(events: list[dict[str, Any]]) -> list[str]:
+    seen: set[str] = set()
+    token_ids: list[str] = []
+    for event in events:
+        market = first_market(event)
+        for token_id in parse_json_list(market.get("clobTokenIds")):
+            if token_id is None:
+                continue
+            normalized = str(token_id)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            token_ids.append(normalized)
+    return token_ids
+
+
+def parse_json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def event_start_time(event: dict[str, Any]) -> datetime | None:
+    market = first_market(event)
+    return optional_timestamp(market.get("eventStartTime") or event.get("startTime"))
+
+
+def event_end_time(event: dict[str, Any]) -> datetime | None:
+    return optional_timestamp(event.get("endDate") or first_market(event).get("endDate"))
+
+
+def optional_timestamp(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        return normalize_datetime(parse_timestamp(value))
+    except PolymarketInputError:
+        return None
+
+
+def optional_timestamp_ms(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def normalize_datetime(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def market_window(*, start_time: datetime | None, end_time: datetime | None, now: datetime) -> str:
+    if start_time is None or end_time is None:
+        return "unknown"
+    if start_time <= now < end_time:
+        return "current"
+    if now < start_time:
+        return "upcoming"
+    return "expired"
+
+
+def seconds_between(now: datetime, target: datetime | None) -> int | None:
+    if target is None:
+        return None
+    return int((target - now).total_seconds())
+
+
+def assign_up_down_windows(markets: list[PolymarketUpDownMarket]) -> list[PolymarketUpDownMarket]:
+    assigned: list[PolymarketUpDownMarket] = []
+    next_assigned = False
+    for market in markets:
+        if market.window == "upcoming" and not next_assigned:
+            assigned.append(replace(market, window="next"))
+            next_assigned = True
+            continue
+        assigned.append(market)
+    return assigned
 
 
 def is_wallet(value: str) -> bool:

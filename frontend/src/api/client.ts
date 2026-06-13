@@ -194,6 +194,52 @@ export type MarketPerformancePage = {
   limit: number;
 };
 
+export type PolymarketOrderLevel = {
+  price: number | null;
+  size: number | null;
+};
+
+export type PolymarketOutcomeQuote = {
+  name: string;
+  token_id: string | null;
+  price: number | null;
+  buy_price: number | null;
+  sell_price: number | null;
+  best_bid: number | null;
+  best_ask: number | null;
+  last_trade_price: number | null;
+  updated_at: string | null;
+  bids: PolymarketOrderLevel[];
+  asks: PolymarketOrderLevel[];
+};
+
+export type PolymarketUpDownMarket = {
+  id: string;
+  condition_id: string | null;
+  slug: string | null;
+  title: string;
+  series_slug: string | null;
+  interval: PolymarketInterval;
+  start_time: string | null;
+  end_time: string | null;
+  window: "current" | "next" | "upcoming" | "expired" | "unknown";
+  seconds_to_start: number | null;
+  seconds_to_end: number | null;
+  accepting_orders: boolean;
+  volume: number | null;
+  liquidity: number | null;
+  updated_at: string | null;
+  outcome_quotes: PolymarketOutcomeQuote[];
+};
+
+export type PolymarketInterval = "5m" | "15m" | "1h" | "4h";
+
+export type PolymarketWsMessage = {
+  type: "polymarket.btc_up_down.snapshot";
+  interval: PolymarketInterval;
+  markets: PolymarketUpDownMarket[];
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -283,6 +329,17 @@ export const api = {
     if (params.endDate) query.set("end_date", params.endDate);
     if (params.onlyBilateral) query.set("only_bilateral", "true");
     return request<MarketPerformancePage>(`/api/reports/accounts/${accountId}/markets?${query.toString()}`);
+  },
+  polymarketBtcUpDown: (interval: PolymarketInterval = "5m", limit = 12) =>
+    request<PolymarketUpDownMarket[]>(
+      `/api/polymarket/btc-up-down?interval=${interval}&limit=${limit}&include_recent_closed=true`
+    ),
+  polymarketBtcUpDownWsUrl: (interval: PolymarketInterval) => {
+    const base = API_BASE_URL || window.location.origin;
+    const url = new URL("/api/ws/polymarket/btc-up-down", base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.searchParams.set("interval", interval);
+    return url.toString();
   },
   marketWsUrl: (interval: CandleInterval) => {
     const base = API_BASE_URL || window.location.origin;

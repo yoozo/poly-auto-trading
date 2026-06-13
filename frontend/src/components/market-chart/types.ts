@@ -28,3 +28,10 @@ export type MarketIndicatorPoint = {
 };
 
 export type StreamStatus = "connecting" | "connected" | "reconnecting" | "closed";
+
+export type ChartComparisonLine = {
+  id: string;
+  price: number;
+  title: string;
+  color: string;
+};

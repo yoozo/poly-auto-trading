@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/poly_auto_trading"
     cors_origins_raw: str = Field(
-        default="http://localhost:5173,http://127.0.0.1:5173",
+        default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
         validation_alias="API_CORS_ORIGINS",
     )
     binance_symbol: str = "BTCUSDT"
@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     binance_ws_enabled: bool = True
     polymarket_gamma_base_url: str = "https://gamma-api.polymarket.com"
     polymarket_data_base_url: str = "https://data-api.polymarket.com"
+    polymarket_clob_base_url: str = "https://clob.polymarket.com"
+    polymarket_ws_enabled: bool = True
+    polymarket_ws_market_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    polymarket_market_refresh_seconds: int = 5
+    polymarket_ws_broadcast_interval_seconds: float = 0.2
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_enabled_default: bool = False

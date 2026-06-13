@@ -92,7 +92,7 @@ async def send_test_message(session: AsyncSession) -> None:
             metadata={"configured": True, "enabled": False},
         )
         raise ValueError("Telegram notification is disabled")
-    await send_telegram_message("Poly Auto Telegram test message")
+    await send_telegram_message("Poly Auto 测试消息")
     await record_service_event(
         session,
         service="telegram",
@@ -390,21 +390,21 @@ def build_delivery_key(signals: list[SignalRecord]) -> str:
 def delivery_title(signals: list[SignalRecord]) -> str:
     labels = ", ".join(signal.signal_label for signal in signals)
     total_score = delivery_total_score(signals)
-    return f"{score_marker(total_score)} Signal alert: {labels}"
+    return f"{score_marker(total_score)} 信号提醒：{labels}"
 
 
 def delivery_message(signals: list[SignalRecord]) -> str:
     target_type, target_key = delivery_target(signals)
     total_score = delivery_total_score(signals)
     lines = [
-        f"Market:{target_type}:{target_key}",
+        f"市场：{target_type}:{target_key}",
+        f"总分：{format_optional(total_score)} {score_marker(total_score)}",
         delivery_title(signals),
-        f"Total score: {format_optional(total_score)} {score_marker(total_score)}",
     ]
     for signal in signals:
         lines.append(
             f"- {score_marker(signal.score)} {action_marker(signal)} {signal.signal_label} "
-            f"score={format_optional(signal.score)}"
+            f"评分={format_optional(signal.score)}"
         )
     return "\n".join(lines)
 
@@ -416,22 +416,22 @@ def delivery_total_score(signals: list[SignalRecord]) -> float:
 def score_marker(score: float | None) -> str:
     value = score or 0
     if value >= 10:
-        return "🚀🚀🚀"
+        return "🔥🔥🔥"
     if value >= 6:
-        return "🚀🚀"
+        return "🔥🔥"
     if value >= 3:
-        return "🚀"
+        return "🔥"
     if value >= 1:
-        return "🟡"
-    return "⚪"
+        return "✨"
+    return ""
 
 
 def action_marker(signal: SignalRecord) -> str:
     if signal.action == "buy":
-        return "🟢 BUY LONG"
+        return "🟢 买入 做多"
     if signal.action == "sell":
-        return "🔴 SELL SHORT"
-    return "⚪ HOLD"
+        return "🔴 卖出 做空"
+    return "⚪ 观望"
 
 
 def telegram_config_state() -> tuple[bool, list[str]]:
