@@ -89,7 +89,10 @@ export default function BTCWatchPage() {
   const { data: polymarketSnapshot = [], error: polymarketError } = useQuery({
     queryKey: ["polymarket-btc-up-down", polymarketInterval],
     queryFn: () => api.polymarketBtcUpDown(polymarketInterval, 12),
-    refetchInterval: 5_000,
+    // REST 只负责初始快照和切换 interval；后续盘口/窗口变化由 Polymarket WS 快照推送。
+    staleTime: 5 * ONE_MINUTE_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const activeCandles = useMemo(() => candles.filter((candle) => candle.interval === interval), [candles, interval]);
@@ -138,10 +141,12 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     let socket: WebSocket | null = null;
+    let connectTimer = 0;
     let reconnectTimer = 0;
     let closedByEffect = false;
 
     const connect = () => {
+      if (closedByEffect) return;
       socket = new WebSocket(api.polymarketBtcUpDownWsUrl(polymarketInterval));
       socket.onmessage = (event) => {
         const message = parsePolymarketMessage(event.data);
@@ -154,9 +159,11 @@ export default function BTCWatchPage() {
       };
     };
 
-    connect();
+    // React StrictMode 开发态会立即 cleanup/re-run effect；延迟建连可避免 Vite proxy 出现一次性假连接。
+    connectTimer = window.setTimeout(connect, 0);
     return () => {
       closedByEffect = true;
+      if (connectTimer) window.clearTimeout(connectTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       socket?.close();
     };
@@ -279,6 +286,7 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     let socket: WebSocket | null = null;
+    let connectTimer = 0;
     let reconnectTimer = 0;
     let closedByEffect = false;
     const streamInterval = interval;
@@ -322,9 +330,11 @@ export default function BTCWatchPage() {
       };
     };
 
-    connect();
+    // React StrictMode 开发态会立即 cleanup/re-run effect；延迟建连可避免 Vite proxy 出现一次性假连接。
+    connectTimer = window.setTimeout(connect, 0);
     return () => {
       closedByEffect = true;
+      if (connectTimer) window.clearTimeout(connectTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       socket?.close();
     };

@@ -393,8 +393,8 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     direction_emoji, direction_name = delivery_direction(signals)
     reminders = [delivery_signal_reminder(signal) for signal in signals]
     lines = [
-        f"市场：{market_name}",
-        f"总分：{format_optional(total_score)} {score_marker(total_score)}",
+        f"{score_marker(total_score)}市场：{market_name}",
+        f"总分：{format_optional(total_score)}",
         f"方向：{direction_emoji}{direction_name}",
         f"信号提醒：{'，'.join(reminders)}",
     ]

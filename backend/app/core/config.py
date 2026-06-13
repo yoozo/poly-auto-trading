@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     polymarket_market_refresh_seconds: int = 60
     polymarket_market_boundary_refresh_window_seconds: int = 3
     polymarket_market_empty_retry_seconds: int = 5
+    polymarket_market_signal_refresh_min_seconds: int = 30
     polymarket_ws_broadcast_interval_seconds: float = 0.2
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     telegram_rsi_extreme_high: float = 80.0
     telegram_rsi_ema_diff_abs: float = 8.0
     signal_interval_base_scores_raw: str = "1m:1,5m:2,15m:3,1h:4,4h:5"
-    signal_rsi_ema_diff_diff_bonus_raw: str = "12:0,15:1,19:2"
+    signal_rsi_ema_diff_diff_bonus_raw: str = "12:0,15:1,18:2,20:3,22:4,25:5"
     signal_rsi_bonus_raw: str = "70:1,80:2,90:3"
     telegram_close_warning_seconds: int = 15
     log_level: str = "INFO"

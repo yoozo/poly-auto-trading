@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import Settings, parse_numeric_float_mapping
 from app.services import binance_client
 from app.services.binance_client import BinanceClient
 from app.services.binance_monitor import build_combined_stream_url
@@ -110,6 +110,17 @@ def test_binance_endpoint_config_keeps_legacy_single_endpoint_first() -> None:
 
     assert settings.binance_rest_base_urls[0] == "https://custom.example"
     assert "https://api.binance.com" in settings.binance_rest_base_urls
+
+
+def test_signal_rsi_ema_diff_bonus_default_config_parses() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.signal_rsi_ema_diff_diff_bonus == [(12.0, 0.0), (15.0, 1.0), (18.0, 2.0), (20.0, 3.0), (22.0, 4.0), (25.0, 5.0)]
+
+
+def test_numeric_mapping_config_rejects_extra_colons() -> None:
+    with pytest.raises(ValueError, match="Invalid mapping item '20:3:22:4'"):
+        parse_numeric_float_mapping("12:0,20:3:22:4")
 
 
 def test_build_combined_stream_url() -> None:

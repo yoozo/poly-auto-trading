@@ -24,7 +24,7 @@ from polymarket._internal.pagination import encode_offset_cursor
 from py_clob_client_v2 import BookParams, ClobClient
 
 from app.core.config import settings
-from app.services.external_http import with_retry
+from app.services.external_http import is_retryable_http_error, with_retry
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -766,9 +766,43 @@ def activity_offset_cursor(*, wallet: str, page_size: int, offset: int, end: int
 
 
 def is_retryable_polymarket_sdk_error(exc: Exception) -> bool:
-    if isinstance(exc, (RateLimitError, TransportError, PolymarketTimeoutError)):
-        return True
+    for current in exception_chain(exc):
+        if isinstance(current, (RateLimitError, TransportError, PolymarketTimeoutError)):
+            return True
+        if isinstance(current, Exception) and is_retryable_http_error(current):
+            return True
+        if is_retryable_httpcore_error(current):
+            return True
     return False
+
+
+def exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def is_retryable_httpcore_error(exc: BaseException) -> bool:
+    exc_type = type(exc)
+    if not exc_type.__module__.startswith("httpcore"):
+        return False
+    return exc_type.__name__ in {
+        "ConnectError",
+        "ConnectTimeout",
+        "NetworkError",
+        "PoolTimeout",
+        "ReadError",
+        "ReadTimeout",
+        "RemoteProtocolError",
+        "TimeoutException",
+        "WriteError",
+        "WriteTimeout",
+    }
 
 
 def sdk_model_to_dict(value: Any) -> dict[str, Any]:

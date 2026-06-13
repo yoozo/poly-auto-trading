@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import httpcore
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,6 +9,7 @@ from app.main import create_app
 from app.services.polymarket_client import (
     PolymarketClient,
     is_btc_up_down_event,
+    is_retryable_polymarket_sdk_error,
     normalize_up_down_market,
     select_up_down_windows,
     sdk_activity_to_data_row,
@@ -23,6 +26,20 @@ def test_filters_btc_5m_series() -> None:
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-hourly", "title": "x"}, interval="1h")
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-4h", "title": "x"}, interval="4h")
     assert not is_btc_up_down_event({"seriesSlug": "eth-up-or-down-5m", "title": "x"}, interval="5m")
+
+
+def test_polymarket_sdk_retryable_error_detects_wrapped_httpx_connect_error() -> None:
+    try:
+        raise RuntimeError("sdk transport failed") from httpx.ConnectError("offline")
+    except RuntimeError as exc:
+        assert is_retryable_polymarket_sdk_error(exc)
+
+
+def test_polymarket_sdk_retryable_error_detects_wrapped_httpcore_connect_error() -> None:
+    try:
+        raise RuntimeError("sdk transport failed") from httpcore.ConnectError()
+    except RuntimeError as exc:
+        assert is_retryable_polymarket_sdk_error(exc)
 
 
 def test_selects_current_and_next_btc_windows() -> None:

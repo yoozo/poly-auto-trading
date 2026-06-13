@@ -30,6 +30,7 @@ class PolymarketMarketMonitor:
         self._tasks: list[asyncio.Task] = []
         self._token_change_event = asyncio.Event()
         self._refresh_event = asyncio.Event()
+        self._last_market_refresh_at: datetime | None = None
         self._broadcast_lock = asyncio.Lock()
         self._pending_broadcast_intervals: set[str] = set()
 
@@ -58,18 +59,31 @@ class PolymarketMarketMonitor:
         while True:
             try:
                 await self.refresh_markets_once()
-                delay = await self.next_refresh_delay()
-                try:
-                    await asyncio.wait_for(self._refresh_event.wait(), timeout=delay)
-                    self._refresh_event.clear()
-                except TimeoutError:
-                    pass
+                self._last_market_refresh_at = datetime.now(timezone.utc)
+                self._refresh_event.clear()
+                await self.wait_until_next_refresh()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.exception("Polymarket market refresh failed")
                 service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"operation": "refresh"})
                 await asyncio.sleep(10)
+
+    async def wait_until_next_refresh(self) -> None:
+        delay = await self.next_refresh_delay()
+        try:
+            await asyncio.wait_for(self._refresh_event.wait(), timeout=delay)
+        except TimeoutError:
+            return
+
+        self._refresh_event.clear()
+        signal_delay = self.signal_refresh_delay()
+        if signal_delay <= 0:
+            return
+
+        # WS 的市场集合事件可能连续到达；这里只保留“需要刷新一次”的语义，避免事件流退化成高频轮询。
+        throttled_delay = min(signal_delay, await self.next_refresh_delay())
+        await asyncio.sleep(throttled_delay)
 
     async def next_refresh_delay(self) -> float:
         now = datetime.now(timezone.utc)
@@ -80,6 +94,13 @@ class PolymarketMarketMonitor:
             fallback_seconds=settings.polymarket_market_refresh_seconds,
             boundary_window_seconds=settings.polymarket_market_boundary_refresh_window_seconds,
             empty_retry_seconds=settings.polymarket_market_empty_retry_seconds,
+        )
+
+    def signal_refresh_delay(self) -> float:
+        return calculate_signal_refresh_delay(
+            now=datetime.now(timezone.utc),
+            last_refresh_at=self._last_market_refresh_at,
+            min_interval_seconds=settings.polymarket_market_signal_refresh_min_seconds,
         )
 
     async def refresh_markets_once(self) -> None:
@@ -243,6 +264,21 @@ def calculate_next_refresh_delay(
     if seconds_to_boundary <= boundary_window:
         return min(fallback, max(1.0, seconds_to_boundary + boundary_window))
     return min(fallback, max(1.0, seconds_to_boundary - boundary_window))
+
+
+def calculate_signal_refresh_delay(
+    *,
+    now: datetime,
+    last_refresh_at: datetime | None,
+    min_interval_seconds: float,
+) -> float:
+    min_interval = max(0.0, min_interval_seconds)
+    if last_refresh_at is None or min_interval <= 0:
+        return 0.0
+
+    last_refresh = last_refresh_at.astimezone(timezone.utc) if last_refresh_at.tzinfo else last_refresh_at.replace(tzinfo=timezone.utc)
+    current = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    return max(0.0, min_interval - (current - last_refresh).total_seconds())
 
 
 async def cancel_tasks(*tasks: asyncio.Task) -> None:
