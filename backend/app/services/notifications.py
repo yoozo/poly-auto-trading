@@ -407,13 +407,6 @@ def delivery_message(signals: list[SignalRecord]) -> str:
 
 def delivery_market_name(signals: list[SignalRecord]) -> str:
     first = signals[0]
-    if first.target_type == "candle":
-        symbol, interval = parse_target_key(first.target_key)
-        candle_time = parse_signal_open_time(first)
-        window = format_market_window(candle_time, interval) if candle_time and interval else ""
-        if window:
-            return f"{symbol} - {window}"
-        return symbol
     return f"{first.target_type}:{first.target_key}"
 
 
