@@ -12,7 +12,16 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-import httpx
+from polymarket import (
+    PRODUCTION,
+    AsyncPublicClient,
+    RateLimitError,
+    TimeoutError as PolymarketTimeoutError,
+    TransportError,
+)
+from polymarket._internal.actions import data as polymarket_data_actions
+from polymarket._internal.pagination import encode_offset_cursor
+from py_clob_client_v2 import BookParams, ClobClient
 
 from app.core.config import settings
 from app.services.external_http import with_retry
@@ -142,6 +151,12 @@ class PolymarketClient:
         self._data_base_url = (data_base_url or settings.polymarket_data_base_url).rstrip("/")
         self._clob_base_url = (clob_base_url or settings.polymarket_clob_base_url).rstrip("/")
         self._timeout = timeout
+        self._environment = replace(
+            PRODUCTION,
+            gamma_url=self._gamma_base_url,
+            data_url=self._data_base_url,
+            clob_url=self._clob_base_url,
+        )
 
     async def resolve_account(self, raw_input: str) -> ResolvedPolymarketAccount:
         normalized = normalize_polymarket_input(raw_input)
@@ -168,17 +183,20 @@ class PolymarketClient:
         )
 
     async def search_profiles(self, query: str) -> dict[str, Any]:
-        params = {
-            "q": query,
-            "search_profiles": "true",
-            "limit_per_type": 10,
-        }
         try:
-            async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
-                response = await with_retry(lambda: get_raised(client, "/public-search", params=params))
-                payload = response.json()
+            async with self._public_client() as client:
+                paginator = client.search(q=query, search_profiles=True, page_size=10)
+                page = await with_retry(lambda: paginator.first_page(), retryable=is_retryable_polymarket_sdk_error)
+            profiles: list[dict[str, Any]] = []
+            for result in page.items:
+                raw_result = sdk_model_to_dict(result)
+                profiles.extend(
+                    sdk_profile_to_gamma_dict(profile)
+                    for profile in raw_result.get("profiles", [])
+                    if isinstance(profile, dict)
+                )
             service_health_store.set("polymarket", "running", metadata={"endpoint": "public-search"})
-            return payload
+            return {"profiles": profiles}
         except Exception as exc:
             service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "public-search"})
             logger.warning("Polymarket profile search failed", extra={"query": query}, exc_info=exc)
@@ -186,18 +204,14 @@ class PolymarketClient:
 
     async def fetch_profile_by_wallet(self, wallet: str) -> dict[str, Any]:
         try:
-            async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
-                response = await with_retry(
-                    lambda: get_raised(
-                        client,
-                        "/public-profile",
-                        params={"address": wallet},
-                        allowed_statuses={404},
-                    )
+            async with self._public_client() as client:
+                profile = await with_retry(
+                    lambda: client.get_public_profile(wallet),
+                    retryable=is_retryable_polymarket_sdk_error,
                 )
-                if response.status_code == 404:
+                if profile is None:
                     return {"proxyWallet": wallet}
-                payload = response.json()
+                payload = sdk_profile_to_gamma_dict(sdk_model_to_dict(profile), wallet=wallet)
             service_health_store.set("polymarket", "running", metadata={"endpoint": "profiles"})
             return payload if isinstance(payload, dict) else {"proxyWallet": wallet, "raw": payload}
         except Exception as exc:
@@ -222,7 +236,7 @@ class PolymarketClient:
         page_size = activity_page_size(activity_limit)
         remaining = activity_limit
         seen: set[str] = set()
-        async with httpx.AsyncClient(base_url=self._data_base_url, timeout=self._timeout) as client:
+        async with self._public_client() as client:
             rows, exhausted = await self.fetch_parallel_offset_pages(
                 client=client,
                 wallet=wallet,
@@ -286,7 +300,7 @@ class PolymarketClient:
     async def fetch_parallel_offset_pages(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: AsyncPublicClient,
         wallet: str,
         activity_limit: int,
         page_size: int,
@@ -307,7 +321,7 @@ class PolymarketClient:
     async def fetch_cursor_pages(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: AsyncPublicClient,
         wallet: str,
         activity_limit: int,
         page_size: int,
@@ -338,7 +352,7 @@ class PolymarketClient:
     async def fetch_offset_page_batch(
         self,
         *,
-        client: httpx.AsyncClient,
+        client: AsyncPublicClient,
         wallet: str,
         page_size: int,
         page_count: int,
@@ -378,29 +392,26 @@ class PolymarketClient:
         limit: int,
         offset: int,
         end: int | None = None,
-        client: httpx.AsyncClient | None = None,
+        client: AsyncPublicClient | None = None,
     ) -> list[dict[str, Any]]:
-        params = {
-            "user": wallet,
-            "limit": limit,
-            "offset": offset,
-            "sortBy": "TIMESTAMP",
-            "sortDirection": "DESC",
-        }
-        if end is not None:
-            params["end"] = end
         try:
             if client is None:
-                async with httpx.AsyncClient(base_url=self._data_base_url, timeout=self._timeout) as scoped_client:
-                    response = await with_retry(
-                        lambda: get_raised(scoped_client, "/activity", params=params, activity=True)
+                async with self._public_client() as scoped_client:
+                    payload = await self._fetch_activity_page_with_sdk(
+                        scoped_client,
+                        wallet=wallet,
+                        limit=limit,
+                        offset=offset,
+                        end=end,
                     )
-                    payload = response.json()
             else:
-                response = await with_retry(
-                    lambda: get_raised(client, "/activity", params=params, activity=True)
+                payload = await self._fetch_activity_page_with_sdk(
+                    client,
+                    wallet=wallet,
+                    limit=limit,
+                    offset=offset,
+                    end=end,
                 )
-                payload = response.json()
             service_health_store.set("polymarket", "running", metadata={"endpoint": "activity"})
             if not isinstance(payload, list):
                 raise RuntimeError("Unexpected Polymarket activity response")
@@ -459,25 +470,24 @@ class PolymarketClient:
             lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
             end_date_min = now.replace() - timedelta(seconds=lookback_seconds)
         params = {
-            "active": "true",
-            "closed": "false",
             "limit": limit,
-            "offset": 0,
-            "related_tags": "true",
-            "end_date_min": end_date_min.isoformat().replace("+00:00", "Z"),
+            "related_tags": True,
+            "end_date_min": end_date_min,
             "order": "end_date",
-            "ascending": "true",
+            "ascending": True,
         }
         try:
             rows: list[dict[str, Any]] = []
-            async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
+            async with self._public_client() as client:
                 attempted_with_tag = False
                 for candidate in tag_candidates:
                     candidate_params = dict(params)
                     candidate_params["tag_slug"] = candidate
-                    response = await with_retry(lambda: get_raised(client, "/events", params=candidate_params))
+                    payload = await with_retry(
+                        lambda params=candidate_params: self._fetch_event_page_with_sdk(client, **params),
+                        retryable=is_retryable_polymarket_sdk_error,
+                    )
                     attempted_with_tag = True
-                    payload = response.json()
                     service_health_store.set(
                         "polymarket",
                         "running",
@@ -487,8 +497,10 @@ class PolymarketClient:
                         continue
                     rows.extend(row for row in payload if isinstance(row, dict))
                 if not rows and attempted_with_tag:
-                    response = await with_retry(lambda: get_raised(client, "/events", params=params))
-                    payload = response.json()
+                    payload = await with_retry(
+                        lambda: self._fetch_event_page_with_sdk(client, **params),
+                        retryable=is_retryable_polymarket_sdk_error,
+                    )
                     service_health_store.set("polymarket", "running", metadata={"endpoint": "events", "tag_slug": "fallback"})
                     if isinstance(payload, list):
                         rows.extend(row for row in payload if isinstance(row, dict))
@@ -515,11 +527,11 @@ class PolymarketClient:
     async def fetch_order_books(self, token_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not token_ids:
             return {}
-        body = [{"token_id": token_id} for token_id in token_ids]
         try:
-            async with httpx.AsyncClient(base_url=self._clob_base_url, timeout=self._timeout) as client:
-                response = await with_retry(lambda: post_raised(client, "/books", json=body))
-                payload = response.json()
+            payload = await with_retry(
+                lambda: asyncio.to_thread(self._fetch_order_books_with_clob_sdk, token_ids),
+                retryable=is_retryable_polymarket_sdk_error,
+            )
             service_health_store.set("polymarket", "running", metadata={"endpoint": "books"})
             if not isinstance(payload, list):
                 raise RuntimeError("Unexpected Polymarket order books response")
@@ -532,6 +544,48 @@ class PolymarketClient:
             service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "books"})
             logger.warning("Polymarket order books fetch failed", extra={"token_count": len(token_ids)}, exc_info=exc)
             raise
+
+    def _public_client(self) -> AsyncPublicClient:
+        return AsyncPublicClient(environment=self._environment, logger=logger)
+
+    async def _fetch_event_page_with_sdk(
+        self,
+        client: AsyncPublicClient,
+        **params: Any,
+    ) -> list[dict[str, Any]]:
+        limit = int(params.pop("limit"))
+        paginator = client.list_events(closed=False, page_size=limit, **params)
+        page = await paginator.first_page()
+        return [sdk_event_to_gamma_dict(item) for item in page.items]
+
+    async def _fetch_activity_page_with_sdk(
+        self,
+        client: AsyncPublicClient,
+        *,
+        wallet: str,
+        limit: int,
+        offset: int,
+        end: int | None,
+    ) -> list[dict[str, Any]]:
+        paginator = client.list_activity(
+            user=wallet,
+            sort_by="TIMESTAMP",
+            sort_direction="DESC",
+            end=end,
+            page_size=limit,
+        )
+        # SDK exposes offset pagination through cursors; this keeps the project's bounded
+        # parallel offset windows without reintroducing direct HTTP calls.
+        if offset > 0:
+            cursor = activity_offset_cursor(wallet=wallet, page_size=limit, offset=offset, end=end)
+            paginator = paginator.from_cursor(cursor)
+        page = await with_retry(lambda: paginator.first_page(), retryable=is_retryable_polymarket_sdk_error)
+        return [sdk_activity_to_data_row(item) for item in page.items]
+
+    def _fetch_order_books_with_clob_sdk(self, token_ids: list[str]) -> list[dict[str, Any]]:
+        client = ClobClient(host=self._clob_base_url, chain_id=self._environment.chain_id)
+        books = client.get_order_books([BookParams(token_id=token_id) for token_id in token_ids])
+        return [sdk_order_book_to_clob_dict(book) for book in books]
 
 
 def normalize_polymarket_input(raw_input: str) -> str:
@@ -616,44 +670,151 @@ def oldest_timestamp(rows: list[dict[str, Any]]) -> int | None:
     return min(timestamps) - 1
 
 
-def raise_for_activity_status(response: httpx.Response) -> None:
-    if response.status_code < 400:
-        return
-    detail = response.text[:600]
-    raise httpx.HTTPStatusError(
-        f"Polymarket activity returned {response.status_code}: {detail}",
-        request=response.request,
-        response=response,
+def activity_offset_cursor(*, wallet: str, page_size: int, offset: int, end: int | None) -> str:
+    spec = polymarket_data_actions.list_activity_spec(
+        user=wallet,
+        end=end,
+        sort_by="TIMESTAMP",
+        sort_direction="DESC",
+    )
+    return encode_offset_cursor(
+        service=spec.service,
+        path=spec.path,
+        base_params=spec.base_params,
+        offset=offset,
+        page_size=page_size,
     )
 
 
-async def get_raised(
-    client: httpx.AsyncClient,
-    path: str,
-    *,
-    params: dict[str, Any],
-    allowed_statuses: set[int] | None = None,
-    activity: bool = False,
-) -> httpx.Response:
-    response = await client.get(path, params=params)
-    if allowed_statuses and response.status_code in allowed_statuses:
-        return response
-    if activity:
-        raise_for_activity_status(response)
-    else:
-        response.raise_for_status()
-    return response
+def is_retryable_polymarket_sdk_error(exc: Exception) -> bool:
+    if isinstance(exc, (RateLimitError, TransportError, PolymarketTimeoutError)):
+        return True
+    return False
 
 
-async def post_raised(
-    client: httpx.AsyncClient,
-    path: str,
-    *,
-    json: list[dict[str, str]],
-) -> httpx.Response:
-    response = await client.post(path, json=json)
-    response.raise_for_status()
-    return response
+def sdk_model_to_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+    return {}
+
+
+def sdk_profile_to_gamma_dict(profile: dict[str, Any], *, wallet: str | None = None) -> dict[str, Any]:
+    normalized = dict(profile)
+    proxy_wallet = normalized.get("proxyWallet") or normalized.get("wallet") or wallet
+    if proxy_wallet:
+        normalized["proxyWallet"] = str(proxy_wallet)
+        normalized.setdefault("wallet", str(proxy_wallet))
+    return normalized
+
+
+def sdk_activity_to_data_row(activity: Any) -> dict[str, Any]:
+    row = sdk_model_to_dict(activity)
+    normalized = dict(row.get("raw") or {})
+    normalized.update(row)
+    field_map = {
+        "wallet": "proxyWallet",
+        "transaction_hash": "transactionHash",
+        "condition_id": "conditionId",
+        "token_id": "asset",
+        "shares": "size",
+        "amount": "usdcSize",
+        "event_slug": "eventSlug",
+        "outcome_index": "outcomeIndex",
+        "profile_image": "profileImage",
+        "profile_image_optimized": "profileImageOptimized",
+    }
+    for source, target in field_map.items():
+        if source in row and row[source] is not None:
+            normalized[target] = row[source]
+    return normalized
+
+
+def sdk_order_book_to_clob_dict(book: Any) -> dict[str, Any]:
+    raw = sdk_model_to_dict(book)
+    normalized = dict(raw)
+    token_id = normalized.get("asset_id") or normalized.get("token_id")
+    if token_id is not None:
+        normalized["asset_id"] = str(token_id)
+    timestamp = normalized.get("timestamp")
+    if isinstance(timestamp, datetime):
+        normalized["timestamp"] = str(int(timestamp.timestamp() * 1000))
+    elif isinstance(timestamp, str) and "T" in timestamp:
+        parsed = optional_timestamp(timestamp)
+        if parsed is not None:
+            normalized["timestamp"] = str(int(parsed.timestamp() * 1000))
+    return normalized
+
+
+def sdk_event_to_gamma_dict(event: Any) -> dict[str, Any]:
+    raw = sdk_model_to_dict(event)
+    series_slug = (
+        nested_get(raw, "sports", "series_slug")
+        or first_nested_value(raw.get("series"), "slug")
+    )
+    return {
+        **raw,
+        "id": string_or_none(raw.get("id")) or "",
+        "slug": string_or_none(raw.get("slug")),
+        "title": string_or_none(raw.get("title")),
+        "seriesSlug": series_slug,
+        "startTime": nested_get(raw, "schedule", "start_time"),
+        "endDate": nested_get(raw, "schedule", "end_date"),
+        "markets": [sdk_market_to_gamma_dict(market) for market in raw.get("markets", []) if isinstance(market, dict)],
+    }
+
+
+def sdk_market_to_gamma_dict(market: dict[str, Any]) -> dict[str, Any]:
+    outcomes = sdk_market_outcomes(market)
+    return {
+        **market,
+        "id": string_or_none(market.get("id")) or "",
+        "conditionId": string_or_none(market.get("condition_id")),
+        "slug": string_or_none(market.get("slug")),
+        "question": string_or_none(market.get("question")),
+        "eventStartTime": nested_get(market, "state", "start_date"),
+        "endDate": nested_get(market, "state", "end_date"),
+        "outcomes": json.dumps([outcome["label"] for outcome in outcomes]),
+        "outcomePrices": json.dumps([outcome.get("price") for outcome in outcomes]),
+        "clobTokenIds": json.dumps([outcome.get("token_id") for outcome in outcomes]),
+        "acceptingOrders": nested_get(market, "state", "accepting_orders"),
+        "volumeNum": nested_get(market, "metrics", "volume_num") or nested_get(market, "metrics", "volume"),
+        "liquidityNum": nested_get(market, "metrics", "liquidity_num") or nested_get(market, "metrics", "liquidity"),
+    }
+
+
+def sdk_market_outcomes(market: dict[str, Any]) -> list[dict[str, Any]]:
+    outcomes = market.get("outcomes")
+    if isinstance(outcomes, list):
+        return [outcome for outcome in outcomes if isinstance(outcome, dict)]
+    if isinstance(outcomes, dict):
+        ordered = []
+        for key in ("yes", "no"):
+            outcome = outcomes.get(key)
+            if isinstance(outcome, dict):
+                ordered.append(outcome)
+        if ordered:
+            return ordered
+    return []
+
+
+def nested_get(value: dict[str, Any], *keys: str) -> Any:
+    current: Any = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def first_nested_value(value: Any, key: str) -> Any:
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict) and item.get(key):
+                return item[key]
+    return None
 
 
 def is_btc_up_down_event(event: dict[str, Any], *, interval: str) -> bool:

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 import httpx
@@ -22,6 +23,7 @@ MARKET_METADATA_FETCH_BATCH_SIZE = 100
 MARKET_METADATA_UPSERT_BATCH_SIZE = 500
 _IN_FLIGHT_MARKET_METADATA: dict[str, asyncio.Task[dict[str, Any] | None]] = {}
 _IN_FLIGHT_LOCK = asyncio.Lock()
+MetadataProgressCallback = Callable[[int, int], Awaitable[None]]
 
 
 class ActivityWithMarketSlug(Protocol):
@@ -39,16 +41,25 @@ async def ensure_market_metadata_for_activities(
 async def ensure_market_metadata_for_slugs(
     session: AsyncSession,
     slugs: set[str],
+    progress_callback: MetadataProgressCallback | None = None,
 ) -> dict[str, Any]:
     existing = await list_market_metadata(session, slugs)
     # 已关闭市场结果不会变化；未关闭市场按 TTL 刷新，兼顾准确性和 Gamma API 压力。
-    stale_slugs = [slug for slug in slugs if needs_refresh(existing.get(slug))]
+    stale_slugs = sorted({slug for slug in slugs if needs_refresh(existing.get(slug))})
+    total_stale = len(stale_slugs)
+    if total_stale == 0:
+        return existing
+
+    processed = 0
     if stale_slugs:
         for slug_batch in iter_slug_batches(stale_slugs, MARKET_METADATA_FETCH_BATCH_SIZE):
             rows = await fetch_market_metadata_rows(slug_batch)
+            processed += len(slug_batch)
+            if progress_callback is not None and total_stale > 0:
+                await progress_callback(processed, total_stale)
             for row_batch in iter_batches(rows, MARKET_METADATA_UPSERT_BATCH_SIZE):
                 await upsert_market_metadata_rows(session, row_batch)
-        existing = await list_market_metadata(session, slugs)
+    existing = await list_market_metadata(session, slugs)
     return existing
 
 

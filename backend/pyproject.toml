@@ -8,7 +8,9 @@ dependencies = [
   "asyncpg>=0.29.0",
   "fastapi>=0.111.0",
   "httpx>=0.27.0",
+  "polymarket-client>=0.1.0b7,<0.2.0",
   "pydantic-settings>=2.3.0",
+  "py-clob-client-v2>=1.0.1",
   "pyyaml>=6.0.0",
   "sqlalchemy[asyncio]>=2.0.0",
   "uvicorn[standard]>=0.30.0",
@@ -32,4 +34,3 @@ packages = ["app"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-

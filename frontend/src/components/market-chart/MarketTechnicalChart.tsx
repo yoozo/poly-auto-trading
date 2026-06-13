@@ -358,6 +358,7 @@ export default function MarketTechnicalChart({
       }))
     );
     renderBollinger();
+    renderComparisonLine();
     renderRsi();
     renderDiff();
 

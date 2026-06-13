@@ -176,7 +176,40 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
             )
             market_slugs.update(await list_account_activity_slugs(session, account.id))
             # 市场结果可能不在 activity 里，需要额外用 slug 补全后才能计算胜负和收益。
-            market_metadata = await ensure_market_metadata_for_slugs(session, market_slugs)
+            if market_slugs:
+                async def report_market_metadata_progress(completed: int, total: int) -> None:
+                    progress = 88
+                    if total:
+                        progress = min(95, 88 + int((completed / total) * 7))
+                    await update_task(
+                        session,
+                        task_id,
+                        account_id=account.id,
+                        message=f"补全市场元数据: {completed}/{total}",
+                        percent=progress,
+                    )
+
+                market_metadata = await ensure_market_metadata_for_slugs(
+                    session,
+                    market_slugs,
+                    progress_callback=report_market_metadata_progress,
+                )
+            else:
+                market_metadata = {}
+                await update_task(
+                    session,
+                    task_id,
+                    account_id=account.id,
+                    message="无需补全市场元数据",
+                    percent=95,
+                )
+            await update_task(
+                session,
+                task_id,
+                account_id=account.id,
+                message="重算市场分析结果",
+                percent=98,
+            )
             total_count = await get_account_activity_count(session, account.id)
             await update_task(
                 session,

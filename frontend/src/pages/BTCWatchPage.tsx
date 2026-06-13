@@ -26,6 +26,27 @@ const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
 const ONE_MINUTE_MS = 60_000;
+const POLYMARKET_INTERVAL_MS: Record<PolymarketInterval, number> = {
+  "5m": 5 * ONE_MINUTE_MS,
+  "15m": 15 * ONE_MINUTE_MS,
+  "1h": 60 * ONE_MINUTE_MS,
+  "4h": 4 * 60 * ONE_MINUTE_MS,
+};
+const ET_TIME_ZONE = "America/New_York";
+const MONTH_INDEX: Record<string, number> = {
+  january: 0,
+  february: 1,
+  march: 2,
+  april: 3,
+  may: 4,
+  june: 5,
+  july: 6,
+  august: 7,
+  september: 8,
+  october: 9,
+  november: 10,
+  december: 11,
+};
 
 export default function BTCWatchPage() {
   const queryClient = useQueryClient();
@@ -71,8 +92,11 @@ export default function BTCWatchPage() {
     refetchInterval: 5_000,
   });
 
-  const activeCandles = candles.filter((candle) => candle.interval === interval);
-  const activeIndicators = indicatorPoints.filter((point) => point.interval === interval);
+  const activeCandles = useMemo(() => candles.filter((candle) => candle.interval === interval), [candles, interval]);
+  const activeIndicators = useMemo(
+    () => indicatorPoints.filter((point) => point.interval === interval),
+    [indicatorPoints, interval]
+  );
   const latest = activeCandles.at(-1);
   const selectedPolymarket =
     polymarketMarkets.find((market) => market.id === selectedPolymarketId) ??
@@ -158,12 +182,13 @@ export default function BTCWatchPage() {
   useEffect(() => {
     let cancelled = false;
     const marketId = selectedPolymarket?.id;
-    const startTime = selectedPolymarket?.start_time;
-    const marketKey = marketId && startTime ? `${marketId}:${startTime}` : null;
-    const comparisonKey = marketKey && selectedPolymarket?.window === "current" ? marketKey : null;
+    const marketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
+    const comparisonStartMs = marketWindow?.startMs ?? Number.NaN;
+    const marketKey = marketId && Number.isFinite(comparisonStartMs) ? `${marketId}:${comparisonStartMs}` : null;
+    const comparisonKey = marketKey && comparisonStartMs <= Date.now() ? marketKey : null;
     activeComparisonKeyRef.current = comparisonKey;
 
-    if (!comparisonKey || !marketId || !startTime) {
+    if (!comparisonKey || !marketId || !Number.isFinite(comparisonStartMs)) {
       setComparisonLine(null);
       return () => {
         cancelled = true;
@@ -176,6 +201,17 @@ export default function BTCWatchPage() {
         cancelled = true;
       };
     }
+    const visibleBaselineCandle = nearestBaselineCandle(activeCandles, comparisonStartMs);
+    if (visibleBaselineCandle && Number.isFinite(visibleBaselineCandle.open)) {
+      setComparisonLine(
+        marketComparisonLine({
+          marketId,
+          startMs: comparisonStartMs,
+          price: visibleBaselineCandle.open,
+          interval: selectedPolymarket?.interval ?? "N/A",
+        })
+      );
+    }
     if (comparisonRequestKeyRef.current === comparisonKey) {
       return () => {
         cancelled = true;
@@ -184,63 +220,46 @@ export default function BTCWatchPage() {
     comparisonRequestKeyRef.current = comparisonKey;
     setComparisonLine(null);
 
-    const startMs = parseMarketStartTimeMs(startTime);
-    const normalizedStartMs = normalizeMarketStartTimeToMinute(startMs);
-    if (!Number.isFinite(normalizedStartMs)) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    // Polymarket 当前窗口的比较基准取窗口起始 1m K 的 open，避免用概率价画到 BTC 价格轴。
+    // Polymarket 展示窗口可能和 API 的 eventStartTime 有几分钟偏移；基准线统一取派生窗口起点的 1m K open。
     void (async () => {
       try {
         const rows = await api.candlesRange(
           "1m",
-          Math.max(0, normalizedStartMs),
-          normalizedStartMs + ONE_MINUTE_MS,
-          2
+          Math.max(0, comparisonStartMs),
+          comparisonStartMs + 5 * ONE_MINUTE_MS,
+          6
         );
         if (cancelled || activeComparisonKeyRef.current !== comparisonKey) return;
-        const targetCandle = rows.find((row) => {
-          const rowOpenMs = new Date(row.open_time).getTime();
-          return rowOpenMs === normalizedStartMs;
-        });
+        const targetCandle = nearestBaselineCandle(rows, comparisonStartMs);
         if (!targetCandle || !Number.isFinite(targetCandle.open)) {
-          setComparisonLine(null);
+          if (!visibleBaselineCandle) setComparisonLine(null);
           return;
         }
-        const nextLine = {
-          id: `polymarket:${marketId}:${startTime}`,
+        const nextLine = marketComparisonLine({
+          marketId,
+          startMs: comparisonStartMs,
           price: targetCandle.open,
-          title: selectedPolymarket?.interval ?? "N/A",
-          color: "#f59e0b",
-        };
+          interval: selectedPolymarket?.interval ?? "N/A",
+        });
         comparisonLineCacheRef.current.set(comparisonKey, nextLine);
         setComparisonLine(nextLine);
       } catch {
-        if (!cancelled && activeComparisonKeyRef.current === comparisonKey) setComparisonLine(null);
+        if (!cancelled && activeComparisonKeyRef.current === comparisonKey && !visibleBaselineCandle) {
+          setComparisonLine(null);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [selectedPolymarket?.id, selectedPolymarket?.start_time, selectedPolymarket?.window]);
-
-function normalizeMarketStartTimeToMinute(value: number) {
-  if (!Number.isFinite(value)) return value;
-  return Math.floor(value / ONE_MINUTE_MS) * ONE_MINUTE_MS;
-}
-
-function parseMarketStartTimeMs(value: string): number {
-  const trimmed = value.trim();
-  const numeric = Number(trimmed);
-  if (Number.isFinite(numeric)) {
-    return numeric > 1e12 ? numeric : numeric * 1000;
-  }
-  return new Date(trimmed).getTime();
-}
+  }, [
+    activeCandles,
+    selectedPolymarket?.id,
+    selectedPolymarket?.interval,
+    selectedPolymarket?.start_time,
+    selectedPolymarket?.end_time,
+  ]);
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
@@ -450,7 +469,7 @@ function PolymarketBtcPanel({
     () =>
       markets.map((market) => ({
         value: market.id,
-        label: `${formatMarketTime(market)} · ${marketWindowLabel(market)}`,
+        label: `${formatMarketTime(market)} · ${marketWindowLabel(market, markets)}`,
       })),
     [markets]
   );
@@ -497,7 +516,7 @@ function PolymarketBtcPanel({
           <div className="polymarket-market-meta">
             <Typography.Text strong>{activeMarket.title}</Typography.Text>
             <Typography.Text type="secondary">
-              {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket)} ·{" "}
+              {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
               {activeMarket.accepting_orders ? "可交易" : "暂停接单"} · 流动性{" "}
               {formatCompact(activeMarket.liquidity)}
             </Typography.Text>
@@ -603,6 +622,33 @@ function mergeIndicators(existing: MarketIndicatorPoint[], incoming: MarketIndic
   );
 }
 
+function nearestBaselineCandle(rows: MarketCandle[], startMs: number) {
+  const candidates = rows
+    .map((row) => ({ row, openMs: new Date(row.open_time).getTime() }))
+    .filter(({ openMs }) => Number.isFinite(openMs) && openMs >= startMs)
+    .sort((left, right) => Math.abs(left.openMs - startMs) - Math.abs(right.openMs - startMs));
+  return candidates[0]?.row ?? null;
+}
+
+function marketComparisonLine({
+  marketId,
+  startMs,
+  price,
+  interval,
+}: {
+  marketId: string;
+  startMs: number;
+  price: number;
+  interval: string;
+}): ChartComparisonLine {
+  return {
+    id: `polymarket:${marketId}:${startMs}`,
+    price,
+    title: interval,
+    color: "#f59e0b",
+  };
+}
+
 function streamStatusLabel(status: StreamStatus) {
   if (status === "connected") return "已连接";
   if (status === "reconnecting") return "重连中";
@@ -635,9 +681,10 @@ function formatBtcPrice(value: number) {
 }
 
 function formatMarketTime(market: PolymarketUpDownMarket) {
-  const start = market.start_time ? new Date(market.start_time) : null;
-  const end = market.end_time ? new Date(market.end_time) : null;
-  if (!start || !end) return market.window;
+  const window = polymarketDisplayWindow(market);
+  if (!window) return market.window;
+  const start = new Date(window.startMs);
+  const end = new Date(window.endMs);
   const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
@@ -646,10 +693,110 @@ function formatMarketTime(market: PolymarketUpDownMarket) {
   return `${timeFormatter.format(start)}-${timeFormatter.format(end)}`;
 }
 
-function marketWindowLabel(market: PolymarketUpDownMarket) {
+function marketWindowLabel(market: PolymarketUpDownMarket, markets: PolymarketUpDownMarket[] = []) {
+  const window = polymarketDisplayWindow(market);
+  if (window) {
+    const now = Date.now();
+    if (window.startMs <= now && now < window.endMs) return "当前";
+    if (now >= window.endMs) return "已结束";
+    const nextMarket = markets
+      .map((item) => ({ market: item, window: polymarketDisplayWindow(item) }))
+      .filter((item): item is { market: PolymarketUpDownMarket; window: PolymarketDisplayWindow } =>
+        Boolean(item.window && item.window.startMs > now)
+      )
+      .sort((left, right) => left.window.startMs - right.window.startMs)[0]?.market;
+    return nextMarket?.id === market.id || market.window === "next" ? "下个" : "未来";
+  }
   if (market.window === "current") return "当前";
   if (market.window === "next") return "下个";
   if (market.window === "upcoming") return "未来";
   if (market.window === "expired") return "已结束";
   return "未知";
+}
+
+type PolymarketDisplayWindow = {
+  startMs: number;
+  endMs: number;
+};
+
+function polymarketDisplayWindow(market: PolymarketUpDownMarket): PolymarketDisplayWindow | null {
+  const titleWindow = polymarketTitleWindow(market);
+  if (titleWindow) return titleWindow;
+
+  const anchorMs = parseMarketTimeMs(market.start_time) ?? parseMarketTimeMs(market.end_time);
+  const intervalMs = POLYMARKET_INTERVAL_MS[market.interval];
+  if (anchorMs == null || !Number.isFinite(anchorMs) || !intervalMs) return null;
+  const startMs = Math.floor(anchorMs / intervalMs) * intervalMs;
+  return {
+    startMs,
+    endMs: startMs + intervalMs,
+  };
+}
+
+function polymarketTitleWindow(market: PolymarketUpDownMarket): PolymarketDisplayWindow | null {
+  const rangeMatch = market.title.match(
+    /([A-Za-z]+)\s+(\d{1,2}),\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*ET/i
+  );
+  const singleMatch = market.title.match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*ET/i);
+  const match = rangeMatch ?? singleMatch;
+  if (!match) return null;
+  const [, monthName, dayText, startHourText, startMinuteText, startPeriod] = match;
+  const month = MONTH_INDEX[monthName.toLowerCase()];
+  const anchorMs = parseMarketTimeMs(market.start_time) ?? parseMarketTimeMs(market.end_time);
+  if (month == null || anchorMs == null) return null;
+
+  const year = new Date(anchorMs).getUTCFullYear();
+  const day = Number(dayText);
+  const startWallHour = toTwentyFourHour(Number(startHourText), startPeriod);
+  const startWallMinute = Number(startMinuteText ?? "0");
+  if ([day, startWallHour, startWallMinute].some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  // Polymarket 标题里的 ET 窗口才是合约比较区间；API 时间字段可能是开盘/展示偏移。
+  const startMs = zonedWallTimeToUtcMs(year, month, day, startWallHour, startWallMinute, ET_TIME_ZONE);
+  if (!rangeMatch) {
+    return { startMs, endMs: startMs + POLYMARKET_INTERVAL_MS[market.interval] };
+  }
+
+  const endWallHour = toTwentyFourHour(Number(rangeMatch[6]), rangeMatch[8]);
+  const endWallMinute = Number(rangeMatch[7] ?? "0");
+  if ([endWallHour, endWallMinute].some((value) => !Number.isFinite(value))) return null;
+  let endMs = zonedWallTimeToUtcMs(year, month, day, endWallHour, endWallMinute, ET_TIME_ZONE);
+  if (endMs <= startMs) endMs += 24 * 60 * ONE_MINUTE_MS;
+  return { startMs, endMs };
+}
+
+function toTwentyFourHour(hour: number, period: string) {
+  const normalized = hour % 12;
+  return period.toUpperCase() === "PM" ? normalized + 12 : normalized;
+}
+
+function zonedWallTimeToUtcMs(year: number, month: number, day: number, hour: number, minute: number, timeZone: string) {
+  const utcGuess = Date.UTC(year, month, day, hour, minute, 0, 0);
+  return utcGuess - timeZoneOffsetMs(timeZone, utcGuess);
+}
+
+function timeZoneOffsetMs(timeZone: string, utcMs: number) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+  });
+  const offset = formatter.formatToParts(new Date(utcMs)).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+  const match = offset.match(/^GMT([+-])(\d{1,2})(?::(\d{2}))?$/);
+  if (!match) return 0;
+  const [, sign, hourText, minuteText] = match;
+  const minutes = Number(hourText) * 60 + Number(minuteText ?? "0");
+  return (sign === "-" ? -1 : 1) * minutes * ONE_MINUTE_MS;
+}
+
+function parseMarketTimeMs(value: string | null): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric)) {
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+  const parsed = new Date(trimmed).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
