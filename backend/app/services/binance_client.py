@@ -6,6 +6,7 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.candle import Candle, Interval
+from app.services.external_http import with_retry
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,9 @@ class BinanceClient:
         for base_url in self._base_urls:
             try:
                 async with httpx.AsyncClient(base_url=base_url, timeout=self._timeout) as client:
-                    response = await client.get("/api/v3/klines", params=params)
-                    response.raise_for_status()
+                    response = await with_retry(
+                        lambda: fetch_raised(client, "/api/v3/klines", params=params)
+                    )
                     rows = response.json()
                 service_health_store.set(
                     "binance_rest",
@@ -102,3 +104,14 @@ class BinanceClient:
 
 def _from_ms(value: int) -> datetime:
     return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+
+
+async def fetch_raised(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    params: dict[str, str | int],
+) -> httpx.Response:
+    response = await client.get(path, params=params)
+    response.raise_for_status()
+    return response

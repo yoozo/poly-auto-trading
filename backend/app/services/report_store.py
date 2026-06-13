@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
@@ -57,6 +57,34 @@ async def update_task(
     if error is not None:
         task.error = error
     await session.commit()
+
+
+async def fail_interrupted_running_tasks(session: AsyncSession) -> int:
+    # 本地后台任务只存在于当前进程；重启后 running 不可恢复，必须明确失败避免前端误等。
+    result = await session.execute(
+        update(AnalysisTask)
+        .where(AnalysisTask.status == "running")
+        .values(
+            status="error",
+            message="服务重启，任务已中断，请重新分析",
+            percent=100,
+            error="service restarted while task was running",
+            updated_at=func.now(),
+        )
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
+async def delete_finished_tasks_before(session: AsyncSession, before: datetime) -> int:
+    result = await session.execute(
+        delete(AnalysisTask).where(
+            AnalysisTask.status.in_(["done", "error"]),
+            AnalysisTask.updated_at < before,
+        )
+    )
+    await session.commit()
+    return int(result.rowcount or 0)
 
 
 async def get_task(session: AsyncSession, task_id: str) -> ReportTask | None:

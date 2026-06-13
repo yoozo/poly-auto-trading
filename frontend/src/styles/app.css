@@ -6,7 +6,18 @@ body,
 }
 
 body {
-  background: #f4f6fa;
+  background: var(--app-bg, #f4f6fa);
+}
+
+body[data-theme="dark"] {
+  --app-bg: #101418;
+  --panel-bg: #151b22;
+  --panel-border: #27313c;
+  --table-bg: #141a21;
+  --table-head-bg: #1c2530;
+  --table-row-alt: #18202a;
+  --text-strong: #e6edf3;
+  --text-muted: #9aa7b4;
 }
 
 .menu-link {
@@ -18,6 +29,15 @@ body {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.route-loading {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted, #667085);
 }
 
 .watch-page {
@@ -38,7 +58,7 @@ body {
   height: 100vh;
   padding: 12px;
   overflow: hidden;
-  background: #f4f6fa;
+  background: var(--app-bg, #f4f6fa);
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -221,6 +241,14 @@ body {
   background: #ffffff;
 }
 
+.market-matrix-table .virtual-spacer {
+  min-width: 0;
+  padding: 0;
+  border-right: 0;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 .wide table {
   min-width: max-content;
 }
@@ -282,12 +310,22 @@ body {
 
 .market-matrix-table td.profit {
   color: #0f7a4f;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .market-matrix-table td.loss {
   color: #b42318;
-  font-weight: 800;
+  font-weight: 700;
+}
+
+.market-matrix-table td.profit,
+.market-matrix-table td.loss {
+  transition: background-color 0.15s ease;
+}
+
+.market-matrix-table td.profit > *,
+.market-matrix-table td.loss > * {
+  color: inherit !important;
 }
 
 .market-matrix-table td.up-side {
@@ -330,13 +368,13 @@ body {
 }
 
 .market-result-open {
-  background: #fff1ef;
-  box-shadow: inset -3px 0 0 #b42318;
+  background: transparent;
+  box-shadow: none;
 }
 
 .market-result-settled {
-  background: #eaf7f0;
-  box-shadow: inset -3px 0 0 #0f7a4f;
+  background: transparent;
+  box-shadow: none;
 }
 
 .outcome-tag {
@@ -811,6 +849,92 @@ body {
 
 a#tv-attr-logo {
   display: none !important;
+}
+
+body[data-theme="dark"] .ant-pro-layout,
+body[data-theme="dark"] .ant-pro-layout-container,
+body[data-theme="dark"] .ant-pro-page-container,
+body[data-theme="dark"] .ant-layout {
+  background: var(--app-bg);
+}
+
+body[data-theme="dark"] .watch-toolbar,
+body[data-theme="dark"] .watch-chart-card,
+body[data-theme="dark"] .polymarket-panel,
+body[data-theme="dark"] .reports-page .ant-card {
+  border-color: var(--panel-border);
+  background: var(--panel-bg);
+}
+
+body[data-theme="dark"] .json-preview,
+body[data-theme="dark"] .table-wrap,
+body[data-theme="dark"] .matrix-loading,
+body[data-theme="dark"] .matrix-loading-footer {
+  border-color: var(--panel-border);
+  background: var(--table-bg);
+  color: var(--text-strong);
+}
+
+body[data-theme="dark"] .report-metric-card {
+  border-color: var(--panel-border);
+  background: var(--panel-bg);
+}
+
+body[data-theme="dark"] .report-metric-label,
+body[data-theme="dark"] .matrix-empty,
+body[data-theme="dark"] .market-matrix-table td,
+body[data-theme="dark"] .market-matrix-table th {
+  color: var(--text-muted);
+}
+
+body[data-theme="dark"] .report-metric-value,
+body[data-theme="dark"] .market-matrix-table th:first-child,
+body[data-theme="dark"] .market-matrix-table td:first-child,
+body[data-theme="dark"] .market-column-title {
+  color: var(--text-strong);
+}
+
+body[data-theme="dark"] .market-matrix-table th,
+body[data-theme="dark"] .market-matrix-table th:first-child,
+body[data-theme="dark"] .market-matrix-table td:first-child {
+  border-color: var(--panel-border);
+  background: var(--table-head-bg);
+}
+
+body[data-theme="dark"] .market-matrix-table td {
+  border-color: var(--panel-border);
+  background: var(--table-bg);
+}
+
+body[data-theme="dark"] .market-matrix-table tbody tr:nth-child(2n) td:not(:first-child) {
+  background: var(--table-row-alt);
+}
+
+body[data-theme="dark"] .market-matrix-table td.profit {
+  color: #0f7a4f;
+  font-weight: 700;
+}
+
+body[data-theme="dark"] .market-matrix-table td.loss {
+  color: #b42318;
+  font-weight: 700;
+}
+
+body[data-theme="dark"] .market-matrix-table td.profit > *,
+body[data-theme="dark"] .market-matrix-table td.loss > * {
+  color: inherit !important;
+}
+
+body[data-theme="dark"] .report-metric-positive,
+body[data-theme="dark"] .report-metric-negative,
+body[data-theme="dark"] .report-metric-neutral {
+  background: var(--panel-bg);
+}
+
+body[data-theme="dark"] .polymarket-outcome,
+body[data-theme="dark"] .polymarket-orderbook {
+  border-color: var(--panel-border);
+  background: var(--table-bg);
 }
 
 .kline-countdown {

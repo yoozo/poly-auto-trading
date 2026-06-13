@@ -41,6 +41,15 @@ export type ServiceHealth = {
   metadata: Record<string, unknown>;
 };
 
+export type ServiceEventRecord = {
+  id: number;
+  service: string;
+  level: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export type SignalRecord = {
   id: number;
   signal_key: string;
@@ -260,6 +269,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthStatus>("/api/health"),
   services: () => request<ServiceHealth[]>("/api/status/services"),
+  serviceEvents: (
+    params: {
+      service?: string;
+      level?: string;
+      limit?: number;
+      start?: string;
+      end?: string;
+    } = {},
+  ) => {
+    const query = new URLSearchParams();
+    query.set("limit", String(params.limit ?? 100));
+    if (params.service) query.set("service", params.service);
+    if (params.level) query.set("level", params.level);
+    if (params.start) query.set("start", params.start);
+    if (params.end) query.set("end", params.end);
+    return request<ServiceEventRecord[]>(`/api/status/events?${query.toString()}`);
+  },
   telegramStatus: () => request<TelegramStatus>("/api/notifications/telegram/status"),
   updateTelegramStatus: (enabled: boolean) =>
     request<TelegramStatus>("/api/notifications/telegram/status", {

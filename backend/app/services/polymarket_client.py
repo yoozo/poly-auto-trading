@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from app.core.config import settings
+from app.services.external_http import with_retry
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -174,8 +175,7 @@ class PolymarketClient:
         }
         try:
             async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
-                response = await client.get("/public-search", params=params)
-                response.raise_for_status()
+                response = await with_retry(lambda: get_raised(client, "/public-search", params=params))
                 payload = response.json()
             service_health_store.set("polymarket", "running", metadata={"endpoint": "public-search"})
             return payload
@@ -187,10 +187,16 @@ class PolymarketClient:
     async def fetch_profile_by_wallet(self, wallet: str) -> dict[str, Any]:
         try:
             async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
-                response = await client.get("/public-profile", params={"address": wallet})
+                response = await with_retry(
+                    lambda: get_raised(
+                        client,
+                        "/public-profile",
+                        params={"address": wallet},
+                        allowed_statuses={404},
+                    )
+                )
                 if response.status_code == 404:
                     return {"proxyWallet": wallet}
-                response.raise_for_status()
                 payload = response.json()
             service_health_store.set("polymarket", "running", metadata={"endpoint": "profiles"})
             return payload if isinstance(payload, dict) else {"proxyWallet": wallet, "raw": payload}
@@ -386,12 +392,14 @@ class PolymarketClient:
         try:
             if client is None:
                 async with httpx.AsyncClient(base_url=self._data_base_url, timeout=self._timeout) as scoped_client:
-                    response = await scoped_client.get("/activity", params=params)
-                    raise_for_activity_status(response)
+                    response = await with_retry(
+                        lambda: get_raised(scoped_client, "/activity", params=params, activity=True)
+                    )
                     payload = response.json()
             else:
-                response = await client.get("/activity", params=params)
-                raise_for_activity_status(response)
+                response = await with_retry(
+                    lambda: get_raised(client, "/activity", params=params, activity=True)
+                )
                 payload = response.json()
             service_health_store.set("polymarket", "running", metadata={"endpoint": "activity"})
             if not isinstance(payload, list):
@@ -467,9 +475,8 @@ class PolymarketClient:
                 for candidate in tag_candidates:
                     candidate_params = dict(params)
                     candidate_params["tag_slug"] = candidate
-                    response = await client.get("/events", params=candidate_params)
+                    response = await with_retry(lambda: get_raised(client, "/events", params=candidate_params))
                     attempted_with_tag = True
-                    response.raise_for_status()
                     payload = response.json()
                     service_health_store.set(
                         "polymarket",
@@ -480,8 +487,7 @@ class PolymarketClient:
                         continue
                     rows.extend(row for row in payload if isinstance(row, dict))
                 if not rows and attempted_with_tag:
-                    response = await client.get("/events", params=params)
-                    response.raise_for_status()
+                    response = await with_retry(lambda: get_raised(client, "/events", params=params))
                     payload = response.json()
                     service_health_store.set("polymarket", "running", metadata={"endpoint": "events", "tag_slug": "fallback"})
                     if isinstance(payload, list):
@@ -512,8 +518,7 @@ class PolymarketClient:
         body = [{"token_id": token_id} for token_id in token_ids]
         try:
             async with httpx.AsyncClient(base_url=self._clob_base_url, timeout=self._timeout) as client:
-                response = await client.post("/books", json=body)
-                response.raise_for_status()
+                response = await with_retry(lambda: post_raised(client, "/books", json=body))
                 payload = response.json()
             service_health_store.set("polymarket", "running", metadata={"endpoint": "books"})
             if not isinstance(payload, list):
@@ -620,6 +625,35 @@ def raise_for_activity_status(response: httpx.Response) -> None:
         request=response.request,
         response=response,
     )
+
+
+async def get_raised(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    params: dict[str, Any],
+    allowed_statuses: set[int] | None = None,
+    activity: bool = False,
+) -> httpx.Response:
+    response = await client.get(path, params=params)
+    if allowed_statuses and response.status_code in allowed_statuses:
+        return response
+    if activity:
+        raise_for_activity_status(response)
+    else:
+        response.raise_for_status()
+    return response
+
+
+async def post_raised(
+    client: httpx.AsyncClient,
+    path: str,
+    *,
+    json: list[dict[str, str]],
+) -> httpx.Response:
+    response = await client.post(path, json=json)
+    response.raise_for_status()
+    return response
 
 
 def is_btc_up_down_event(event: dict[str, Any], *, interval: str) -> bool:

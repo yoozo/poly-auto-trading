@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from statistics import fmean, pstdev
+from statistics import fmean
 
 from app.schemas.candle import BollingerBands, Candle, IndicatorPoint, Interval
 
@@ -97,13 +97,23 @@ def calculate_nullable_ema_series(values: list[float | None], period: int) -> li
 
 def calculate_bollinger_series(closes: list[float]) -> list[BollingerBands]:
     values: list[BollingerBands] = []
+    rolling_sum = 0.0
+    rolling_square_sum = 0.0
     for index in range(len(closes)):
+        close = closes[index]
+        rolling_sum += close
+        rolling_square_sum += close * close
+        if index >= BOLLINGER_PERIOD:
+            expired = closes[index - BOLLINGER_PERIOD]
+            rolling_sum -= expired
+            rolling_square_sum -= expired * expired
         if index + 1 < BOLLINGER_PERIOD:
             values.append(BollingerBands())
             continue
-        window = closes[index + 1 - BOLLINGER_PERIOD : index + 1]
-        middle = fmean(window)
-        deviation = pstdev(window)
+        # Bollinger 只需要固定窗口的均值和总体标准差，滚动累计避免大窗口重复切片。
+        middle = rolling_sum / BOLLINGER_PERIOD
+        variance = max(0.0, (rolling_square_sum / BOLLINGER_PERIOD) - (middle * middle))
+        deviation = variance**0.5
         values.append(
             BollingerBands(
                 upper=round(middle + deviation * BOLLINGER_STDDEV_MULTIPLIER, 4),

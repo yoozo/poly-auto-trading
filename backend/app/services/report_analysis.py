@@ -301,7 +301,6 @@ def serialize_market(market: MarketAccumulator) -> MarketPerformance:
     if_up_pnl = market.merged + remaining_up - market.cost
     if_down_pnl = market.merged + remaining_down - market.cost
     position_status = format_position_status(market)
-    settled = is_settled(market)
 
     return MarketPerformance(
         market_id=market.market_id,
@@ -329,10 +328,10 @@ def serialize_market(market: MarketAccumulator) -> MarketPerformance:
         pnl=as_float(market.pnl),
         pnl_with_rebate=as_float(market.pnl_with_rebate),
         roi=ratio(market.pnl, market.cost),
-        if_up_pnl=as_float(if_up_pnl) if not settled and is_up_down_market(market) else None,
-        if_up_roi=ratio(if_up_pnl, market.cost) if not settled and is_up_down_market(market) else None,
-        if_down_pnl=as_float(if_down_pnl) if not settled and is_up_down_market(market) else None,
-        if_down_roi=ratio(if_down_pnl, market.cost) if not settled and is_up_down_market(market) else None,
+        if_up_pnl=as_float(if_up_pnl) if is_up_down_market(market) else None,
+        if_up_roi=ratio(if_up_pnl, market.cost) if is_up_down_market(market) else None,
+        if_down_pnl=as_float(if_down_pnl) if is_up_down_market(market) else None,
+        if_down_roi=ratio(if_down_pnl, market.cost) if is_up_down_market(market) else None,
         incomplete=market.incomplete,
     )
 

@@ -11,6 +11,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.external_http import with_retry
 from app.services.report_store import list_market_metadata, upsert_market_metadata_rows
 
 logger = logging.getLogger(__name__)
@@ -107,10 +108,9 @@ async def fetch_market_metadata_row(
 ) -> dict[str, Any] | None:
     async with semaphore:
         try:
-            response = await client.get(f"/markets/slug/{slug}")
+            response = await with_retry(lambda: get_market_metadata_response(client, slug))
             if response.status_code == 404:
                 return None
-            response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
                 return None
@@ -118,6 +118,13 @@ async def fetch_market_metadata_row(
         except Exception as exc:
             logger.warning("Polymarket market metadata fetch failed", extra={"slug": slug}, exc_info=exc)
             return None
+
+
+async def get_market_metadata_response(client: httpx.AsyncClient, slug: str) -> httpx.Response:
+    response = await client.get(f"/markets/slug/{slug}")
+    if response.status_code != 404:
+        response.raise_for_status()
+    return response
 
 
 def iter_batches(rows: list[dict[str, Any]], batch_size: int):

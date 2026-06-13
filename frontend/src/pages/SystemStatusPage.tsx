@@ -1,6 +1,6 @@
-import { Badge, Card, Col, Row, Statistic, Table, Typography } from "antd";
+import { Badge, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { api, type ServiceHealth } from "../api/client";
+import { api, type ServiceEventRecord, type ServiceHealth } from "../api/client";
 
 const stateColor: Record<string, "success" | "processing" | "default" | "error" | "warning"> = {
   running: "success",
@@ -14,6 +14,11 @@ export default function SystemStatusPage() {
   const services = useQuery({
     queryKey: ["services"],
     queryFn: api.services,
+    refetchInterval: 10_000
+  });
+  const events = useQuery({
+    queryKey: ["service-events"],
+    queryFn: () => api.serviceEvents({ limit: 80 }),
     refetchInterval: 10_000
   });
 
@@ -77,6 +82,59 @@ export default function SystemStatusPage() {
           ]}
         />
       </Card>
+
+      <Card
+        title="服务事件"
+        extra={<Button size="small" onClick={() => events.refetch()} loading={events.isFetching}>重试</Button>}
+      >
+        <Table<ServiceEventRecord>
+          rowKey="id"
+          size="small"
+          loading={events.isFetching}
+          dataSource={events.data ?? []}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无服务事件" /> }}
+          pagination={{ pageSize: 8, size: "small" }}
+          columns={[
+            {
+              title: "时间",
+              dataIndex: "created_at",
+              width: 180,
+              render: (value: string) => new Date(value).toLocaleString()
+            },
+            {
+              title: "服务",
+              dataIndex: "service",
+              width: 140,
+              render: (value: string) => <Tag>{value}</Tag>
+            },
+            {
+              title: "级别",
+              dataIndex: "level",
+              width: 100,
+              render: (value: string) => <Tag color={eventLevelColor(value)}>{value}</Tag>
+            },
+            {
+              title: "消息",
+              dataIndex: "message"
+            },
+            {
+              title: "详情",
+              dataIndex: "payload",
+              render: (value: Record<string, unknown>) => (
+                <Typography.Text code>{Object.keys(value).length ? JSON.stringify(value) : "-"}</Typography.Text>
+              )
+            }
+          ]}
+        />
+      </Card>
+
+      <Card title="权限 / 配置预留">
+        <Space wrap size={8}>
+          <Tag color="default">RBAC 未启用</Tag>
+          <Tag color="default">策略配置未启用</Tag>
+          <Typography.Text type="secondary">当前版本仅预留入口，后续可接入用户、角色和系统级参数。</Typography.Text>
+        </Space>
+      </Card>
     </div>
   );
 }
@@ -95,4 +153,11 @@ function renderServiceMetadata(record: ServiceHealth) {
       {lastDelivery?.title ? ` / ${lastDelivery.title}: ${lastDelivery.status || "-"}` : ""}
     </Typography.Text>
   );
+}
+
+function eventLevelColor(level: string) {
+  if (level === "error") return "error";
+  if (level === "warning") return "warning";
+  if (level === "info") return "processing";
+  return "default";
 }

@@ -14,11 +14,12 @@ from app.db.models import (
     AppSetting,
     NotificationDelivery as NotificationDeliveryModel,
     NotificationDeliverySignal,
-    ServiceEvent,
     Signal as SignalModel,
 )
 from app.schemas.notification import DeliveryStatus, NotificationDelivery, TelegramStatus
 from app.schemas.signal import SignalRecord
+from app.services.external_http import with_retry
+from app.services.service_events import record_service_event
 from app.services.service_health import service_health_store
 from app.services.signal_analysis import serialize_signal_record
 
@@ -349,32 +350,24 @@ async def serialize_delivery(
     )
 
 
-async def record_service_event(
-    session: AsyncSession,
-    *,
-    service: str,
-    level: str,
-    message: str,
-    payload: dict[str, Any],
-) -> None:
-    session.add(ServiceEvent(service=service, level=level, message=message, payload=payload))
-    await session.commit()
-
-
 async def send_telegram_message(message: str) -> None:
     if len(message) > 3900:
         message = f"{message[:3890]}..."
     url = f"{TELEGRAM_API_BASE_URL}/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            url,
-            json={
-                "chat_id": settings.telegram_chat_id,
-                "text": message,
-                "disable_web_page_preview": True,
-            },
-        )
-        response.raise_for_status()
+        async def post_message() -> httpx.Response:
+            response = await client.post(
+                url,
+                json={
+                    "chat_id": settings.telegram_chat_id,
+                    "text": message,
+                    "disable_web_page_preview": True,
+                },
+            )
+            response.raise_for_status()
+            return response
+
+        await with_retry(post_message)
 
 
 def delivery_target(signals: list[SignalRecord]) -> tuple[str, str]:

@@ -29,6 +29,8 @@ const ACTIVITY_LIMIT_KEY = "poly-auto.reports.activityLimit";
 const SELECTED_ACCOUNT_KEY = "poly-auto.reports.selectedAccountId";
 const MARKET_PAGE_SIZE = 20;
 const MARKET_MATRIX_LOAD_THRESHOLD_PX = 96;
+const MARKET_MATRIX_COLUMN_WIDTH = 260;
+const MARKET_MATRIX_OVERSCAN = 3;
 
 type AnalyzeForm = {
   input: string;
@@ -199,6 +201,11 @@ export default function ReportsPage() {
       {selectedAccountId && (
         <>
           {summaryQuery.error instanceof Error && <Alert type="error" message={summaryQuery.error.message} showIcon />}
+          {summaryQuery.error instanceof Error && (
+            <Button size="small" onClick={() => void summaryQuery.refetch()}>
+              重试统计
+            </Button>
+          )}
           {summaryQuery.isLoading && <Alert type="info" message="正在加载账户统计..." showIcon />}
           <ReportStats summary={summaryQuery.data} loading={summaryQuery.isLoading} />
           <Card
@@ -226,7 +233,18 @@ export default function ReportsPage() {
               />
             }
           >
-            {marketsQuery.error instanceof Error && <Alert type="error" message={marketsQuery.error.message} showIcon />}
+            {marketsQuery.error instanceof Error && (
+              <Alert
+                type="error"
+                message={marketsQuery.error.message}
+                showIcon
+                action={
+                  <Button size="small" onClick={() => void marketsQuery.refetch()}>
+                    重试
+                  </Button>
+                }
+              />
+            )}
             <MarketMatrix
               loading={marketsQuery.isLoading}
               markets={markets}
@@ -494,9 +512,15 @@ function MarketMatrix({
   onLoadMore: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [viewport, setViewport] = useState({ scrollLeft: 0, width: 0 });
   const rows = useMemo<MatrixRow[]>(
     () => [
-      { key: "result", label: "实际结果", render: (market) => <ResultCell market={market} /> },
+      {
+        key: "result",
+        label: "实际结果",
+        render: (market) => <ResultCell market={market} />,
+        className: (market) => marketResultCellClass(market),
+      },
       { key: "position", label: "持仓状态", render: (market) => <Tag>{market.position_status}</Tag> },
       { key: "redeem_time", label: "Redeem time", render: (market) => formatDate(market.redeem_time) },
       { key: "market_date", label: "市场日期", render: (market) => formatDate(market.market_date) },
@@ -518,22 +542,24 @@ function MarketMatrix({
       {
         key: "pnl",
         label: "收益/收益率",
-        render: (market) => (
-          <>
-            {renderSignedMoney(market.pnl)} / {formatPercent(market.roi)}
-          </>
-        ),
+        render: (market) => renderPnlRatio(market.pnl, market.roi),
       },
       {
         key: "if_up",
         label: "若上涨收益/收益率",
-        render: (market) => formatOptionalScenario(market.if_up_pnl, market.if_up_roi),
+        render: (market) => {
+          const { pnl, roi } = resolveHypotheticalValue(market, "up");
+          return formatOptionalScenario(pnl, roi);
+        },
         className: (market) => hypotheticalCellClass(market, "up"),
       },
       {
         key: "if_down",
         label: "若下跌收益/收益率",
-        render: (market) => formatOptionalScenario(market.if_down_pnl, market.if_down_roi),
+        render: (market) => {
+          const { pnl, roi } = resolveHypotheticalValue(market, "down");
+          return formatOptionalScenario(pnl, roi);
+        },
         className: (market) => hypotheticalCellClass(market, "down"),
       },
     ],
@@ -548,7 +574,34 @@ function MarketMatrix({
     }
   }, [hasMore, loadingMore, markets.length, onLoadMore]);
 
+  useEffect(() => {
+    const element = wrapRef.current;
+    if (!element) return;
+    const syncViewport = () => setViewport({ scrollLeft: element.scrollLeft, width: element.clientWidth });
+    syncViewport();
+    window.addEventListener("resize", syncViewport);
+    return () => window.removeEventListener("resize", syncViewport);
+  }, []);
+
+  const virtualColumns = useMemo(() => {
+    if (markets.length === 0) {
+      return { visible: [], start: 0, end: 0, leftWidth: 0, rightWidth: 0 };
+    }
+    const availableWidth = Math.max(viewport.width - 150, MARKET_MATRIX_COLUMN_WIDTH);
+    const start = Math.max(0, Math.floor(viewport.scrollLeft / MARKET_MATRIX_COLUMN_WIDTH) - MARKET_MATRIX_OVERSCAN);
+    const visibleCount = Math.ceil(availableWidth / MARKET_MATRIX_COLUMN_WIDTH) + MARKET_MATRIX_OVERSCAN * 2;
+    const end = Math.min(markets.length, start + visibleCount);
+    return {
+      visible: markets.slice(start, end),
+      start,
+      end,
+      leftWidth: start * MARKET_MATRIX_COLUMN_WIDTH,
+      rightWidth: Math.max(0, (markets.length - end) * MARKET_MATRIX_COLUMN_WIDTH),
+    };
+  }, [markets, viewport.scrollLeft, viewport.width]);
+
   function loadMoreIfNearRight(element: HTMLDivElement) {
+    setViewport({ scrollLeft: element.scrollLeft, width: element.clientWidth });
     if (!hasMore || loadingMore) return;
     const distanceToRight = element.scrollWidth - element.scrollLeft - element.clientWidth;
     if (distanceToRight <= MARKET_MATRIX_LOAD_THRESHOLD_PX) {
@@ -576,24 +629,31 @@ function MarketMatrix({
         <thead>
           <tr>
             <th>市场</th>
-            {markets.map((market, index) => (
+            {virtualColumns.leftWidth > 0 && <th className="virtual-spacer" style={{ width: virtualColumns.leftWidth }} />}
+            {virtualColumns.visible.map((market, index) => (
               <th key={market.market_id} data-market-title={market.title} data-market-date={market.market_date ?? ""}>
                 <div className="market-column-title">
-                  {index + 1}. {market.title}
+                  {virtualColumns.start + index + 1}. {market.title}
                 </div>
               </th>
             ))}
+            {virtualColumns.rightWidth > 0 && <th className="virtual-spacer" style={{ width: virtualColumns.rightWidth }} />}
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.key}>
               <td>{row.label}</td>
-              {markets.map((market) => (
-                <td key={market.market_id} className={row.className?.(market) ?? detailCellClass(row.key, market)}>
+              {virtualColumns.leftWidth > 0 && <td className="virtual-spacer" style={{ width: virtualColumns.leftWidth }} />}
+              {virtualColumns.visible.map((market) => (
+                <td
+                  key={market.market_id}
+                  className={row.className?.(market) ?? detailCellClass(row.key, market)}
+                >
                   {row.render(market)}
                 </td>
               ))}
+              {virtualColumns.rightWidth > 0 && <td className="virtual-spacer" style={{ width: virtualColumns.rightWidth }} />}
             </tr>
           ))}
         </tbody>
@@ -609,13 +669,37 @@ function MarketMatrix({
 }
 
 function ResultCell({ market }: { market: MarketPerformance }) {
-  const isSettled = market.result !== "未结算";
-  const tagClass = market.result === "上涨" || market.result === "是" ? "up" : market.result === "下跌" || market.result === "否" ? "down" : "neutral";
+  const tone = marketResultTone(market);
+  const tagClass = tone === "positive" ? "up" : tone === "negative" ? "down" : "neutral";
   return (
-    <div className={isSettled ? "market-result-cell market-result-settled" : "market-result-cell market-result-open"}>
+    <div className="market-result-cell">
       <span className={`outcome-tag ${tagClass}`}>{market.result || "n/a"}</span>
     </div>
   );
+}
+
+const MARKET_VALUE_EPSILON = 1e-8;
+
+function normalizeSignedValue(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value) || !Number.isFinite(value)) return null;
+  if (Math.abs(value) < MARKET_VALUE_EPSILON) return 0;
+  return value;
+}
+
+function signedTone(value: number | null | undefined): "positive" | "negative" | "neutral" {
+  const normalized = normalizeSignedValue(value);
+  if (normalized === null || normalized === 0) return "neutral";
+  return normalized > 0 ? "positive" : "negative";
+}
+
+function isPositive(value: number | null | undefined) {
+  const normalized = normalizeSignedValue(value);
+  return normalized !== null && normalized > 0;
+}
+
+function isNegative(value: number | null | undefined) {
+  const normalized = normalizeSignedValue(value);
+  return normalized !== null && normalized < 0;
 }
 
 function TaskStatusTag({ status }: { status: ReportTask["status"] }) {
@@ -652,8 +736,22 @@ function formatMoney(value: number | null) {
 }
 
 function formatSignedMoney(value: number) {
-  const prefix = value >= 0 ? "+" : "-";
-  return `${prefix}$${Math.abs(value).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  const normalized = normalizeSignedValue(value) ?? value;
+  const prefix = normalized >= 0 ? "+" : "-";
+  return `${prefix}$${Math.abs(normalized).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
+function marketResultTone(market: MarketPerformance) {
+  if (market.result === "上涨" || market.result === "是") return "positive";
+  if (market.result === "下跌" || market.result === "否") return "negative";
+  return "neutral";
+}
+
+function marketResultCellClass(market: MarketPerformance) {
+  // 标签展示官方结果，背景展示本账户在该结果下的实际盈亏，和离线报表保持一致。
+  if (isPositive(market.pnl)) return "outcome-profit";
+  if (isNegative(market.pnl)) return "outcome-loss";
+  return "";
 }
 
 function renderMoney(value: number | null) {
@@ -663,7 +761,9 @@ function renderMoney(value: number | null) {
 
 function renderSignedMoney(value: number | null) {
   if (value === null || value === undefined) return "n/a";
-  return <Typography.Text type={value < 0 ? "danger" : "success"}>{formatSignedMoney(value)}</Typography.Text>;
+  const tone = signedTone(value);
+  const colorStyle = tone === "negative" ? { color: "#b42318" } : tone === "positive" ? { color: "#0f7a4f" } : undefined;
+  return <span style={colorStyle}>{formatSignedMoney(value)}</span>;
 }
 
 function formatAmount(value: number | null) {
@@ -673,7 +773,16 @@ function formatAmount(value: number | null) {
 
 function formatPercent(value: number | null) {
   if (value === null || value === undefined) return "n/a";
-  return `${(value * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
+  const normalized = normalizeSignedValue(value) ?? value;
+  return `${(normalized * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}%`;
+}
+
+function renderPnlRatio(pnl: number | null, roi: number | null) {
+  return (
+    <>
+      {renderSignedMoney(pnl)} / {formatPercent(roi)}
+    </>
+  );
 }
 
 function renderOutcomeStats(cost: number, shares: number, averageCost: number | null, tone: "positive" | "negative") {
@@ -686,23 +795,36 @@ function renderOutcomeStats(cost: number, shares: number, averageCost: number | 
 
 function formatOptionalScenario(pnl: number | null, roi: number | null) {
   if (pnl === null || roi === null) return "不适用";
-  return (
-    <>
-      {renderSignedMoney(pnl)} / {formatPercent(roi)}
-    </>
-  );
+  return renderPnlRatio(pnl, roi);
+}
+
+function resolveHypotheticalValue(market: MarketPerformance, side: "up" | "down") {
+  const directPnl = side === "up" ? market.if_up_pnl : market.if_down_pnl;
+  const directRoi = side === "up" ? market.if_up_roi : market.if_down_roi;
+  if (directPnl !== null && directRoi !== null) {
+    return { pnl: directPnl, roi: directRoi };
+  }
+
+  const fallbackShares = side === "up" ? market.up_shares : market.down_shares;
+  const fallbackPnl = market.merge_return + fallbackShares - market.cost;
+  const fallbackRoi = safeRatio(fallbackPnl, market.cost);
+  if (market.cost === 0) {
+    return { pnl: null, roi: null };
+  }
+
+  return { pnl: fallbackPnl, roi: fallbackRoi };
 }
 
 function toneFor(value: number | null | undefined): "positive" | "negative" | "neutral" {
   if (value === null || value === undefined || value === 0) return "neutral";
-  return value > 0 ? "positive" : "negative";
+  return isPositive(value) ? "positive" : isNegative(value) ? "negative" : "neutral";
 }
 
 function detailCellClass(rowKey: string, market: MarketPerformance) {
   const classes: string[] = [];
-  if (rowKey === "result") {
-    if (market.pnl > 0) classes.push("outcome-profit");
-    if (market.pnl < 0) classes.push("outcome-loss");
+  if (rowKey === "pnl") {
+    if (isPositive(market.pnl)) classes.push("profit");
+    if (isNegative(market.pnl)) classes.push("loss");
   }
   if (rowKey === "up") classes.push("up-side");
   if (rowKey === "down") classes.push("down-side");
@@ -710,14 +832,17 @@ function detailCellClass(rowKey: string, market: MarketPerformance) {
 }
 
 function hypotheticalCellClass(market: MarketPerformance, side: "up" | "down") {
-  const pnl = side === "up" ? market.if_up_pnl : market.if_down_pnl;
-  const roi = side === "up" ? market.if_up_roi : market.if_down_roi;
+  const { pnl, roi } = resolveHypotheticalValue(market, side);
   const classes: string[] = [];
   if (pnl === null || roi === null) return "";
-  if (pnl > 0) classes.push("profit");
-  if (pnl < 0) classes.push("loss");
+  if (isPositive(pnl)) classes.push("profit");
+  if (isNegative(pnl)) classes.push("loss");
   if (sameNumber(pnl, market.pnl) && sameNumber(roi, market.roi)) classes.push("matched-result");
   return classes.join(" ");
+}
+
+function safeRatio(numerator: number, denominator: number) {
+  return denominator === 0 ? null : numerator / denominator;
 }
 
 function sameNumber(left: number | null, right: number | null) {

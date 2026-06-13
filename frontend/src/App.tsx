@@ -4,18 +4,25 @@ import {
   BellOutlined,
   DashboardOutlined,
   LineChartOutlined,
+  MoonOutlined,
   SettingOutlined
 } from "@ant-design/icons";
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
-import { useState } from "react";
-import BTCWatchPage from "./pages/BTCWatchPage";
-import DashboardPage from "./pages/DashboardPage";
-import ReportsPage from "./pages/ReportsPage";
-import SignalsPage from "./pages/SignalsPage";
-import SystemStatusPage from "./pages/SystemStatusPage";
-import TelegramNotificationsPage from "./pages/TelegramNotificationsPage";
+import { Button, ConfigProvider, Spin, theme } from "antd";
+import zhCN from "antd/locale/zh_CN";
+import { lazy, Suspense, useEffect, useState } from "react";
+
+const BTCWatchPage = lazy(() => import("./pages/BTCWatchPage"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
+const SignalsPage = lazy(() => import("./pages/SignalsPage"));
+const SystemStatusPage = lazy(() => import("./pages/SystemStatusPage"));
+const TelegramNotificationsPage = lazy(() => import("./pages/TelegramNotificationsPage"));
 
 type RouteKey = "/dashboard" | "/btc-watch" | "/signals" | "/reports" | "/telegram" | "/settings";
+type ThemeMode = "light" | "dark";
+
+const THEME_MODE_KEY = "poly-auto.themeMode";
 
 const route = {
   path: "/",
@@ -40,29 +47,62 @@ function renderPage(pathname: RouteKey) {
 
 export default function App() {
   const [pathname, setPathname] = useState<RouteKey>("/dashboard");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
   const pageTitle = pathname === "/btc-watch" ? false : route.routes.find((item) => item.path === pathname)?.name;
 
+  useEffect(() => {
+    localStorage.setItem(THEME_MODE_KEY, themeMode);
+    document.body.dataset.theme = themeMode;
+  }, [themeMode]);
+
   return (
-    <ProLayout
-      title="Poly Auto"
-      logo={false}
-      route={route}
-      location={{ pathname }}
-      menuItemRender={(item, dom) => (
-        <button
-          className="menu-link"
-          type="button"
-          onClick={() => setPathname((item.path || "/dashboard") as RouteKey)}
-        >
-          {dom}
-        </button>
-      )}
-      layout="mix"
-      contentStyle={{ padding: 0 }}
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        algorithm: themeMode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        token: {
+          borderRadius: 6,
+          colorPrimary: "#1677ff"
+        }
+      }}
     >
-      <PageContainer title={pageTitle}>
-        {renderPage(pathname)}
-      </PageContainer>
-    </ProLayout>
+      <ProLayout
+        title="Poly Auto"
+        logo={false}
+        route={route}
+        location={{ pathname }}
+        menuItemRender={(item, dom) => (
+          <button
+            className="menu-link"
+            type="button"
+            onClick={() => setPathname((item.path || "/dashboard") as RouteKey)}
+          >
+            {dom}
+          </button>
+        )}
+        actionsRender={() => [
+          <Button
+            key="theme"
+            type="text"
+            icon={<MoonOutlined />}
+            onClick={() => setThemeMode((value) => (value === "dark" ? "light" : "dark"))}
+          >
+            {themeMode === "dark" ? "浅色" : "深色"}
+          </Button>
+        ]}
+        layout="mix"
+        contentStyle={{ padding: 0 }}
+      >
+        <PageContainer title={pageTitle}>
+          <Suspense fallback={<div className="route-loading"><Spin /> 加载中...</div>}>
+            {renderPage(pathname)}
+          </Suspense>
+        </PageContainer>
+      </ProLayout>
+    </ConfigProvider>
   );
+}
+
+function readThemeMode(): ThemeMode {
+  return localStorage.getItem(THEME_MODE_KEY) === "dark" ? "dark" : "light";
 }
