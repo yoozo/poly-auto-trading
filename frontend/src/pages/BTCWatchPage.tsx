@@ -362,6 +362,11 @@ export default function BTCWatchPage() {
     [interval, queryClient]
   );
 
+  const handlePolymarketIntervalChange = useCallback((nextInterval: PolymarketInterval) => {
+    setPolymarketInterval(nextInterval);
+    setInterval(nextInterval);
+  }, []);
+
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((value) => {
       const nextValue = !value;
@@ -431,7 +436,7 @@ export default function BTCWatchPage() {
       {!isFullscreen && (
         <PolymarketBtcPanel
           interval={polymarketInterval}
-          onIntervalChange={setPolymarketInterval}
+          onIntervalChange={handlePolymarketIntervalChange}
           markets={polymarketMarkets}
           selectedMarket={selectedPolymarket}
           selectedMarketId={selectedPolymarketId}

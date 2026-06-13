@@ -937,6 +937,54 @@ body[data-theme="dark"] .polymarket-orderbook {
   background: var(--table-bg);
 }
 
+body[data-theme="dark"] .polymarket-outcome.up {
+  border-color: rgba(20, 184, 166, 0.38);
+  background: rgba(15, 118, 110, 0.08);
+}
+
+body[data-theme="dark"] .polymarket-outcome.down {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(185, 28, 28, 0.08);
+}
+
+body[data-theme="dark"] .polymarket-quote-grid {
+  color: var(--text-muted);
+}
+
+body[data-theme="dark"] .polymarket-quote-grid strong {
+  color: var(--text-strong);
+}
+
+body[data-theme="dark"] .polymarket-outcome.up .polymarket-outcome-title strong,
+body[data-theme="dark"] .polymarket-orderbook-row .bid {
+  color: #34d399;
+}
+
+body[data-theme="dark"] .polymarket-outcome.down .polymarket-outcome-title strong,
+body[data-theme="dark"] .polymarket-orderbook-row .ask {
+  color: #f87171;
+}
+
+body[data-theme="dark"] .polymarket-orderbook {
+  border-color: #334155;
+  background: #111820;
+}
+
+body[data-theme="dark"] .polymarket-orderbook-head {
+  border-bottom: 1px solid #334155;
+  background: #1e2937;
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-orderbook-row {
+  border-top-color: #253241;
+  color: #d7e0ea;
+}
+
+body[data-theme="dark"] .polymarket-orderbook-row:nth-child(2n + 1) {
+  background: rgba(30, 41, 55, 0.42);
+}
+
 .kline-countdown {
   position: absolute;
   z-index: 12;
