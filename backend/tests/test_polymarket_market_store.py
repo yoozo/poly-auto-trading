@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -97,6 +97,36 @@ async def test_store_applies_price_change_remove_and_last_trade_per_token() -> N
     assert str(up.asks[1].price) == "0.34"
     assert up.last_trade_price is None
     assert str(down.last_trade_price) == "0.67"
+
+
+@pytest.mark.asyncio
+async def test_store_returns_nearest_future_market_boundary() -> None:
+    store = PolymarketUpDownStore()
+    now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
+    expired = normalize_up_down_market(
+        make_event("expired", "2026-06-13T05:00:00Z", "2026-06-13T05:05:00Z"),
+        interval="5m",
+        books={},
+        now=now,
+    )
+    future = normalize_up_down_market(
+        make_event("future", "2026-06-13T05:10:00Z", "2026-06-13T05:15:00Z"),
+        interval="5m",
+        books={},
+        now=now,
+    )
+    later = normalize_up_down_market(
+        make_event("later", "2026-06-13T05:30:00Z", "2026-06-13T05:35:00Z"),
+        interval="15m",
+        books={},
+        now=now,
+    )
+
+    await store.replace_markets("5m", [expired, future])
+    await store.replace_markets("15m", [later])
+
+    assert await store.market_count() == 3
+    assert await store.next_market_boundary(now) == now + timedelta(minutes=4)
 
 
 def make_event(slug: str, start_time: str, end_time: str) -> dict:

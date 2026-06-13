@@ -72,6 +72,22 @@ class PolymarketUpDownStore:
             ]
         return sorted(set(ids))
 
+    async def market_count(self) -> int:
+        async with self._lock:
+            return sum(len(markets) for markets in self._markets_by_interval.values())
+
+    async def next_market_boundary(self, now: datetime) -> datetime | None:
+        now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        async with self._lock:
+            boundaries = [
+                boundary
+                for markets in self._markets_by_interval.values()
+                for market in markets
+                for boundary in (market.start_time, market.end_time)
+                if boundary is not None and boundary > now
+            ]
+        return min(boundaries) if boundaries else None
+
     async def apply_ws_message(self, message: dict[str, Any]) -> list[str]:
         event_type = str(message.get("event_type") or "")
         if event_type == "book":

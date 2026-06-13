@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import websockets
@@ -28,6 +29,7 @@ class PolymarketMarketMonitor:
         self._client = PolymarketClient()
         self._tasks: list[asyncio.Task] = []
         self._token_change_event = asyncio.Event()
+        self._refresh_event = asyncio.Event()
         self._broadcast_lock = asyncio.Lock()
         self._pending_broadcast_intervals: set[str] = set()
 
@@ -56,13 +58,29 @@ class PolymarketMarketMonitor:
         while True:
             try:
                 await self.refresh_markets_once()
-                await asyncio.sleep(settings.polymarket_market_refresh_seconds)
+                delay = await self.next_refresh_delay()
+                try:
+                    await asyncio.wait_for(self._refresh_event.wait(), timeout=delay)
+                    self._refresh_event.clear()
+                except TimeoutError:
+                    pass
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 logger.exception("Polymarket market refresh failed")
                 service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"operation": "refresh"})
                 await asyncio.sleep(10)
+
+    async def next_refresh_delay(self) -> float:
+        now = datetime.now(timezone.utc)
+        return calculate_next_refresh_delay(
+            now=now,
+            next_boundary=await polymarket_up_down_store.next_market_boundary(now),
+            market_count=await polymarket_up_down_store.market_count(),
+            fallback_seconds=settings.polymarket_market_refresh_seconds,
+            boundary_window_seconds=settings.polymarket_market_boundary_refresh_window_seconds,
+            empty_retry_seconds=settings.polymarket_market_empty_retry_seconds,
+        )
 
     async def refresh_markets_once(self) -> None:
         previous_tokens = set(await polymarket_up_down_store.token_ids())
@@ -160,11 +178,18 @@ class PolymarketMarketMonitor:
         payload = json.loads(text)
         messages = payload if isinstance(payload, list) else [payload]
         changed_intervals: set[str] = set()
+        should_refresh_markets = False
         for message in messages:
             if not isinstance(message, dict):
                 continue
+            event_type = str(message.get("event_type") or "")
+            if event_type in {"new_market", "market_resolved"}:
+                should_refresh_markets = True
             intervals = await polymarket_up_down_store.apply_ws_message(message)
             changed_intervals.update(intervals)
+        if should_refresh_markets:
+            # WS 只能提示市场集合变化；真实 token/窗口仍由 refresh 统一发现并触发重订阅。
+            self._refresh_event.set()
         await self.queue_broadcast(changed_intervals)
 
     async def queue_broadcast(self, intervals: set[str]) -> None:
@@ -191,6 +216,33 @@ def subscription_payload(token_ids: list[str]) -> dict[str, Any]:
         "type": "market",
         "custom_feature_enabled": True,
     }
+
+
+def calculate_next_refresh_delay(
+    *,
+    now: datetime,
+    next_boundary: datetime | None,
+    market_count: int,
+    fallback_seconds: float,
+    boundary_window_seconds: float,
+    empty_retry_seconds: float,
+) -> float:
+    if market_count <= 0:
+        return max(1.0, empty_retry_seconds)
+
+    fallback = max(1.0, fallback_seconds)
+    boundary_window = max(0.0, boundary_window_seconds)
+    if next_boundary is None:
+        return fallback
+
+    boundary = next_boundary.astimezone(timezone.utc) if next_boundary.tzinfo else next_boundary.replace(tzinfo=timezone.utc)
+    current = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    seconds_to_boundary = (boundary - current).total_seconds()
+    if seconds_to_boundary <= 0:
+        return 1.0
+    if seconds_to_boundary <= boundary_window:
+        return min(fallback, max(1.0, seconds_to_boundary + boundary_window))
+    return min(fallback, max(1.0, seconds_to_boundary - boundary_window))
 
 
 async def cancel_tasks(*tasks: asyncio.Task) -> None:

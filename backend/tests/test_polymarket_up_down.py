@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -12,13 +13,14 @@ from app.services.polymarket_client import (
     sdk_event_to_gamma_dict,
     sdk_order_book_to_clob_dict,
     sdk_profile_to_gamma_dict,
+    sdk_series_to_gamma_events,
 )
 
 
 def test_filters_btc_5m_series() -> None:
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-5m", "title": "x"}, interval="5m")
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-15m", "title": "x"}, interval="15m")
-    assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-1h", "title": "x"}, interval="1h")
+    assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-hourly", "title": "x"}, interval="1h")
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-4h", "title": "x"}, interval="4h")
     assert not is_btc_up_down_event({"seriesSlug": "eth-up-or-down-5m", "title": "x"}, interval="5m")
 
@@ -39,14 +41,41 @@ def test_selects_current_and_next_btc_windows() -> None:
 def test_selects_recent_closed_current_and_next_btc_windows() -> None:
     now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
     events = [
+        make_event("older", "2026-06-13T04:55:00Z", "2026-06-13T05:00:00Z"),
         make_event("closed", "2026-06-13T05:00:00Z", "2026-06-13T05:05:00Z"),
         make_event("current", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z"),
         make_event("next", "2026-06-13T05:10:00Z", "2026-06-13T05:15:00Z"),
+        make_event("future", "2026-06-13T05:15:00Z", "2026-06-13T05:20:00Z"),
     ]
 
-    selected = select_up_down_windows(events, now=now, limit=3)
+    selected = select_up_down_windows(events, now=now, limit=4)
 
-    assert [event["slug"] for event in selected] == ["closed", "current", "next"]
+    assert [event["slug"] for event in selected] == ["closed", "current", "next", "future"]
+
+
+def test_normalize_up_down_market_prefers_event_start_time_over_market_creation_time() -> None:
+    now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
+    event = make_event("future", "2026-06-13T05:10:00Z", "2026-06-13T05:15:00Z")
+    event["startTime"] = "2026-06-13T05:10:00Z"
+    event["markets"][0]["eventStartTime"] = "2026-06-12T23:00:00Z"
+
+    market = normalize_up_down_market(event, interval="5m", books={}, now=now)
+
+    assert market.window == "upcoming"
+    assert market.start_time == datetime(2026, 6, 13, 5, 10, tzinfo=timezone.utc)
+
+
+def test_normalize_up_down_market_infers_hourly_start_from_end_time() -> None:
+    now = datetime(2026, 6, 14, 12, 30, tzinfo=timezone.utc)
+    event = make_event("bitcoin-up-or-down-june-14-2026-8am-et", "2026-06-12T12:00:00Z", "2026-06-14T13:00:00Z")
+    event["seriesSlug"] = "btc-up-or-down-hourly"
+    event["startTime"] = None
+    event["markets"][0]["eventStartTime"] = "2026-06-12T12:00:00Z"
+
+    market = normalize_up_down_market(event, interval="1h", books={}, now=now)
+
+    assert market.window == "current"
+    assert market.start_time == datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
 
 
 def test_normalize_up_down_market_aligns_outcomes_with_order_books() -> None:
@@ -128,6 +157,147 @@ def test_sdk_order_book_adapter_keeps_asset_id_and_epoch_ms() -> None:
 
     assert book["asset_id"] == "up-token"
     assert book["timestamp"] == "1781327160000"
+
+
+def test_sdk_series_adapter_expands_events_and_keeps_metrics() -> None:
+    events = sdk_series_to_gamma_events(
+        {
+            "slug": "btc-up-or-down-5m",
+            "events": [
+                {
+                    "id": "event-1",
+                    "slug": "btc-updown-5m-1",
+                    "title": "Bitcoin Up or Down - June 13",
+                    "endDate": "2026-06-13T05:10:00Z",
+                    "markets": [
+                        {
+                            "id": "market-1",
+                            "slug": "btc-updown-5m-1",
+                            "condition_id": "0xabc",
+                            "question": "Bitcoin Up or Down - June 13",
+                            "state": {
+                                "start_date": "2026-06-13T05:05:00Z",
+                                "end_date": "2026-06-13T05:10:00Z",
+                                "accepting_orders": True,
+                            },
+                            "volume": "123.45",
+                            "liquidity": "678.90",
+                            "outcomes": {
+                                "yes": {"label": "Up", "token_id": "up-token", "price": "0.48"},
+                                "no": {"label": "Down", "token_id": "down-token", "price": "0.52"},
+                            },
+                        }
+                    ],
+                }
+            ],
+        },
+        series_slug="btc-up-or-down-5m",
+    )
+
+    market = normalize_up_down_market(
+        events[0],
+        interval="5m",
+        books={},
+        now=datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc),
+    )
+
+    assert events[0]["seriesSlug"] == "btc-up-or-down-5m"
+    assert str(market.volume) == "123.45"
+    assert str(market.liquidity) == "678.90"
+
+
+def test_up_down_market_uses_event_metrics_when_market_metrics_are_empty() -> None:
+    now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
+    event = make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")
+    event["volume"] = "321.00"
+    event["liquidity"] = "654.00"
+    event["markets"][0]["volumeNum"] = None
+    event["markets"][0]["liquidityNum"] = None
+
+    market = normalize_up_down_market(event, interval="5m", books={}, now=now)
+
+    assert str(market.volume) == "321.00"
+    assert str(market.liquidity) == "654.00"
+
+
+@pytest.mark.asyncio
+async def test_series_fetch_filters_and_sorts_btc_events(monkeypatch) -> None:
+    async def fake_fetch_series_events(self, *, series_slug):
+        return [
+            make_event("btc-updown-5m-3", "2026-06-13T05:15:00Z", "2026-06-13T05:20:00Z"),
+            make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z"),
+            make_event("btc-updown-5m-old", "2026-06-13T04:55:00Z", "2026-06-13T05:00:00Z"),
+            {"slug": "eth-updown-5m-1", "seriesSlug": "eth-up-or-down-5m", "endDate": "2026-06-13T05:10:00Z"},
+        ]
+
+    monkeypatch.setattr(PolymarketClient, "_fetch_series_events", fake_fetch_series_events)
+
+    events = await PolymarketClient(gamma_base_url="https://example.invalid").fetch_up_down_series_events(
+        interval="5m",
+        series_slug="btc-up-or-down-5m",
+        end_date_min=datetime(2026, 6, 13, 5, 5, tzinfo=timezone.utc),
+        limit=2,
+    )
+
+    assert [event["slug"] for event in events] == ["btc-updown-5m-1", "btc-updown-5m-3"]
+
+
+@pytest.mark.asyncio
+async def test_series_fetch_hydrates_missing_event_markets(monkeypatch) -> None:
+    async def fake_fetch_series_events(self, *, series_slug):
+        return [
+            {
+                "id": "event-1",
+                "slug": "btc-updown-15m-1",
+                "title": "Bitcoin Up or Down - June 13",
+                "seriesSlug": series_slug,
+                "startTime": "2026-06-13T05:00:00Z",
+                "endDate": "2026-06-13T05:15:00Z",
+                "liquidity": "1000",
+                "markets": [],
+            }
+        ]
+
+    async def fake_hydrate_events_missing_markets(self, events):
+        return [
+            {
+                **events[0],
+                "markets": [
+                    {
+                        "id": "market-1",
+                        "question": "Bitcoin Up or Down - June 13",
+                        "conditionId": "0xabc",
+                        "slug": "btc-updown-15m-1",
+                        "eventStartTime": "2026-06-13T05:00:00Z",
+                        "endDate": "2026-06-13T05:15:00Z",
+                        "outcomes": '["Up", "Down"]',
+                        "outcomePrices": '["0.48", "0.52"]',
+                        "clobTokenIds": '["up-token", "down-token"]',
+                        "acceptingOrders": True,
+                    }
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(PolymarketClient, "_fetch_series_events", fake_fetch_series_events)
+    monkeypatch.setattr(PolymarketClient, "_hydrate_events_missing_markets", fake_hydrate_events_missing_markets)
+
+    events = await PolymarketClient(gamma_base_url="https://example.invalid").fetch_up_down_series_events(
+        interval="15m",
+        series_slug="btc-up-or-down-15m",
+        end_date_min=datetime(2026, 6, 13, 5, 0, tzinfo=timezone.utc),
+        limit=2,
+    )
+
+    market = normalize_up_down_market(
+        events[0],
+        interval="15m",
+        books={},
+        now=datetime(2026, 6, 13, 5, 1, tzinfo=timezone.utc),
+    )
+
+    assert [quote.token_id for quote in market.outcome_quotes] == ["up-token", "down-token"]
+    assert str(market.liquidity) == "1000"
 
 
 def test_sdk_profile_and_activity_adapters_keep_legacy_keys() -> None:

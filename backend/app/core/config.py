@@ -29,7 +29,9 @@ class Settings(BaseSettings):
     polymarket_clob_base_url: str = "https://clob.polymarket.com"
     polymarket_ws_enabled: bool = True
     polymarket_ws_market_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-    polymarket_market_refresh_seconds: int = 5
+    polymarket_market_refresh_seconds: int = 60
+    polymarket_market_boundary_refresh_window_seconds: int = 3
+    polymarket_market_empty_retry_seconds: int = 5
     polymarket_ws_broadcast_interval_seconds: float = 0.2
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

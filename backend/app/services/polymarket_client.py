@@ -41,21 +41,20 @@ UP_DOWN_INTERVAL_TAGS = {
     "1h": "1H",
     "4h": "4H",
 }
-UP_DOWN_INTERVAL_TAG_CANDIDATES = {
-    "5m": ["5M", "5m", "5-minute", "5-min", "5min", "btc-up-or-down-5m"],
-    "15m": ["15M", "15m", "15-minute", "15-min", "15min", "btc-up-or-down-15m"],
-    "1h": ["1H", "1h", "60M", "60m", "60-minute", "60-min", "hourly", "btc-up-or-down-1h", "btc-up-or-down-60m"],
-    "4h": ["4H", "4h", "240M", "240m", "240-minute", "4-hour", "4hours", "btc-up-or-down-4h"],
-}
 UP_DOWN_INTERVAL_SERIES = {
     "5m": "btc-up-or-down-5m",
     "15m": "btc-up-or-down-15m",
-    "1h": "btc-up-or-down-1h",
+    "1h": "btc-up-or-down-hourly",
     "4h": "btc-up-or-down-4h",
 }
 UP_DOWN_SERIES_ALIASES = {
     "1h": ["btc-up-or-down-1h", "btc-up-or-down-60m", "btc-up-or-down-hourly", "btc-hourly-up-or-down"],
     "4h": ["btc-up-or-down-4h", "btc-up-or-down-240m", "btc-up-or-down-4h-window"],
+}
+UP_DOWN_INTERVAL_SLUG_PATTERNS = {
+    "5m": re.compile(r"^btc-updown-5m-\d+$"),
+    "15m": re.compile(r"^btc-updown-15m-\d+$"),
+    "4h": re.compile(r"^btc-updown-4h-\d+$"),
 }
 UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "5m": 5 * 60,
@@ -464,7 +463,7 @@ class PolymarketClient:
         include_recent_closed: bool = True,
     ) -> list[dict[str, Any]]:
         tag_slug = UP_DOWN_INTERVAL_TAGS[interval]
-        tag_candidates = UP_DOWN_INTERVAL_TAG_CANDIDATES.get(interval, [tag_slug])
+        series_slug = UP_DOWN_INTERVAL_SERIES[interval]
         end_date_min = now
         if include_recent_closed:
             lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
@@ -478,30 +477,47 @@ class PolymarketClient:
         }
         try:
             rows: list[dict[str, Any]] = []
+            try:
+                rows.extend(await self.fetch_up_down_series_events(
+                    interval=interval,
+                    series_slug=series_slug,
+                    end_date_min=end_date_min,
+                    limit=limit,
+                ))
+            except Exception as exc:
+                logger.warning(
+                    "Polymarket up/down series fetch failed; falling back to events",
+                    extra={"interval": interval, "series_slug": series_slug},
+                    exc_info=exc,
+                )
             async with self._public_client() as client:
-                attempted_with_tag = False
-                for candidate in tag_candidates:
-                    candidate_params = dict(params)
-                    candidate_params["tag_slug"] = candidate
+                tag_params = dict(params)
+                tag_params["tag_slug"] = tag_slug
+                tag_params["closed"] = None
+                payload = await with_retry(
+                    lambda: self._fetch_event_page_with_sdk(client, **tag_params),
+                    retryable=is_retryable_polymarket_sdk_error,
+                )
+                service_health_store.set(
+                    "polymarket",
+                    "running",
+                    metadata={"endpoint": "events", "tag_slug": tag_slug, "source": "tag"},
+                )
+                if isinstance(payload, list):
+                    rows.extend(row for row in payload if isinstance(row, dict))
+            if not rows:
+                async with self._public_client() as client:
+                    fallback_params = dict(params)
+                    fallback_params["tag_slug"] = tag_slug
                     payload = await with_retry(
-                        lambda params=candidate_params: self._fetch_event_page_with_sdk(client, **params),
+                        lambda: self._fetch_event_page_with_sdk(client, **fallback_params),
                         retryable=is_retryable_polymarket_sdk_error,
                     )
-                    attempted_with_tag = True
                     service_health_store.set(
                         "polymarket",
                         "running",
-                        metadata={"endpoint": "events", "tag_slug": candidate},
+                        metadata={"endpoint": "events", "tag_slug": tag_slug, "fallback": True},
                     )
-                    if not isinstance(payload, list):
-                        continue
-                    rows.extend(row for row in payload if isinstance(row, dict))
-                if not rows and attempted_with_tag:
-                    payload = await with_retry(
-                        lambda: self._fetch_event_page_with_sdk(client, **params),
-                        retryable=is_retryable_polymarket_sdk_error,
-                    )
-                    service_health_store.set("polymarket", "running", metadata={"endpoint": "events", "tag_slug": "fallback"})
                     if isinstance(payload, list):
                         rows.extend(row for row in payload if isinstance(row, dict))
             if not rows:
@@ -523,6 +539,33 @@ class PolymarketClient:
             service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "events"})
             logger.warning("Polymarket up/down events fetch failed", extra={"interval": interval}, exc_info=exc)
             raise
+
+    async def fetch_up_down_series_events(
+        self,
+        *,
+        interval: str,
+        series_slug: str,
+        end_date_min: datetime,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        payload = await with_retry(
+            lambda: self._fetch_series_events(series_slug=series_slug),
+        )
+        service_health_store.set(
+            "polymarket",
+            "running",
+            metadata={"endpoint": "series", "series_slug": series_slug},
+        )
+        rows = [
+            event
+            for event in payload
+            if isinstance(event, dict)
+            and is_btc_up_down_event(event, interval=interval)
+            and event_not_before(event, end_date_min)
+        ]
+        selected = sorted(rows, key=lambda event: event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc))[:limit]
+        hydrated = await self._hydrate_events_missing_markets(selected)
+        return [event for event in hydrated if has_up_down_market_payload(event)]
 
     async def fetch_order_books(self, token_ids: list[str]) -> dict[str, dict[str, Any]]:
         if not token_ids:
@@ -554,9 +597,45 @@ class PolymarketClient:
         **params: Any,
     ) -> list[dict[str, Any]]:
         limit = int(params.pop("limit"))
-        paginator = client.list_events(closed=False, page_size=limit, **params)
+        closed = params.pop("closed", False)
+        paginator = client.list_events(closed=closed, page_size=limit, **params)
         page = await paginator.first_page()
         return [sdk_event_to_gamma_dict(item) for item in page.items]
+
+    async def _fetch_series_events(self, *, series_slug: str) -> list[dict[str, Any]]:
+        async with self._public_client() as client:
+            paginator = client.list_series(slug=series_slug, closed=False, page_size=1)
+            page = await with_retry(
+                lambda: paginator.first_page(),
+                retryable=is_retryable_polymarket_sdk_error,
+            )
+        events: list[dict[str, Any]] = []
+        for series in page.items:
+            events.extend(sdk_series_to_gamma_events(series, series_slug=series_slug))
+        return events
+
+    async def _hydrate_events_missing_markets(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        missing_slugs = [
+            slug
+            for event in events
+            if not has_up_down_market_payload(event)
+            for slug in [string_or_none(event.get("slug"))]
+            if slug
+        ]
+        if not missing_slugs:
+            return events
+        async with self._public_client() as client:
+            paginator = client.list_events(slug=missing_slugs, closed=None, page_size=max(len(missing_slugs), 1))
+            page = await with_retry(
+                lambda: paginator.first_page(),
+                retryable=is_retryable_polymarket_sdk_error,
+            )
+        hydrated_by_slug = {
+            string_or_none(row.get("slug")): row
+            for row in [sdk_event_to_gamma_dict(item) for item in page.items]
+            if string_or_none(row.get("slug"))
+        }
+        return [merge_event_payload(event, hydrated_by_slug.get(string_or_none(event.get("slug")))) for event in events]
 
     async def _fetch_activity_page_with_sdk(
         self,
@@ -748,6 +827,24 @@ def sdk_order_book_to_clob_dict(book: Any) -> dict[str, Any]:
     return normalized
 
 
+def sdk_series_to_gamma_events(series: Any, *, series_slug: str) -> list[dict[str, Any]]:
+    raw = sdk_model_to_dict(series)
+    if (string_or_none(raw.get("slug")) or "").lower() != series_slug.lower():
+        return []
+    events = raw.get("events")
+    if not isinstance(events, list):
+        return []
+    # Series 查询是 BTC up/down 的精准入口；这里把 SDK 模型恢复成现有 normalizer 依赖的 Gamma 字段。
+    normalized_events: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        normalized = sdk_event_to_gamma_dict(event)
+        normalized["seriesSlug"] = string_or_none(normalized.get("seriesSlug")) or series_slug
+        normalized_events.append(normalized)
+    return normalized_events
+
+
 def sdk_event_to_gamma_dict(event: Any) -> dict[str, Any]:
     raw = sdk_model_to_dict(event)
     series_slug = (
@@ -762,6 +859,8 @@ def sdk_event_to_gamma_dict(event: Any) -> dict[str, Any]:
         "seriesSlug": series_slug,
         "startTime": nested_get(raw, "schedule", "start_time"),
         "endDate": nested_get(raw, "schedule", "end_date"),
+        "volume": first_present(nested_get(raw, "metrics", "volume"), raw.get("volume")),
+        "liquidity": first_present(nested_get(raw, "metrics", "liquidity"), raw.get("liquidity")),
         "markets": [sdk_market_to_gamma_dict(market) for market in raw.get("markets", []) if isinstance(market, dict)],
     }
 
@@ -780,8 +879,18 @@ def sdk_market_to_gamma_dict(market: dict[str, Any]) -> dict[str, Any]:
         "outcomePrices": json.dumps([outcome.get("price") for outcome in outcomes]),
         "clobTokenIds": json.dumps([outcome.get("token_id") for outcome in outcomes]),
         "acceptingOrders": nested_get(market, "state", "accepting_orders"),
-        "volumeNum": nested_get(market, "metrics", "volume_num") or nested_get(market, "metrics", "volume"),
-        "liquidityNum": nested_get(market, "metrics", "liquidity_num") or nested_get(market, "metrics", "liquidity"),
+        "volumeNum": first_present(
+            nested_get(market, "metrics", "volume_num"),
+            nested_get(market, "metrics", "volume"),
+            market.get("volumeNum"),
+            market.get("volume"),
+        ),
+        "liquidityNum": first_present(
+            nested_get(market, "metrics", "liquidity_num"),
+            nested_get(market, "metrics", "liquidity"),
+            market.get("liquidityNum"),
+            market.get("liquidity"),
+        ),
     }
 
 
@@ -807,6 +916,13 @@ def nested_get(value: dict[str, Any], *keys: str) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def first_nested_value(value: Any, key: str) -> Any:
@@ -839,24 +955,39 @@ def is_btc_up_down_event(event: dict[str, Any], *, interval: str) -> bool:
     elif interval.endswith("m"):
         title_interval_tokens.add(f"{interval[:-1]} minute")
 
-    slug_interval_tokens = set(UP_DOWN_INTERVAL_TAG_CANDIDATES.get(interval, []))
-    slug_interval_tokens.add(interval)
-    normalized_slug_tokens = {str(token).lower() for token in slug_interval_tokens}
-
     contains_slug_signal = (
         "btc-updown" in slug
         or "btc-up-or-down" in slug
         or "bitcoin up or down" in title
     )
+    slug_pattern = UP_DOWN_INTERVAL_SLUG_PATTERNS.get(interval)
+    if slug_pattern is not None and slug_pattern.match(slug):
+        return True
+
+    tag_slugs = event_tag_slugs(event)
+    expected_tag = UP_DOWN_INTERVAL_TAGS[interval].lower()
     return (
         any(interval_token in title for interval_token in title_interval_tokens)
         and contains_slug_signal
         and (
-            any(token in slug for token in normalized_slug_tokens)
-            or any(token.lower().replace("-", "") in slug.replace("-", "") for token in normalized_slug_tokens)
+            expected_tag in tag_slugs
+            or interval in slug
             or any(token in normalized_series_slug for token in {alias.lower() for alias in series_aliases})
         )
     )
+
+
+def event_tag_slugs(event: dict[str, Any]) -> set[str]:
+    tags = event.get("tags")
+    if not isinstance(tags, list):
+        return set()
+    return {
+        slug.lower()
+        for tag in tags
+        if isinstance(tag, dict)
+        for slug in [string_or_none(tag.get("slug"))]
+        if slug
+    }
 
 
 def select_up_down_windows(
@@ -865,13 +996,60 @@ def select_up_down_windows(
     now: datetime,
     limit: int,
 ) -> list[dict[str, Any]]:
-    ordered = sorted(events, key=lambda event: event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc))
-    # Up/Down 市场按多个时间窗口返回；保留刚结束、当前和未来，供前端按时间段选择。
-    return [
+    valid = [
         event
-        for event in ordered
-        if event_end_time(event) is not None
-    ][:limit]
+        for event in events
+        if event_start_time(event) is not None and event_end_time(event) is not None
+    ]
+    historical = sorted(
+        [event for event in valid if (event_end_time(event) or datetime.min.replace(tzinfo=timezone.utc)) <= now],
+        key=lambda event: event_end_time(event) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    current = sorted(
+        [
+            event
+            for event in valid
+            if (event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc))
+            <= now
+            < (event_end_time(event) or datetime.min.replace(tzinfo=timezone.utc))
+        ],
+        key=lambda event: event_end_time(event) or datetime.max.replace(tzinfo=timezone.utc),
+    )
+    future = sorted(
+        [event for event in valid if (event_start_time(event) or datetime.min.replace(tzinfo=timezone.utc)) > now],
+        key=lambda event: event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc),
+    )
+    # 前端需要最近历史盘、当前盘和未来盘；不要再用简单截断，否则会把远期盘误当主数据。
+    ordered = historical[:1] + current + future
+    seen: set[str] = set()
+    selected: list[dict[str, Any]] = []
+    for event in ordered:
+        key = string_or_none(event.get("id")) or string_or_none(event.get("slug")) or json.dumps(event, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(event)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def has_up_down_market_payload(event: dict[str, Any]) -> bool:
+    market = first_market(event)
+    outcomes = parse_json_list(market.get("outcomes"))
+    token_ids = parse_json_list(market.get("clobTokenIds"))
+    return len(outcomes) >= 2 and len(token_ids) >= 2
+
+
+def merge_event_payload(original: dict[str, Any], hydrated: dict[str, Any] | None) -> dict[str, Any]:
+    if hydrated is None:
+        return original
+    merged = {**original, **hydrated}
+    for key in ("seriesSlug", "volume", "liquidity"):
+        if merged.get(key) is None and original.get(key) is not None:
+            merged[key] = original[key]
+    return merged
 
 
 def normalize_up_down_market(
@@ -900,8 +1078,17 @@ def normalize_up_down_market(
         seconds_to_start=seconds_between(now, start_time),
         seconds_to_end=seconds_between(now, end_time),
         accepting_orders=bool(market.get("acceptingOrders")),
-        volume=decimal_or_none(market.get("volumeNum") or market.get("volume")),
-        liquidity=decimal_or_none(market.get("liquidityNum") or market.get("liquidity")),
+        volume=decimal_or_none(
+            first_present(market.get("volumeNum"), market.get("volume"), event.get("volumeNum"), event.get("volume"))
+        ),
+        liquidity=decimal_or_none(
+            first_present(
+                market.get("liquidityNum"),
+                market.get("liquidity"),
+                event.get("liquidityNum"),
+                event.get("liquidity"),
+            )
+        ),
         outcome_quotes=[
             normalize_outcome_quote(
                 name=str(outcome),
@@ -1006,11 +1193,46 @@ def parse_json_list(value: Any) -> list[Any]:
 
 def event_start_time(event: dict[str, Any]) -> datetime | None:
     market = first_market(event)
-    return optional_timestamp(market.get("eventStartTime") or event.get("startTime"))
+    start_time = optional_timestamp(event.get("startTime") or market.get("eventStartTime"))
+    end_time = event_end_time(event)
+    interval_seconds = event_interval_seconds(event)
+    if end_time is None or interval_seconds is None:
+        return start_time
+    inferred_start = end_time - timedelta(seconds=interval_seconds)
+    if start_time is None:
+        return inferred_start
+    duration = (end_time - start_time).total_seconds()
+    if duration > interval_seconds * 2:
+        return inferred_start
+    return start_time
 
 
 def event_end_time(event: dict[str, Any]) -> datetime | None:
     return optional_timestamp(event.get("endDate") or first_market(event).get("endDate"))
+
+
+def event_interval_seconds(event: dict[str, Any]) -> int | None:
+    series_slug = (
+        string_or_none(event.get("seriesSlug"))
+        or string_or_none(event.get("series_slug"))
+        or string_or_none((event.get("series") or {}).get("slug") if isinstance(event.get("series"), dict) else None)
+    )
+    if series_slug:
+        normalized = series_slug.lower()
+        for interval, expected in UP_DOWN_INTERVAL_SERIES.items():
+            aliases = {expected.lower(), *[alias.lower() for alias in UP_DOWN_SERIES_ALIASES.get(interval, [])]}
+            if normalized in aliases:
+                return UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
+    slug = (string_or_none(event.get("slug")) or "").lower()
+    for interval, pattern in UP_DOWN_INTERVAL_SLUG_PATTERNS.items():
+        if pattern.match(slug):
+            return UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
+    return None
+
+
+def event_not_before(event: dict[str, Any], end_date_min: datetime) -> bool:
+    end_time = event_end_time(event)
+    return end_time is not None and end_time >= end_date_min
 
 
 def optional_timestamp(value: Any) -> datetime | None:
