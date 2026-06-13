@@ -49,6 +49,7 @@ async def analyze_account(
 ) -> AnalyzeAccountResponse:
     task_id = uuid.uuid4().hex
     await create_task(session, task_id, message="已创建分析任务")
+    # Polymarket activity 下载可能很慢，HTTP 请求只创建任务，实际分析放后台执行。
     asyncio.create_task(run_account_analysis(task_id, payload))
     return AnalyzeAccountResponse(task_id=task_id, status="running")
 
@@ -135,6 +136,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
             target_count = max(payload.activity_limit, 0)
             existing_count_for_target = min(existing_count, target_count)
             remaining_activity_count = max(target_count - existing_count_for_target, 0)
+            # 已有本地 activity 时从最老记录之前继续拉，避免重复下载同一时间段。
             resume_end = activity_resume_end(oldest_activity_at) if oldest_activity_at and existing_count_for_target > 0 else None
             downloaded_count = existing_count_for_target
             saved_count = 0
@@ -156,6 +158,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
                     downloaded_count += len(activity_batch)
                     saved_count += await upsert_activities(session, account.id, activity_batch)
                     market_slugs.update(activity.slug for activity in activity_batch if activity.slug)
+                    # 进度只代表下载和写入阶段，后面还要补市场元数据和重算快照。
                     progress = min(74, 35 + int((downloaded_count / max(target_count, 1)) * 39))
                     await update_task(
                         session,
@@ -172,6 +175,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
                 percent=88,
             )
             market_slugs.update(await list_account_activity_slugs(session, account.id))
+            # 市场结果可能不在 activity 里，需要额外用 slug 补全后才能计算胜负和收益。
             market_metadata = await ensure_market_metadata_for_slugs(session, market_slugs)
             total_count = await get_account_activity_count(session, account.id)
             await update_task(
@@ -216,6 +220,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
 def activity_resume_end(oldest_activity_at: datetime) -> int:
     if oldest_activity_at.tzinfo is None:
         oldest_activity_at = oldest_activity_at.replace(tzinfo=timezone.utc)
+    # Polymarket end 参数按秒截断，减 1 秒避免把当前最老记录再次包含进来。
     return int(oldest_activity_at.timestamp()) - 1
 
 

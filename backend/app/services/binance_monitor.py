@@ -11,10 +11,10 @@ import websockets
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.schemas.candle import Candle, Interval
+from app.schemas.market_signal import MarketDataEvent
 from app.services.binance_client import BinanceClient
 from app.services.candle_store import get_latest_candle, list_candles, upsert_candles
-from app.services.indicators import calculate_indicator_points
-from app.services.market_ws_hub import market_ws_hub
+from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,11 @@ INTERVAL_MS: dict[Interval, int] = {
 
 
 class BinanceMonitor:
+    """Binance 数据源接入层：只负责补历史、连 WS、解析 K 线，不直接计算信号。"""
+
     def __init__(self) -> None:
         self._client = BinanceClient()
         self._tasks: list[asyncio.Task] = []
-        self._live_candles: dict[tuple[str, str], list[Candle]] = {}
 
     async def start(self) -> None:
         if not settings.binance_ws_enabled:
@@ -79,6 +80,7 @@ class BinanceMonitor:
             latest = await get_latest_candle(session, symbol=symbol, interval=interval)
 
         if latest is None:
+            # 首次启动没有数据库窗口时，直接拉最近一段历史作为指标 warmup 基础。
             candles = await self._client.fetch_klines(
                 symbol=symbol,
                 interval=interval,
@@ -87,13 +89,14 @@ class BinanceMonitor:
             async with AsyncSessionLocal() as session:
                 await upsert_candles(session, candles)
                 cached = await list_candles(session, symbol=symbol, interval=interval, limit=settings.candle_history_limit)
-            self._replace_live_candles(symbol, interval, cached)
+            market_signal_pipeline.replace_live_candles(symbol, interval, cached)
             return
 
         interval_ms = INTERVAL_MS[interval]
         start_ms = to_ms(latest.open_time)
         end_ms = to_ms(utc_now())
         while start_ms <= end_ms:
+            # Binance 单次 K 线查询有上限，按 open_time 分页补齐中断期间缺失的数据。
             candles = await self._client.fetch_klines(
                 symbol=symbol,
                 interval=interval,
@@ -114,7 +117,8 @@ class BinanceMonitor:
 
         async with AsyncSessionLocal() as session:
             cached = await list_candles(session, symbol=symbol, interval=interval, limit=settings.candle_history_limit)
-        self._replace_live_candles(symbol, interval, cached)
+        # backfill 完成后刷新信号 pipeline 的内存窗口，后续 WS 增量才能基于完整历史计算指标。
+        market_signal_pipeline.replace_live_candles(symbol, interval, cached)
 
     async def ws_loop(self) -> None:
         backoff = 1.0
@@ -161,33 +165,10 @@ class BinanceMonitor:
                 candle = parse_ws_candle(raw_message)
                 if candle is None:
                     continue
-                candles = self._merge_live_candle(candle)
-                indicator_points = calculate_indicator_points(candles, candle.interval)
-                await market_ws_hub.broadcast(
-                    candle.symbol,
-                    candle.interval,
-                    {
-                        "type": "market.candle",
-                        "symbol": candle.symbol,
-                        "interval": candle.interval,
-                        "candle": candle.model_dump(mode="json"),
-                        "indicator": indicator_points[-1].model_dump(mode="json") if indicator_points else None,
-                    },
+                # Binance WS 事件转换成统一市场事件，后续信号逻辑不再依赖 Binance payload。
+                await market_signal_pipeline.handle_market_event(
+                    MarketDataEvent(source="binance_ws", candle=candle)
                 )
-
-    def _replace_live_candles(self, symbol: str, interval: str, candles: list[Candle]) -> None:
-        key = (symbol.upper(), interval)
-        self._live_candles[key] = candles[-settings.candle_history_limit :]
-
-    def _merge_live_candle(self, candle: Candle) -> list[Candle]:
-        key = (candle.symbol.upper(), candle.interval)
-        candles = self._live_candles.get(key, [])
-        by_open_time = {item.open_time: item for item in candles}
-        by_open_time[candle.open_time] = candle
-        merged = sorted(by_open_time.values(), key=lambda item: item.open_time)
-        merged = merged[-settings.candle_history_limit :]
-        self._live_candles[key] = merged
-        return merged
 
 
 def build_combined_stream_url(base_url: str, symbol: str, intervals: list[str]) -> str:

@@ -47,6 +47,7 @@ async def candles(
             return cached
     else:
         cached = await list_candles(session, symbol=symbol, interval=interval, limit=limit)
+        # 最新窗口足够新时直接用数据库，避免前端刷新频繁打 Binance REST。
         if should_use_cached_candles(cached, interval=interval, limit=limit):
             return cached
 
@@ -106,6 +107,7 @@ async def indicators(
         raise HTTPException(status_code=400, detail="start_ms must be less than end_ms")
 
     if start_ms is not None and end_ms is not None:
+        # 指标需要前置 K 线 warmup；响应仍只返回用户请求区间内的点。
         warmup_start_ms = max(0, start_ms - (INTERVAL_MS[interval] * INDICATOR_WARMUP_BARS))
         warmup_start = datetime.fromtimestamp(warmup_start_ms / 1000, tz=timezone.utc)
         start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)

@@ -36,14 +36,17 @@ dev-api: ## Start FastAPI dev server.
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) uvicorn app.main:app --reload --host $(API_HOST) --port $(API_PORT)
 
 dev-web: ## Start Vite dev server.
-	cd $(FRONTEND_DIR) && npm run dev -- --host $(WEB_HOST)
+	cd $(FRONTEND_DIR) && npm run dev -- --host $(WEB_HOST) --port $(WEB_PORT)
 
-dev: ## Show dev server commands.
-	@echo "Run these in two terminals:"
-	@echo "  make dev-api"
-	@echo "  make dev-web"
-	@echo ""
-	@echo "Stop each server with Ctrl+C in its own terminal."
+dev: ## Start API and web dev servers.
+	@echo "Starting API at http://$(API_HOST):$(API_PORT)"
+	@echo "Starting web at http://$(WEB_HOST):$(WEB_PORT)"
+	@( \
+		trap 'pids=$$(jobs -p); [ -z "$$pids" ] || kill $$pids' INT TERM EXIT; \
+		$(MAKE) dev-api & \
+		$(MAKE) dev-web & \
+		wait \
+	)
 
 db-up: ## Start PostgreSQL with docker compose.
 	docker compose up -d postgres
@@ -64,7 +67,7 @@ lsof: ## Show processes listening on API, web, and database ports.
 	done
 
 migrate: ## Run Alembic migrations.
-	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -m alembic upgrade head
+	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) alembic upgrade head
 
 migrate-down: ## Roll back one Alembic migration.
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -m alembic downgrade -1

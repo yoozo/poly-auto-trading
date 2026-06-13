@@ -7,7 +7,7 @@ import BtcWatchChart from "../components/market-chart/BtcWatchChart";
 import type { MarketCandle, MarketIndicatorPoint, StreamStatus } from "../components/market-chart/types";
 import { mergeCandles } from "../components/market-chart/utils";
 
-const intervals: CandleInterval[] = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h"];
 const INTERVAL_KEY = "poly-auto.btcWatch.interval";
 const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
@@ -26,6 +26,7 @@ export default function BTCWatchPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fitAnchorVersion, setFitAnchorVersion] = useState(0);
+  // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
   const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
 
   const { data: latestCandles = [], error } = useQuery({
@@ -69,6 +70,7 @@ export default function BTCWatchPage() {
     let closedByEffect = false;
 
     const connect = () => {
+      // WebSocket 只负责实时增量；初始窗口和向前翻页仍由 REST 接口补齐。
       setStreamStatus("connecting");
       socket = new WebSocket(api.marketWsUrl(interval));
       socket.onopen = () => setStreamStatus("connected");
@@ -108,6 +110,7 @@ export default function BTCWatchPage() {
     async (startMs: number, endMs: number) => {
       setIsLoadingMore(true);
       try {
+        // 历史翻页必须同步补 candle 和 indicator，否则图表时间轴会有价格但缺少指标层。
         const older = await api.candlesRange(interval, startMs, endMs);
         setCandles((current) => mergeCandles(current, older));
         const olderIndicators = await queryClient.fetchQuery({

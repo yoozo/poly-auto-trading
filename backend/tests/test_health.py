@@ -1,10 +1,21 @@
 from fastapi.testclient import TestClient
 
+from app.db.session import get_session
 from app.main import create_app
 
 
+def make_client() -> TestClient:
+    app = create_app(enable_lifespan=False)
+
+    async def fake_session():
+        yield object()
+
+    app.dependency_overrides[get_session] = fake_session
+    return TestClient(app)
+
+
 def test_health() -> None:
-    client = TestClient(create_app(enable_lifespan=False))
+    client = make_client()
     response = client.get("/api/health")
     assert response.status_code == 200
     body = response.json()
@@ -13,7 +24,7 @@ def test_health() -> None:
 
 
 def test_services_status() -> None:
-    client = TestClient(create_app(enable_lifespan=False))
+    client = make_client()
     response = client.get("/api/status/services")
     assert response.status_code == 200
     services = response.json()

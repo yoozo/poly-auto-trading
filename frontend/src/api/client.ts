@@ -38,6 +38,49 @@ export type ServiceHealth = {
   state: string;
   last_update: string;
   last_error: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type SignalRecord = {
+  id: number;
+  signal_key: string;
+  signal_label: string;
+  action: "buy" | "sell" | "hold";
+  direction: "long" | "short" | "neutral";
+  target_type: string;
+  target_key: string;
+  dedupe_key: string;
+  occurred_at: string;
+  score: number | null;
+  input_snapshot: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type NotificationDeliveryStatus = "sent" | "skipped_disabled" | "error";
+
+export type NotificationDelivery = {
+  id: number;
+  channel: string;
+  delivery_key: string;
+  target_type: string;
+  target_key: string;
+  status: NotificationDeliveryStatus;
+  title: string;
+  message: string;
+  error: string;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+  signals: SignalRecord[];
+};
+
+export type TelegramStatus = {
+  configured: boolean;
+  enabled: boolean;
+  chat_id_masked: string | null;
+  missing: string[];
+  last_delivery: NotificationDelivery | null;
 };
 
 export type ReportTask = {
@@ -171,6 +214,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<HealthStatus>("/api/health"),
   services: () => request<ServiceHealth[]>("/api/status/services"),
+  telegramStatus: () => request<TelegramStatus>("/api/notifications/telegram/status"),
+  updateTelegramStatus: (enabled: boolean) =>
+    request<TelegramStatus>("/api/notifications/telegram/status", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+  testTelegram: () =>
+    request<{ ok: boolean; message: string }>("/api/notifications/telegram/test", {
+      method: "POST",
+    }),
+  notificationDeliveries: (targetKey?: string, limit = 20) => {
+    const query = new URLSearchParams();
+    query.set("limit", String(limit));
+    if (targetKey) query.set("target_key", targetKey);
+    return request<NotificationDelivery[]>(`/api/notifications/deliveries?${query.toString()}`);
+  },
+  signals: (targetKey?: string, limit = 20) => {
+    const query = new URLSearchParams();
+    query.set("limit", String(limit));
+    if (targetKey) query.set("target_key", targetKey);
+    return request<SignalRecord[]>(`/api/signals?${query.toString()}`);
+  },
   candles: (interval: CandleInterval, limit = 300) =>
     request<Candle[]>(`/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
   candlesRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000) =>

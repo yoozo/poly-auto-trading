@@ -37,6 +37,7 @@ _SNAPSHOT_LOCK = asyncio.Lock()
 
 async def get_report_snapshot(session: AsyncSession, account_id: str) -> ReportSnapshot:
     count, _, newest = await get_account_activity_bounds(session, account_id)
+    # 快照 key 绑定 activity 数量和最新时间，数据没变化时避免重复聚合整账户报表。
     key = ReportSnapshotKey(account_id=account_id, activity_count=count, newest_activity_at=newest)
     cached = _SNAPSHOT_CACHE.get(account_id)
     if cached and cached.key == key and not snapshot_expired(cached):
@@ -48,6 +49,7 @@ async def get_report_snapshot(session: AsyncSession, account_id: str) -> ReportS
             return cached
         inflight = _IN_FLIGHT_SNAPSHOTS.get(account_id)
         if inflight and inflight[0] == key and not inflight[1].done():
+            # 多个页面同时请求同一账户时复用同一个构建任务，避免并发重复扫全量 activity。
             task = inflight[1]
         else:
             task = asyncio.create_task(build_report_snapshot(key))

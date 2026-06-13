@@ -60,13 +60,14 @@ async def test_backfill_interval_paginates_from_latest_database_candle(monkeypat
 
     monitor = binance_monitor.BinanceMonitor()
     monitor._client = FakeBinanceClient()
+    binance_monitor.market_signal_pipeline._live_candles.clear()
 
     await monitor.backfill_interval("BTCUSDT", "1m")
 
     assert [call["start_ms"] for call in calls] == [1767225600000, 1767285600000]
     assert all(call["limit"] == 1000 for call in calls)
     assert [len(batch) for batch in upserted] == [1000, 2]
-    assert len(monitor._live_candles[("BTCUSDT", "1m")]) == 500
+    assert len(binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")]) == 500
 
 
 @pytest.mark.asyncio
@@ -95,8 +96,9 @@ async def test_backfill_interval_initializes_recent_window_when_database_is_empt
 
     monitor = binance_monitor.BinanceMonitor()
     monitor._client = FakeBinanceClient()
+    binance_monitor.market_signal_pipeline._live_candles.clear()
 
     await monitor.backfill_interval("BTCUSDT", "1m")
 
     assert calls == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
-    assert len(monitor._live_candles[("BTCUSDT", "1m")]) == 500
+    assert len(binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")]) == 500

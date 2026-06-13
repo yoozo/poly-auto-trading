@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Code Comments"
+  short_description: "Add useful Chinese comments for this project"
+  default_prompt: "Apply the project code comment guidance to this change."

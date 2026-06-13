@@ -109,12 +109,14 @@ export default function MarketTechnicalChart({
   const candleByTimeRef = useRef<Map<number, MarketCandle>>(new Map());
   const bollByTimeRef = useRef<Map<number, MarketIndicatorPoint["bollinger"]>>(new Map());
   const indicatorByTimeRef = useRef<Map<number, MarketIndicatorPoint>>(new Map());
+  // 三个图表共用主 K 线时间轴，crosshair 数据需要投影到同一组 candle 时间点。
   const mainCrosshairDataRef = useRef<TimeValue[]>([]);
   const rsiCrosshairDataRef = useRef<TimeValue[]>([]);
   const diffCrosshairDataRef = useRef<TimeValue[]>([]);
 
   const initializedRef = useRef(false);
   const syncingRangeRef = useRef(false);
+  // lightweight-charts 会分别触发每个图的 range 事件，这里用一帧合并避免互相递归同步。
   const pendingRangeRef = useRef<{ targets: IChartApi[]; range: LogicalRange } | null>(null);
   const rangeSyncFrameRef = useRef<number>(0);
   const syncingCrosshairRef = useRef(false);
@@ -189,6 +191,7 @@ export default function MarketTechnicalChart({
   useEffect(() => {
     if (!mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
 
+    // 主图、RSI、diff 分成三个 chart，方便不同价格轴范围独立控制，但时间轴必须联动。
     const mainChart = createChart(mainContainerRef.current, chartOptions(mainContainerRef.current, !showRsiRef.current));
     const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }));
     const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }));
@@ -334,6 +337,7 @@ export default function MarketTechnicalChart({
         : 0;
     const wasAtRight = isNearRightEdge(previousRange, previousLengthRef.current);
 
+    // 后端可能同时返回历史和实时数据，前端按图表时间去重后再重建所有派生索引。
     candlesRef.current = chartCandles;
     candleByTimeRef.current = new Map(chartCandles.map((candle) => [candleTime(candle), candle]));
     mainCrosshairDataRef.current = chartCandles.map((candle) => ({ time: candleTime(candle), value: candle.close }));
@@ -358,6 +362,7 @@ export default function MarketTechnicalChart({
     } else if (shouldReanchorAfterBootstrap(previousLength, chartCandles.length, addedBefore)) {
       setInitialVisibleRange();
     } else if (addedBefore > 0 && previousRange) {
+      // 向左加载历史时保持用户当前视野不跳动，只按新增数量平移逻辑区间。
       setVisibleRange({
         from: (previousRange.from + addedBefore) as Logical,
         to: (previousRange.to + addedBefore) as Logical
@@ -517,6 +522,7 @@ export default function MarketTechnicalChart({
     const endMs = new Date(first.open_time).getTime() - intervalMs(currentInterval);
     const startMs = Math.max(0, endMs - initialLookbackMs(currentInterval));
     loadMoreQueuedRef.current = true;
+    // 拖动过程中 range 变化很密集，稍微延迟并串行化历史加载，避免重复打 API。
     window.setTimeout(() => {
       void loadMore(startMs, endMs).finally(() => {
         loadMoreQueuedRef.current = false;
@@ -529,6 +535,7 @@ export default function MarketTechnicalChart({
     const bollByTime = new Map<number, MarketIndicatorPoint["bollinger"]>();
     const indicatorByTime = new Map<number, MarketIndicatorPoint>();
     for (const point of activeIndicators) {
+      // 指标时间可能来自 warmup 后的序列，展示时贴到最近 candle，保证 tooltip 和曲线同轴。
       const nearest = nearestTimeValue(mainCrosshairDataRef.current, indicatorTime(point));
       if (!nearest) continue;
       if (point.bollinger.middle !== null) bollByTime.set(nearest.time, point.bollinger);
@@ -761,6 +768,7 @@ export default function MarketTechnicalChart({
         latestValue = validData[cursor].value;
         cursor += 1;
       }
+      // crosshair 需要每根 K 线都有值；曲线本身仍只在真实指标点上画线。
       result.push({ time, value: latestValue });
     }
     return result;

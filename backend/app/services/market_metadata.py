@@ -40,6 +40,7 @@ async def ensure_market_metadata_for_slugs(
     slugs: set[str],
 ) -> dict[str, Any]:
     existing = await list_market_metadata(session, slugs)
+    # 已关闭市场结果不会变化；未关闭市场按 TTL 刷新，兼顾准确性和 Gamma API 压力。
     stale_slugs = [slug for slug in slugs if needs_refresh(existing.get(slug))]
     if stale_slugs:
         for slug_batch in iter_slug_batches(stale_slugs, MARKET_METADATA_FETCH_BATCH_SIZE):
@@ -86,6 +87,7 @@ async def metadata_fetch_task(
     async with _IN_FLIGHT_LOCK:
         task = _IN_FLIGHT_MARKET_METADATA.get(slug)
         if task and not task.done():
+            # 同一个 slug 可能被多个账户报表同时需要，复用 in-flight 请求减少外部 API 抖动。
             return task
         task = asyncio.create_task(fetch_market_metadata_row(client, semaphore, slug))
         _IN_FLIGHT_MARKET_METADATA[slug] = task
@@ -150,6 +152,7 @@ def resolve_market_outcome(market: dict[str, Any]) -> tuple[str | None, str | No
         if raw:
             return normalize_outcome(raw), raw
 
+    # Gamma 有些市场只给 outcomePrices；价格接近 1 的 outcome 视为最终结果。
     outcomes = parse_json_list(market.get("outcomes"))
     outcome_prices = parse_json_list(market.get("outcomePrices"))
     if not outcomes or not outcome_prices or len(outcomes) != len(outcome_prices):

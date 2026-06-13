@@ -68,10 +68,31 @@ export default function SystemStatusPage() {
               title: "错误",
               dataIndex: "last_error",
               render: (value: string | null) => value || <Typography.Text type="secondary">-</Typography.Text>
+            },
+            {
+              title: "详情",
+              dataIndex: "metadata",
+              render: (_value: unknown, record) => renderServiceMetadata(record)
             }
           ]}
         />
       </Card>
     </div>
+  );
+}
+
+function renderServiceMetadata(record: ServiceHealth) {
+  if (record.name !== "telegram") {
+    return <Typography.Text type="secondary">-</Typography.Text>;
+  }
+  // 目前只有 telegram health 带业务 metadata：配置状态、开关状态和最近一次通知投递结果。
+  const configured = Boolean(record.metadata?.configured);
+  const enabled = Boolean(record.metadata?.enabled);
+  const lastDelivery = record.metadata?.last_delivery as { title?: string; status?: string } | undefined;
+  return (
+    <Typography.Text>
+      {configured ? "已配置" : "未配置"} / {enabled ? "已开启" : "已关闭"}
+      {lastDelivery?.title ? ` / ${lastDelivery.title}: ${lastDelivery.status || "-"}` : ""}
+    </Typography.Text>
   );
 }

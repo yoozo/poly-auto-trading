@@ -4,7 +4,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -12,7 +25,9 @@ from app.db.base import Base
 
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Account(Base, TimestampMixin):
@@ -32,7 +47,9 @@ class AnalysisTask(Base, TimestampMixin):
     __tablename__ = "analysis_tasks"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    account_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("accounts.id", ondelete="SET NULL"))
+    account_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("accounts.id", ondelete="SET NULL")
+    )
     status: Mapped[str] = mapped_column(String(24), index=True)
     message: Mapped[str] = mapped_column(Text, default="")
     percent: Mapped[int] = mapped_column(Integer, default=0)
@@ -49,7 +66,9 @@ class Activity(Base):
     )
 
     id: Mapped[str] = mapped_column(String(96), primary_key=True)
-    account_id: Mapped[str] = mapped_column(String(64), ForeignKey("accounts.id", ondelete="CASCADE"))
+    account_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("accounts.id", ondelete="CASCADE")
+    )
     proxy_wallet: Mapped[str] = mapped_column(String(64))
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     type: Mapped[str] = mapped_column(String(48))
@@ -68,6 +87,16 @@ class Activity(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class MarketMetadata(Base):
     __tablename__ = "market_metadata"
 
@@ -78,13 +107,81 @@ class MarketMetadata(Base):
     event: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     market: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Signal(Base):
+    __tablename__ = "signals"
+    __table_args__ = (
+        UniqueConstraint("signal_key", "dedupe_key", name="uq_signals_signal_dedupe"),
+        Index("ix_signals_target_created", "target_type", "target_key", "created_at"),
+        Index("ix_signals_signal_created", "signal_key", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    signal_key: Mapped[str] = mapped_column(String(96))
+    signal_label: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(16))
+    direction: Mapped[str] = mapped_column(String(16))
+    target_type: Mapped[str] = mapped_column(String(48))
+    target_key: Mapped[str] = mapped_column(String(255))
+    dedupe_key: Mapped[str] = mapped_column(String(255))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    score: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    signal_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        UniqueConstraint("channel", "delivery_key", name="uq_notification_deliveries_channel_key"),
+        Index(
+            "ix_notification_deliveries_target_created", "target_type", "target_key", "created_at"
+        ),
+        Index("ix_notification_deliveries_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    channel: Mapped[str] = mapped_column(String(32), default="telegram")
+    delivery_key: Mapped[str] = mapped_column(String(255))
+    target_type: Mapped[str] = mapped_column(String(48))
+    target_key: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class NotificationDeliverySignal(Base):
+    __tablename__ = "notification_delivery_signals"
+
+    notification_delivery_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("notification_deliveries.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    signal_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("signals.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
 
 
 class Candle(Base, TimestampMixin):
     __tablename__ = "candles"
     __table_args__ = (
-        UniqueConstraint("symbol", "interval", "open_time", name="uq_candles_symbol_interval_open_time"),
+        UniqueConstraint(
+            "symbol", "interval", "open_time", name="uq_candles_symbol_interval_open_time"
+        ),
         Index("ix_candles_symbol_interval_close_time", "symbol", "interval", "close_time"),
     )
 
@@ -104,7 +201,9 @@ class Candle(Base, TimestampMixin):
 class IndicatorSnapshot(Base):
     __tablename__ = "indicator_snapshots"
     __table_args__ = (
-        UniqueConstraint("symbol", "interval", "candle_time", name="uq_indicator_symbol_interval_candle_time"),
+        UniqueConstraint(
+            "symbol", "interval", "candle_time", name="uq_indicator_symbol_interval_candle_time"
+        ),
         Index("ix_indicator_snapshots_symbol_interval_time", "symbol", "interval", "candle_time"),
     )
 

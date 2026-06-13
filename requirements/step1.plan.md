@@ -106,6 +106,10 @@
 
 ## Phase 3: BTC 提醒和 Telegram
 
+状态：已完成（2026-06-13）
+
+备注：已实现后端环境变量配置式 Telegram notifier、启用状态数据库持久化、测试发送 API、RSI / RSI-EMA diff / 收盘前 / 收盘信号规则、cooldown 与同 K 线去重、专用 `notification_signals` 信号记录表，以及 BTC Watch 的 Telegram 状态弹窗和系统状态页 Telegram 配置/启用状态展示。前端不保存 bot token 或 chat id。
+
 目标：把看盘页面变成可提醒的监控工具。
 
 后端：
@@ -126,11 +130,10 @@
 - BTC Watch 增加 Telegram 配置弹窗。
 - 支持：
   - 启用/关闭
-  - bot token
-  - chat id
+  - 后端配置状态
   - cooldown
   - 测试发送
-- 显示最近提醒记录。
+- 显示最近信号和提醒记录。
 - 图表上高亮触发信号点。
 
 验收：
@@ -141,6 +144,10 @@
 - 关闭提醒后不发送。
 
 ## Phase 4: Polymarket Activity 下载
+
+状态：已完成（2026-06-13）
+
+备注：已实现 Polymarket profile / URL / wallet 输入解析、Gamma `public-search`、Data API `/activity` 分页下载、去重、limit 控制、并发窗口、历史窗口续拉、activity 入库、账号表维护、异步任务状态和 Reports 页面 v1。已覆盖后端单测，包括输入规范化、任务创建、账号列表、activity 批量写入、分页并发下载和续拉。
 
 目标：实现账号数据获取和本地缓存。
 
@@ -194,6 +201,10 @@
 - 已下载账号能在列表里看到。
 
 ## Phase 5: 账户收益分析
+
+状态：已完成（2026-06-13）
+
+备注：已实现 activity 聚合、market metadata cache、成本/回收/PnL/ROI/maker rebate/未结算敞口/胜率/平均盈利亏损/数据不完整识别、近期收益、最近 7 天日期收益、`summary` 与 `markets` API，以及 Reports 页面 v2 的汇总 KPI、近期收益卡片和市场明细表。市场明细已支持关键词搜索、日期过滤、只看双向持仓、分页加载和横向滚动。
 
 目标：实现报告核心价值。
 

@@ -46,6 +46,23 @@ body {
   gap: 16px;
 }
 
+.signal-details {
+  width: 100%;
+}
+
+.json-preview {
+  max-height: 260px;
+  margin: 6px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #263244;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .reports-input-item {
   flex: 1 1 360px;
 }
@@ -444,6 +461,65 @@ body {
 
 .btc-watch-card {
   border-color: #1f2937;
+}
+
+.telegram-panel {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.telegram-status-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.telegram-page,
+.telegram-card,
+.telegram-card .ant-card-body,
+.telegram-card .ant-card-head,
+.telegram-card .ant-card-head-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.telegram-card {
+  overflow: hidden;
+}
+
+.telegram-status-row > .ant-space:first-child {
+  min-width: 0;
+}
+
+.telegram-actions {
+  flex: 0 0 auto;
+}
+
+.telegram-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.telegram-table-wrap .ant-table-wrapper {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .telegram-status-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .telegram-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 .btc-watch-chart {

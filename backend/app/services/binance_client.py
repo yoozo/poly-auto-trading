@@ -57,7 +57,7 @@ class BinanceClient:
                 )
                 return [self._parse_kline(symbol.upper(), interval, row) for row in rows]
             except Exception as exc:
-                last_error = exc
+                last_error = RuntimeError(f"{base_url}: {type(exc).__name__}: {exc or 'connection failed'}")
                 logger.warning(
                     "Binance REST endpoint failed",
                     extra={
@@ -70,7 +70,7 @@ class BinanceClient:
                 service_health_store.set(
                     "binance_rest",
                     "error",
-                    last_error=str(exc),
+                    last_error=str(last_error),
                     metadata={"endpoint": base_url, "symbol": symbol.upper(), "interval": interval},
                 )
                 continue
