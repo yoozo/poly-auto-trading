@@ -400,7 +400,16 @@ function AccountPicker({
             title: "钱包",
             dataIndex: "proxy_wallet",
             width: 220,
-            render: (value: string) => <Typography.Text copyable>{shortWallet(value)}</Typography.Text>,
+            render: (value: string) => (
+              <Typography.Text
+                copyable={{
+                  text: value,
+                  tooltips: ["复制完整钱包", "已复制"],
+                }}
+              >
+                {shortWallet(value)}
+              </Typography.Text>
+            ),
           },
           { title: "Activity", dataIndex: "activity_count", width: 110 },
           { title: "最后下载", dataIndex: "last_downloaded_at", width: 180, render: formatDate },

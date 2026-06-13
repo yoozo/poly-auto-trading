@@ -9,8 +9,8 @@ import pytest
 from app.api import routes_reports
 from app.db.session import get_session
 from app.main import create_app
-from app.schemas.report import MarketPerformance
-from app.services.report_analysis import build_account_summary, build_market_performance
+from app.schemas.report import AnalyzeAccountRequest, MarketPerformance
+from app.services.report_analysis import build_account_summary, build_market_performance, parse_metadata_date
 from app.services import market_metadata
 from app.services.market_metadata import market_metadata_row
 from app.services.polymarket_client import NormalizedActivity, PolymarketClient, normalize_polymarket_input
@@ -165,6 +165,76 @@ def test_account_markets_returns_paginated_filtered_page(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    async def fake_resolve_account(raw_input: str):
+        return SimpleNamespace(
+            input=raw_input,
+            normalized_user="alice",
+            proxy_wallet="0x1111111111111111111111111111111111111111",
+            profile={},
+        )
+
+    async def fake_upsert_account(session, resolved):
+        return SimpleNamespace(
+            id="acc-1",
+            proxy_wallet=resolved.proxy_wallet,
+            normalized_user=resolved.normalized_user,
+        )
+
+    async def fake_upsert_activities(session, account_id: str, activities):
+        return len(activities)
+
+    async def fake_delete_account_activities(session, account_id):
+        calls["deleted_account_id"] = account_id
+        calls["deleted_count"] = 3
+        return 3
+
+    async def fake_list_account_activity_slugs(session, account_id: str):
+        return {"btc-up-down"}
+
+    async def fake_ensure_market_metadata_for_slugs(session, slugs, progress_callback=None):
+        calls["metadata_slugs"] = slugs
+        return {}
+
+    async def fake_get_account_activity_count(session, account_id: str):
+        return 5000
+
+    class FakeClient:
+        async def resolve_account(self, raw_input: str):
+            return await fake_resolve_account(raw_input)
+
+        async def iter_activity_batches(self, wallet: str, activity_limit: int, end: int | None = None):
+            calls["iter_params"] = (wallet, activity_limit, end)
+            yield [
+                make_normalized_activity(1),
+            ]
+
+    async def fake_update_task(*args, **kwargs):
+        calls.setdefault("tasks", []).append(kwargs)
+
+    monkeypatch.setattr(routes_reports, "PolymarketClient", lambda: FakeClient())
+    monkeypatch.setattr(routes_reports, "upsert_account", fake_upsert_account)
+    monkeypatch.setattr(routes_reports, "delete_account_activities", fake_delete_account_activities)
+    monkeypatch.setattr(routes_reports, "upsert_activities", fake_upsert_activities)
+    monkeypatch.setattr(routes_reports, "list_account_activity_slugs", fake_list_account_activity_slugs)
+    monkeypatch.setattr(routes_reports, "ensure_market_metadata_for_slugs", fake_ensure_market_metadata_for_slugs)
+    monkeypatch.setattr(routes_reports, "get_account_activity_count", fake_get_account_activity_count)
+    monkeypatch.setattr(routes_reports, "update_task", fake_update_task)
+    monkeypatch.setattr(routes_reports, "logger", SimpleNamespace(exception=lambda *_, **__: None))
+
+    await routes_reports.run_account_analysis(
+        "task-1",
+        AnalyzeAccountRequest(input="@alice", activity_limit=5000),
+    )
+
+    assert calls["iter_params"] == ("0x1111111111111111111111111111111111111111", 5000, None)
+    assert calls["deleted_count"] == 3
+    assert calls["deleted_account_id"] == "acc-1"
+
+
+@pytest.mark.asyncio
 async def test_report_snapshot_coalesces_concurrent_requests(monkeypatch) -> None:
     calls = 0
     newest = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -312,6 +382,23 @@ def test_market_metadata_overrides_inferred_market_result() -> None:
     assert markets[0].result == "下跌"
     assert markets[0].title == "Bitcoin Up or Down"
     assert markets[0].market_date == datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+
+
+def test_parse_metadata_date_handles_nested_state_snake_case() -> None:
+    assert parse_metadata_date({"state": {"end_date": "2026-01-01T10:00:00Z"}}) == datetime(
+        2026,
+        1,
+        1,
+        10,
+        tzinfo=timezone.utc,
+    )
+    assert parse_metadata_date({"state": {"event_start_time": "2026-01-02T08:00:00Z"}}) == datetime(
+        2026,
+        1,
+        2,
+        8,
+        tzinfo=timezone.utc,
+    )
 
 
 def test_market_metadata_row_infers_winning_outcome_from_prices() -> None:

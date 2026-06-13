@@ -26,7 +26,7 @@ from app.services.report_snapshot import get_report_snapshot
 from app.services.report_store import (
     account_exists,
     create_task,
-    get_account_activity_bounds,
+    delete_account_activities,
     get_account_activity_count,
     get_task,
     list_account_activity_slugs,
@@ -132,33 +132,34 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
                 percent=35,
             )
 
-            existing_count, oldest_activity_at, _ = await get_account_activity_bounds(session, account.id)
+            deleted_count = await delete_account_activities(session, account.id)
+            await update_task(
+                session,
+                task_id,
+                account_id=account.id,
+                message=f"已清空历史 activity，共 {deleted_count} 条",
+                percent=35,
+            )
+
             target_count = max(payload.activity_limit, 0)
-            existing_count_for_target = min(existing_count, target_count)
-            remaining_activity_count = max(target_count - existing_count_for_target, 0)
-            # 已有本地 activity 时从最老记录之前继续拉，避免重复下载同一时间段。
-            resume_end = activity_resume_end(oldest_activity_at) if oldest_activity_at and existing_count_for_target > 0 else None
-            downloaded_count = existing_count_for_target
+            downloaded_count = 0
             saved_count = 0
             market_slugs: set[str] = set()
-            if remaining_activity_count <= 0:
+            if target_count > 0:
                 await update_task(
                     session,
                     task_id,
                     account_id=account.id,
-                    message=f"本地已有 {existing_count_for_target} 条 activity，跳过下载",
-                    percent=74,
+                    message=f"开始下载 activity，共 {target_count} 条",
+                    percent=40,
                 )
-            else:
                 async for activity_batch in client.iter_activity_batches(
                     wallet=resolved.proxy_wallet,
-                    activity_limit=remaining_activity_count,
-                    end=resume_end,
+                    activity_limit=target_count,
                 ):
                     downloaded_count += len(activity_batch)
                     saved_count += await upsert_activities(session, account.id, activity_batch)
                     market_slugs.update(activity.slug for activity in activity_batch if activity.slug)
-                    # 进度只代表下载和写入阶段，后面还要补市场元数据和重算快照。
                     progress = min(74, 35 + int((downloaded_count / max(target_count, 1)) * 39))
                     await update_task(
                         session,
@@ -167,6 +168,14 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
                         message=f"下载并写入 Polymarket activity: {downloaded_count}/{target_count}",
                         percent=progress,
                     )
+            else:
+                await update_task(
+                    session,
+                    task_id,
+                    account_id=account.id,
+                    message="activity_limit 为 0，不下载 activity",
+                    percent=74,
+                )
             await update_task(
                 session,
                 task_id,
@@ -253,7 +262,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
 def activity_resume_end(oldest_activity_at: datetime) -> int:
     if oldest_activity_at.tzinfo is None:
         oldest_activity_at = oldest_activity_at.replace(tzinfo=timezone.utc)
-    # Polymarket end 参数按秒截断，减 1 秒避免把当前最老记录再次包含进来。
+    # 保留历史兼容行为，供旧测试/外部调用使用；当前下载流程已改为每次重建下载。
     return int(oldest_activity_at.timestamp()) - 1
 
 
@@ -285,7 +294,14 @@ def filter_market_performance(
         if only_bilateral and not (market.up_shares > 0 and market.down_shares > 0):
             continue
         result.append(market)
-    return result
+    return sorted(
+        result,
+        key=lambda market: (
+            market.market_date or datetime.min.replace(tzinfo=timezone.utc),
+            market.market_id,
+        ),
+        reverse=True,
+    )
 
 
 def parse_filter_date(value: str, *, end_of_day: bool) -> datetime | None:

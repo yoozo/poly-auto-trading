@@ -154,6 +154,12 @@ async def upsert_activities(session: AsyncSession, account_id: str, activities: 
     return len(activities)
 
 
+async def delete_account_activities(session: AsyncSession, account_id: str) -> int:
+    result = await session.execute(delete(Activity).where(Activity.account_id == account_id))
+    await session.commit()
+    return int(result.rowcount or 0)
+
+
 async def upsert_activity_rows(session: AsyncSession, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return

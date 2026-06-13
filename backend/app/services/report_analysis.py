@@ -22,6 +22,16 @@ TITLE_CLOSE_TIME_RE = re.compile(
     r"(?P<end>\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*et",
     re.IGNORECASE,
 )
+
+
+def first_dict(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return item
+    return None
 MONTHS = {
     "jan": 1,
     "january": 1,
@@ -541,13 +551,58 @@ def parse_market_close_time(title: str, reference: datetime) -> datetime | None:
 
 
 def parse_metadata_date(payload: dict[str, Any]) -> datetime | None:
-    for key in ("endDateIso", "endDate", "closedTime", "umaEndDateIso", "umaEndDate"):
-        value = string_or_none(payload.get(key))
-        if not value:
-            continue
-        parsed = parse_iso_datetime(value)
-        if parsed:
-            return parsed
+    date_keys = (
+        "endDateIso",
+        "endDate",
+        "closedTime",
+        "umaEndDateIso",
+        "umaEndDate",
+        "end_date",
+        "closed_time",
+        "uma_end_date_iso",
+        "uma_end_date",
+    )
+    start_date_keys = (
+        "eventStartTime",
+        "startTime",
+        "startDate",
+        "eventStartDate",
+        "start_date",
+        "event_start_time",
+        "event_start_date",
+        "startDateIso",
+        "start_date_iso",
+    )
+
+    candidates: list[dict[str, Any]] = [payload]
+    state = payload.get("state")
+    if isinstance(state, dict):
+        candidates.append(state)
+    first_event = first_dict(payload.get("events"))
+    if first_event:
+        candidates.append(first_event)
+    first_market = first_dict(payload.get("markets"))
+    if first_market:
+        candidates.append(first_market)
+
+    for source in candidates:
+        for key in date_keys:
+            value = string_or_none(source.get(key))
+            if not value:
+                continue
+            parsed = parse_iso_datetime(value)
+            if parsed:
+                return parsed
+
+    # 终局时间解析失败时，退而使用市场/事件的起始时间，避免大量市场_date 变成同一个默认值。
+    for source in candidates:
+        for key in start_date_keys:
+            value = string_or_none(source.get(key))
+            if not value:
+                continue
+            parsed = parse_iso_datetime(value)
+            if parsed:
+                return parsed
     return None
 
 
