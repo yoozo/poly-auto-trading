@@ -404,7 +404,7 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     for signal in signals:
         lines.append(
             f"- {score_marker(signal.score)} {action_marker(signal)} {signal.signal_label} "
-            f"评分={format_optional(signal.score)}"
+            f"Score={format_optional(signal.score)}"
         )
     return "\n".join(lines)
 

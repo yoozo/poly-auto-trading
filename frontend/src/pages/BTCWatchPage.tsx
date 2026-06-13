@@ -25,6 +25,7 @@ const INTERVAL_KEY = "poly-auto.btcWatch.interval";
 const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
+const ONE_MINUTE_MS = 60_000;
 
 export default function BTCWatchPage() {
   const queryClient = useQueryClient();
@@ -51,6 +52,8 @@ export default function BTCWatchPage() {
   const comparisonRequestKeyRef = useRef<string | null>(null);
   const activeComparisonKeyRef = useRef<string | null>(null);
   const comparisonLineCacheRef = useRef<Map<string, ChartComparisonLine>>(new Map());
+  const dataEpochRef = useRef(0);
+  const activeIntervalRef = useRef<CandleInterval>(interval);
   // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
   const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
 
@@ -79,8 +82,11 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
+    activeIntervalRef.current = interval;
+    dataEpochRef.current += 1;
     setCandles([]);
     setIndicatorPoints([]);
+    setIsLoadingMore(false);
   }, [interval]);
 
   useEffect(() => {
@@ -178,68 +184,101 @@ export default function BTCWatchPage() {
     comparisonRequestKeyRef.current = comparisonKey;
     setComparisonLine(null);
 
-    const startMs = new Date(startTime).getTime();
-    if (!Number.isFinite(startMs)) {
+    const startMs = parseMarketStartTimeMs(startTime);
+    const normalizedStartMs = normalizeMarketStartTimeToMinute(startMs);
+    if (!Number.isFinite(normalizedStartMs)) {
       return () => {
         cancelled = true;
       };
     }
 
     // Polymarket 当前窗口的比较基准取窗口起始 1m K 的 open，避免用概率价画到 BTC 价格轴。
-    api
-      .candlesRange("1m", startMs, startMs + 60_000, 2)
-      .then((rows) => {
+    void (async () => {
+      try {
+        const rows = await api.candlesRange(
+          "1m",
+          Math.max(0, normalizedStartMs),
+          normalizedStartMs + ONE_MINUTE_MS,
+          2
+        );
         if (cancelled || activeComparisonKeyRef.current !== comparisonKey) return;
-        const candle =
-          rows.find((row) => Math.abs(new Date(row.open_time).getTime() - startMs) < 1000) ??
-          rows.find((row) => {
-            const openMs = new Date(row.open_time).getTime();
-            return openMs >= startMs && openMs < startMs + 60_000;
-          });
-        if (!candle || !Number.isFinite(candle.open)) {
+        const targetCandle = rows.find((row) => {
+          const rowOpenMs = new Date(row.open_time).getTime();
+          return rowOpenMs === normalizedStartMs;
+        });
+        if (!targetCandle || !Number.isFinite(targetCandle.open)) {
           setComparisonLine(null);
           return;
         }
         const nextLine = {
           id: `polymarket:${marketId}:${startTime}`,
-          price: candle.open,
-          title: `比较 ${formatBtcPrice(candle.open)}`,
+          price: targetCandle.open,
+          title: selectedPolymarket?.interval ?? "N/A",
           color: "#f59e0b",
         };
         comparisonLineCacheRef.current.set(comparisonKey, nextLine);
         setComparisonLine(nextLine);
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled && activeComparisonKeyRef.current === comparisonKey) setComparisonLine(null);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
   }, [selectedPolymarket?.id, selectedPolymarket?.start_time, selectedPolymarket?.window]);
 
+function normalizeMarketStartTimeToMinute(value: number) {
+  if (!Number.isFinite(value)) return value;
+  return Math.floor(value / ONE_MINUTE_MS) * ONE_MINUTE_MS;
+}
+
+function parseMarketStartTimeMs(value: string): number {
+  const trimmed = value.trim();
+  const numeric = Number(trimmed);
+  if (Number.isFinite(numeric)) {
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+  return new Date(trimmed).getTime();
+}
+
   useEffect(() => {
-    setCandles((current) => mergeCandles(current, latestCandles));
+    const requestEpoch = dataEpochRef.current;
+    setCandles((current) => {
+      if (requestEpoch !== dataEpochRef.current) return current;
+      return mergeCandles(current, latestCandles);
+    });
   }, [latestCandles]);
 
   useEffect(() => {
-    setIndicatorPoints((current) => mergeIndicators(current, latestIndicators as MarketIndicatorPoint[]));
+    const requestEpoch = dataEpochRef.current;
+    setIndicatorPoints((current) => {
+      if (requestEpoch !== dataEpochRef.current) return current;
+      return mergeIndicators(current, latestIndicators as MarketIndicatorPoint[]);
+    });
   }, [latestIndicators]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
     let reconnectTimer = 0;
     let closedByEffect = false;
+    const streamInterval = interval;
+    const requestEpoch = dataEpochRef.current;
 
     const connect = () => {
       // WebSocket 只负责实时增量；初始窗口和向前翻页仍由 REST 接口补齐。
+      if (requestEpoch !== dataEpochRef.current) return;
       setStreamStatus("connecting");
-      socket = new WebSocket(api.marketWsUrl(interval));
-      socket.onopen = () => setStreamStatus("connected");
+      socket = new WebSocket(api.marketWsUrl(streamInterval));
+      socket.onopen = () => {
+        if (requestEpoch !== dataEpochRef.current) return;
+        setStreamStatus("connected");
+      };
       socket.onmessage = (event) => {
+        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
         setStreamStatus("connected");
         const message = parseMarketMessage(event.data);
-        if (!message || message.symbol !== "BTCUSDT" || message.interval !== interval) return;
+        if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
         const candle = message.candle;
         const indicator = message.indicator;
         if (candle) {
@@ -249,12 +288,16 @@ export default function BTCWatchPage() {
           setIndicatorPoints((current) => mergeIndicators(current, [indicator]));
         }
       };
-      socket.onerror = () => setStreamStatus("reconnecting");
+      socket.onerror = () => {
+        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
+        setStreamStatus("reconnecting");
+      };
       socket.onclose = () => {
         if (closedByEffect) {
           setStreamStatus("closed");
           return;
         }
+        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
         setStreamStatus("reconnecting");
         reconnectTimer = window.setTimeout(connect, 1000);
       };
@@ -273,12 +316,15 @@ export default function BTCWatchPage() {
       setIsLoadingMore(true);
       try {
         // 历史翻页必须同步补 candle 和 indicator，否则图表时间轴会有价格但缺少指标层。
+        const requestEpoch = dataEpochRef.current;
         const older = await api.candlesRange(interval, startMs, endMs);
+        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) return;
         setCandles((current) => mergeCandles(current, older));
         const olderIndicators = await queryClient.fetchQuery({
           queryKey: ["indicators-range", interval, startMs, endMs],
           queryFn: () => api.indicatorsRange(interval, startMs, endMs),
         });
+        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) return;
         setIndicatorPoints((current) => mergeIndicators(current, olderIndicators as MarketIndicatorPoint[]));
       } finally {
         setIsLoadingMore(false);

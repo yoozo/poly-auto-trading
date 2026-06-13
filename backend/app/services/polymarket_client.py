@@ -31,11 +31,21 @@ UP_DOWN_INTERVAL_TAGS = {
     "1h": "1H",
     "4h": "4H",
 }
+UP_DOWN_INTERVAL_TAG_CANDIDATES = {
+    "5m": ["5M", "5m", "5-minute", "5-min", "5min", "btc-up-or-down-5m"],
+    "15m": ["15M", "15m", "15-minute", "15-min", "15min", "btc-up-or-down-15m"],
+    "1h": ["1H", "1h", "60M", "60m", "60-minute", "60-min", "hourly", "btc-up-or-down-1h", "btc-up-or-down-60m"],
+    "4h": ["4H", "4h", "240M", "240m", "240-minute", "4-hour", "4hours", "btc-up-or-down-4h"],
+}
 UP_DOWN_INTERVAL_SERIES = {
     "5m": "btc-up-or-down-5m",
     "15m": "btc-up-or-down-15m",
     "1h": "btc-up-or-down-1h",
     "4h": "btc-up-or-down-4h",
+}
+UP_DOWN_SERIES_ALIASES = {
+    "1h": ["btc-up-or-down-1h", "btc-up-or-down-60m", "btc-up-or-down-hourly", "btc-hourly-up-or-down"],
+    "4h": ["btc-up-or-down-4h", "btc-up-or-down-240m", "btc-up-or-down-4h-window"],
 }
 UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "5m": 5 * 60,
@@ -435,6 +445,7 @@ class PolymarketClient:
         include_recent_closed: bool = True,
     ) -> list[dict[str, Any]]:
         tag_slug = UP_DOWN_INTERVAL_TAGS[interval]
+        tag_candidates = UP_DOWN_INTERVAL_TAG_CANDIDATES.get(interval, [tag_slug])
         end_date_min = now
         if include_recent_closed:
             lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
@@ -444,21 +455,52 @@ class PolymarketClient:
             "closed": "false",
             "limit": limit,
             "offset": 0,
-            "tag_slug": tag_slug,
             "related_tags": "true",
             "end_date_min": end_date_min.isoformat().replace("+00:00", "Z"),
             "order": "end_date",
             "ascending": "true",
         }
         try:
+            rows: list[dict[str, Any]] = []
             async with httpx.AsyncClient(base_url=self._gamma_base_url, timeout=self._timeout) as client:
-                response = await client.get("/events", params=params)
-                response.raise_for_status()
-                payload = response.json()
-            service_health_store.set("polymarket", "running", metadata={"endpoint": "events"})
-            if not isinstance(payload, list):
-                raise RuntimeError("Unexpected Polymarket events response")
-            return [row for row in payload if isinstance(row, dict)]
+                attempted_with_tag = False
+                for candidate in tag_candidates:
+                    candidate_params = dict(params)
+                    candidate_params["tag_slug"] = candidate
+                    response = await client.get("/events", params=candidate_params)
+                    attempted_with_tag = True
+                    response.raise_for_status()
+                    payload = response.json()
+                    service_health_store.set(
+                        "polymarket",
+                        "running",
+                        metadata={"endpoint": "events", "tag_slug": candidate},
+                    )
+                    if not isinstance(payload, list):
+                        continue
+                    rows.extend(row for row in payload if isinstance(row, dict))
+                if not rows and attempted_with_tag:
+                    response = await client.get("/events", params=params)
+                    response.raise_for_status()
+                    payload = response.json()
+                    service_health_store.set("polymarket", "running", metadata={"endpoint": "events", "tag_slug": "fallback"})
+                    if isinstance(payload, list):
+                        rows.extend(row for row in payload if isinstance(row, dict))
+            if not rows:
+                return []
+            deduped: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                fallback_event_id = string_or_none(row.get("event_id"))
+                fallback_series = string_or_none(row.get("seriesSlug")) or string_or_none(row.get("series"))
+                key = (
+                    string_or_none(row.get("id"))
+                    or string_or_none(row.get("slug"))
+                    or (f"{fallback_event_id}:{fallback_series}" if fallback_event_id and fallback_series else None)
+                )
+                if not key:
+                    key = json.dumps(row, sort_keys=True, default=str)
+                deduped[key] = row
+            return list(deduped.values())
         except Exception as exc:
             service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "events"})
             logger.warning("Polymarket up/down events fetch failed", extra={"interval": interval}, exc_info=exc)
@@ -581,20 +623,43 @@ def raise_for_activity_status(response: httpx.Response) -> None:
 
 
 def is_btc_up_down_event(event: dict[str, Any], *, interval: str) -> bool:
-    expected_series = UP_DOWN_INTERVAL_SERIES[interval]
-    series_slug = string_or_none(event.get("seriesSlug"))
     title = (string_or_none(event.get("title")) or "").lower()
     slug = (string_or_none(event.get("slug")) or "").lower()
-    if series_slug == expected_series:
+    series_slug = (
+        string_or_none(event.get("seriesSlug"))
+        or string_or_none(event.get("series_slug"))
+        or string_or_none((event.get("series") or {}).get("slug") if isinstance(event.get("series"), dict) else None)
+    )
+    expected_series = UP_DOWN_INTERVAL_SERIES[interval]
+    series_aliases = {expected_series}
+    series_aliases.update(UP_DOWN_SERIES_ALIASES.get(interval, []))
+    normalized_series_slug = (series_slug or "").lower()
+    if normalized_series_slug in {alias.lower() for alias in series_aliases}:
         return True
-    normalized_interval = interval.replace("m", "-minute").replace("h", "-hour")
+
+    title_interval_tokens = {interval}
+    if interval.endswith("h"):
+        title_interval_tokens.add("1h" if interval == "1h" else interval.replace("h", " hour"))
+        title_interval_tokens.add(f"{interval[:-1]} hour")
+    elif interval.endswith("m"):
+        title_interval_tokens.add(f"{interval[:-1]} minute")
+
+    slug_interval_tokens = set(UP_DOWN_INTERVAL_TAG_CANDIDATES.get(interval, []))
+    slug_interval_tokens.add(interval)
+    normalized_slug_tokens = {str(token).lower() for token in slug_interval_tokens}
+
+    contains_slug_signal = (
+        "btc-updown" in slug
+        or "btc-up-or-down" in slug
+        or "bitcoin up or down" in title
+    )
     return (
-        "bitcoin up or down" in title
+        any(interval_token in title for interval_token in title_interval_tokens)
+        and contains_slug_signal
         and (
-            f"btc-updown-{interval}" in slug
-            or f"btc-up-or-down-{interval}" in slug
-            or f"btc-up-or-down-{normalized_interval}" in slug
-            or interval in title
+            any(token in slug for token in normalized_slug_tokens)
+            or any(token.lower().replace("-", "") in slug.replace("-", "") for token in normalized_slug_tokens)
+            or any(token in normalized_series_slug for token in {alias.lower() for alias in series_aliases})
         )
     )
 
@@ -904,10 +969,17 @@ def make_activity_id(
 
 def parse_timestamp(value: Any) -> datetime:
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        timestamp = float(value)
+        # 兼容秒级/毫秒级时间戳；Polymarket 有时会返回 13 位毫秒值。
+        if abs(timestamp) > 1e11:
+            timestamp /= 1000
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
     if isinstance(value, str):
         if value.isdigit():
-            return datetime.fromtimestamp(int(value), tz=timezone.utc)
+            timestamp = float(value)
+            if abs(timestamp) > 1e11:
+                timestamp /= 1000
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
         normalized = value.replace("Z", "+00:00")
         try:
             parsed = datetime.fromisoformat(normalized)

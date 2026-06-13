@@ -1029,9 +1029,9 @@ function formatDiffHtml(value: number | null | undefined) {
 }
 
 function uniqueCandlesByChartTime(candles: MarketCandle[]) {
-  const byTime = new Map<number, MarketCandle>();
+  const byTime = new Map<string, MarketCandle>();
   for (const candle of candles) {
-    byTime.set(candleTime(candle), candle);
+    byTime.set(`${candle.symbol}:${candle.interval}:${candleTime(candle)}`, candle);
   }
   return Array.from(byTime.values()).sort((left, right) => candleTime(left) - candleTime(right));
 }
