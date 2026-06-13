@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 from typing import Any
 
@@ -387,19 +387,129 @@ def delivery_title(signals: list[SignalRecord]) -> str:
 
 
 def delivery_message(signals: list[SignalRecord]) -> str:
-    target_type, target_key = delivery_target(signals)
+    _ = delivery_target(signals)
     total_score = delivery_total_score(signals)
+    market_name = delivery_market_name(signals)
+    direction_emoji, direction_name = delivery_direction(signals)
+    reminders = [delivery_signal_reminder(signal) for signal in signals]
     lines = [
-        f"市场：{target_type}:{target_key}",
+        f"市场：{market_name}",
         f"总分：{format_optional(total_score)} {score_marker(total_score)}",
-        delivery_title(signals),
+        f"方向：{direction_emoji}{direction_name}",
+        f"信号提醒：{'，'.join(reminders)}",
     ]
-    for signal in signals:
+    for signal, reminder in zip(signals, reminders):
         lines.append(
-            f"- {score_marker(signal.score)} {action_marker(signal)} {signal.signal_label} "
-            f"Score={format_optional(signal.score)}"
+            f"- {reminder}  Score={format_score(signal.score)}"
         )
     return "\n".join(lines)
+
+
+def delivery_market_name(signals: list[SignalRecord]) -> str:
+    first = signals[0]
+    if first.target_type == "candle":
+        symbol, interval = parse_target_key(first.target_key)
+        candle_time = parse_signal_open_time(first)
+        window = format_market_window(candle_time, interval) if candle_time and interval else ""
+        if window:
+            return f"{symbol} - {window}"
+        return symbol
+    return f"{first.target_type}:{first.target_key}"
+
+
+def parse_target_key(target_key: str) -> tuple[str, str | None]:
+    if ":" not in target_key:
+        return target_key, None
+    parts = target_key.split(":")
+    if len(parts) >= 2:
+        return ":".join(parts[:-1]), parts[-1]
+    return target_key, None
+
+
+def parse_signal_open_time(signal: SignalRecord) -> datetime | None:
+    candle = signal.input_snapshot.get("candle", {})
+    open_time = candle.get("open_time")
+    if not isinstance(open_time, str):
+        return None
+    try:
+        if open_time.endswith("Z"):
+            open_time = open_time[:-1] + "+00:00"
+        return datetime.fromisoformat(open_time)
+    except ValueError:
+        return None
+
+
+def format_market_window(open_time: datetime, interval: str | None) -> str:
+    if interval is None:
+        return open_time.strftime("%B %d, %-I:%M%p")
+    end_time = open_time + interval_duration(interval)
+    return (
+        f"{format_window_timestamp(open_time)}-"
+        f"{format_window_timestamp(end_time)}"
+    )
+
+
+def format_window_timestamp(value: datetime) -> str:
+    day = int(value.strftime("%d"))
+    time_text = value.strftime("%I:%M%p").lstrip("0")
+    return f"{value.strftime('%B')} {day}, {time_text}"
+
+
+def interval_duration(interval: str) -> timedelta:
+    seconds_map = {
+        "1m": 60,
+        "5m": 5 * 60,
+        "15m": 15 * 60,
+        "30m": 30 * 60,
+        "1h": 60 * 60,
+        "4h": 4 * 60 * 60,
+        "1d": 24 * 60 * 60,
+    }
+    return timedelta(seconds=seconds_map.get(interval, 60))
+
+
+def delivery_direction(signals: list[SignalRecord]) -> tuple[str, str]:
+    direction = signals[0].direction
+    if direction == "short":
+        return "🔴", "DOWN"
+    if direction == "long":
+        return "🟢", "UP"
+    return "⚪", "NONE"
+
+
+def delivery_signal_reminder(signal: SignalRecord) -> str:
+    if signal.signal_key == "rsi_ema_diff":
+        value = signal.metadata.get("diff")
+        return f"RSI-Diff = {format_number(value)}"
+    if signal.signal_key.startswith("rsi_") and signal.signal_label.startswith("RSI"):
+        if signal.signal_label.startswith("RSI-EMA"):
+            return signal.signal_label.replace("RSI-EMA diff =", "RSI-Diff =")
+        if signal.metadata.get("threshold") is not None:
+            threshold = signal.metadata.get("threshold")
+            op = ">"
+            if signal.action == "buy":
+                op = "<"
+            return f"RSI {op} {format_number(threshold)}"
+        return signal.signal_label.replace("RSI-EMA diff =", "RSI-Diff =")
+    return signal.signal_label
+
+
+def format_score(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value == int(value):
+        return str(int(value))
+    return f"{value:.2f}"
+
+
+def format_number(value: Any) -> str:
+    if value is None:
+        return "-"
+    if not isinstance(value, (int, float)):
+        return str(value)
+    if float(value) == int(float(value)):
+        return str(int(float(value)))
+    return f"{float(value):.2f}"
 
 
 def delivery_total_score(signals: list[SignalRecord]) -> float:
