@@ -6,6 +6,7 @@ from app.api import routes_candles
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.candle import Candle
+from conftest import login_test_client
 
 
 def make_candle(index: int) -> Candle:
@@ -31,7 +32,9 @@ def make_client() -> TestClient:
         yield object()
 
     app.dependency_overrides[get_session] = fake_session
-    return TestClient(app)
+    client = TestClient(app)
+    login_test_client(client)
+    return client
 
 
 def test_candles_range_mode(monkeypatch) -> None:

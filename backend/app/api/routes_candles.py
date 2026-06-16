@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import require_websocket_auth
 from app.core.config import settings
 from app.db.session import get_session
 from app.schemas.candle import Candle, IndicatorPoint, Interval
@@ -146,6 +147,8 @@ async def market_websocket(
     symbol: str = settings.binance_symbol,
     interval: Interval = Query("1m"),
 ) -> None:
+    if not await require_websocket_auth(websocket):
+        return
     normalized_symbol = symbol.upper()
     await market_ws_hub.connect(websocket, normalized_symbol, interval)
     try:

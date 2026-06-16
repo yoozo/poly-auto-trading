@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 
+from app.core.auth import require_websocket_auth
 from app.schemas.polymarket import PolymarketUpDownMarket
 from app.services.polymarket_client import PolymarketClient, PolymarketInputError
 from app.services.polymarket_market_store import polymarket_up_down_store
@@ -50,6 +51,8 @@ async def btc_up_down_websocket(
     websocket: WebSocket,
     interval: str = Query("5m", pattern="^(5m|15m|1h|4h)$"),
 ) -> None:
+    if not await require_websocket_auth(websocket):
+        return
     await polymarket_ws_hub.connect(websocket, interval)
     try:
         markets = await polymarket_up_down_store.list_markets(interval, limit=12)

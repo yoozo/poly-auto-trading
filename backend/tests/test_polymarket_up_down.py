@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from conftest import login_test_client
 from app.services.polymarket_client import (
     PolymarketClient,
     is_btc_up_down_event,
@@ -360,6 +361,7 @@ def test_btc_up_down_endpoint(monkeypatch) -> None:
 
     app = create_app(enable_lifespan=False)
     client = TestClient(app)
+    login_test_client(client)
     response = client.get("/api/polymarket/btc-up-down?interval=15m&limit=2")
 
     assert response.status_code == 200

@@ -14,6 +14,9 @@ from app.schemas.report import (
     AccountSummary,
     AnalyzeAccountRequest,
     AnalyzeAccountResponse,
+    MarketActivityDetail,
+    MarketDetailResponse,
+    MarketMetadataDetail,
     MarketPerformance,
     MarketPerformancePage,
     ReportAccount,
@@ -29,7 +32,9 @@ from app.services.report_store import (
     delete_account_activities,
     get_account_activity_count,
     get_task,
+    list_account_market_activities,
     list_account_activity_slugs,
+    list_market_metadata,
     list_accounts,
     serialize_account,
     update_account,
@@ -113,6 +118,29 @@ async def account_markets(
         total=len(markets),
         offset=offset,
         limit=limit,
+    )
+
+
+@router.get("/accounts/{account_id}/markets/{market_id:path}", response_model=MarketDetailResponse)
+async def account_market_detail(
+    account_id: str,
+    market_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> MarketDetailResponse:
+    if not await account_exists(session, account_id):
+        raise HTTPException(status_code=404, detail="account not found")
+    snapshot = await get_report_snapshot(session, account_id)
+    market = next((item for item in snapshot.markets if item.market_id == market_id), None)
+    if market is None:
+        raise HTTPException(status_code=404, detail="market not found")
+    activities = await list_account_market_activities(session, account_id, market_id)
+    metadata = None
+    if market.slug:
+        metadata = (await list_market_metadata(session, {market.slug})).get(market.slug)
+    return MarketDetailResponse(
+        market=market,
+        activities=[serialize_market_activity(activity) for activity in activities],
+        metadata=serialize_market_metadata(metadata) if metadata else None,
     )
 
 
@@ -315,3 +343,42 @@ def parse_filter_date(value: str, *, end_of_day: bool) -> datetime | None:
     if end_of_day:
         return date.replace(hour=23, minute=59, second=59, microsecond=999999)
     return date
+
+
+def serialize_market_activity(activity) -> MarketActivityDetail:
+    return MarketActivityDetail(
+        id=activity.id,
+        timestamp=activity.timestamp,
+        type=activity.type,
+        condition_id=activity.condition_id,
+        slug=activity.slug,
+        event_slug=activity.event_slug,
+        title=activity.title,
+        side=activity.side,
+        outcome=activity.outcome,
+        asset=activity.asset,
+        price=as_float(activity.price),
+        size=as_float(activity.size),
+        usdc_size=as_float(activity.usdc_size),
+        transaction_hash=activity.transaction_hash,
+        raw=activity.raw or {},
+    )
+
+
+def serialize_market_metadata(metadata) -> MarketMetadataDetail:
+    return MarketMetadataDetail(
+        slug=metadata.slug,
+        closed=metadata.closed,
+        outcome=metadata.outcome,
+        raw_outcome=metadata.raw_outcome,
+        event=metadata.event or {},
+        market=metadata.market or {},
+        fetched_at=metadata.fetched_at,
+        updated_at=metadata.updated_at,
+    )
+
+
+def as_float(value) -> float | None:
+    if value is None:
+        return None
+    return float(value)

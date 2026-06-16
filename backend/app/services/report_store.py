@@ -281,6 +281,23 @@ async def list_account_activities(session: AsyncSession, account_id: str) -> lis
     return list(result.all())
 
 
+async def list_account_market_activities(session: AsyncSession, account_id: str, market_id: str) -> list[Activity]:
+    # 详情页的 market_id 沿用报表聚合身份：title 优先，其次 slug / condition_id。
+    result = await session.scalars(
+        select(Activity)
+        .where(
+            Activity.account_id == account_id,
+            (
+                (Activity.title == market_id)
+                | (Activity.slug == market_id)
+                | (Activity.condition_id == market_id)
+            ),
+        )
+        .order_by(Activity.timestamp.asc())
+    )
+    return list(result.all())
+
+
 async def list_account_activity_slugs(session: AsyncSession, account_id: str) -> set[str]:
     result = await session.scalars(
         select(Activity.slug)

@@ -5,6 +5,7 @@ from app.main import create_app
 from app.api import routes_status
 from app.schemas.status import ServiceEventRecord
 from datetime import datetime, timezone
+from conftest import login_test_client
 
 
 def make_client() -> TestClient:
@@ -14,7 +15,9 @@ def make_client() -> TestClient:
         yield object()
 
     app.dependency_overrides[get_session] = fake_session
-    return TestClient(app)
+    client = TestClient(app)
+    login_test_client(client)
+    return client
 
 
 def test_health() -> None:

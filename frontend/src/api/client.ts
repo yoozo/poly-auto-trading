@@ -203,6 +203,41 @@ export type MarketPerformancePage = {
   limit: number;
 };
 
+export type ReportMarketActivity = {
+  id: string;
+  timestamp: string;
+  type: string;
+  condition_id: string | null;
+  slug: string | null;
+  event_slug: string | null;
+  title: string | null;
+  side: string | null;
+  outcome: string | null;
+  asset: string | null;
+  price: number | null;
+  size: number | null;
+  usdc_size: number | null;
+  transaction_hash: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type ReportMarketMetadata = {
+  slug: string;
+  closed: boolean;
+  outcome: string | null;
+  raw_outcome: string | null;
+  event: Record<string, unknown>;
+  market: Record<string, unknown>;
+  fetched_at: string | null;
+  updated_at: string | null;
+};
+
+export type ReportMarketDetail = {
+  market: MarketPerformance;
+  activities: ReportMarketActivity[];
+  metadata: ReportMarketMetadata | null;
+};
+
 export type PolymarketOrderLevel = {
   price: number | null;
   size: number | null;
@@ -249,10 +284,23 @@ export type PolymarketWsMessage = {
   markets: PolymarketUpDownMarket[];
 };
 
+export type AuthSession = {
+  authenticated: boolean;
+  configured: boolean;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -261,12 +309,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Keep the HTTP status fallback.
     }
+    if (response.status === 401) unauthorizedHandler?.();
     throw new Error(detail);
   }
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  authSession: () => request<AuthSession>("/api/auth/session"),
+  login: (password: string) =>
+    request<AuthSession>("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    }),
+  logout: () => request<AuthSession>("/api/auth/logout", { method: "POST" }),
   health: () => request<HealthStatus>("/api/health"),
   services: () => request<ServiceHealth[]>("/api/status/services"),
   serviceEvents: (
@@ -336,6 +393,8 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   accountSummary: (accountId: string) => request<AccountSummary>(`/api/reports/accounts/${accountId}/summary`),
+  accountMarketDetail: (accountId: string, marketId: string) =>
+    request<ReportMarketDetail>(`/api/reports/accounts/${accountId}/markets/${encodeURIComponent(marketId)}`),
   accountMarkets: (
     accountId: string,
     params: {

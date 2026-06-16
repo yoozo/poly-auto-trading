@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     signal_rsi_ema_diff_diff_bonus_raw: str = "12:0,15:1,18:2,20:3,22:4,25:5"
     signal_rsi_bonus_raw: str = "70:1,80:2,90:3"
     telegram_close_warning_seconds: int = 15
+    auth_password: str = ""
+    auth_session_secret: str = ""
+    auth_cookie_name: str = "poly_auto_session"
+    auth_session_ttl_seconds: int = 60 * 60 * 24 * 7
+    auth_cookie_secure: bool = False
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

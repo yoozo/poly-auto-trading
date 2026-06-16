@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from app.schemas.report import AccountSummary, DailyPerformance, MarketPerformance, RecentPerformance
 
 DUST = Decimal("0.000001")
+POSITION_DUST = Decimal("0.01")
 ZERO = Decimal("0")
 RECENT_WINDOWS = (1, 3, 7, 14, 30)
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -300,15 +301,16 @@ def apply_activity(market: MarketAccumulator, activity: ActivityLike) -> None:
         market.merge_time = max_date(market.merge_time, activity.timestamp)
         reduce_all_outcomes(market, size)
     elif activity_type == "REDEEM":
+        redeem_shares = redeem_share_size(size, amount)
         market.redeemed += amount
-        market.redeemed_shares += size
+        market.redeemed_shares += redeem_shares
         market.recovery += amount
         market.redeem_count += 1
         market.redeem_time = max_date(market.redeem_time, activity.timestamp)
         redeemed_outcome = infer_redeem_outcome(market)
         market.incomplete = has_incomplete_redeem(market)
         if redeemed_outcome and redeemed_outcome in market.outcomes:
-            market.outcomes[redeemed_outcome].current_shares -= size
+            market.outcomes[redeemed_outcome].current_shares -= redeem_shares
     elif activity_type == "MAKER_REBATE":
         market.maker_rebate += amount
 
@@ -480,7 +482,7 @@ def has_incomplete_redeem(market: MarketAccumulator) -> bool:
     ]
     if not shares:
         return True
-    return all(abs(value - market.redeemed_shares) > DUST for value in shares)
+    return all(abs(value - market.redeemed_shares) >= POSITION_DUST for value in shares)
 
 
 def normalize_outcome(value: str | None) -> str:
@@ -509,6 +511,11 @@ def reduce_all_outcomes(market: MarketAccumulator, size: Decimal) -> None:
         position.current_shares -= size
 
 
+def redeem_share_size(size: Decimal, amount: Decimal) -> Decimal:
+    # Polymarket 的 redeem activity 有时 size 为空/0，但结算兑换 1 share = 1 USDC。
+    return size if size > DUST else amount
+
+
 def open_exposure(market: MarketAccumulator) -> Decimal:
     return sum_decimal(positive(current_shares_for(market, outcome)) for outcome in market.outcomes)
 
@@ -518,13 +525,9 @@ def current_shares_for(market: MarketAccumulator, outcome: str) -> Decimal:
     if position is None:
         return ZERO
     if market.redeem_count > 0:
-        redeemed_outcome = infer_redeem_outcome(market)
-        if not redeemed_outcome:
-            return ZERO
-        if outcome == redeemed_outcome:
-            return positive(position.current_shares - market.redeemed_shares)
-        return positive(position.current_shares)
-    return positive(position.current_shares)
+        # Redeem 发生在市场结算后：获胜份额兑换成 USDC，失败份额失效，不再作为当前持仓展示。
+        return ZERO
+    return positive_position(position.current_shares)
 
 
 def format_position_status(market: MarketAccumulator) -> str:
@@ -532,7 +535,7 @@ def format_position_status(market: MarketAccumulator) -> str:
     labels = {"up": "Up", "down": "Down", "yes": "Yes", "no": "No"}
     for outcome, position in market.outcomes.items():
         shares = current_shares_for(market, outcome)
-        if shares >= Decimal("0.01"):
+        if shares >= POSITION_DUST:
             parts.append(f"{labels.get(outcome, outcome)} {as_float(shares):g}")
     return " / ".join(parts) if parts else "无持仓"
 
@@ -648,6 +651,10 @@ def parse_title_time(value: str) -> tuple[int, int] | None:
 
 def positive(value: Decimal) -> Decimal:
     return value if value > DUST else ZERO
+
+
+def positive_position(value: Decimal) -> Decimal:
+    return value if value >= POSITION_DUST else ZERO
 
 
 def sum_decimal(values) -> Decimal:

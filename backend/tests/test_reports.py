@@ -16,6 +16,7 @@ from app.services.market_metadata import market_metadata_row
 from app.services.polymarket_client import NormalizedActivity, PolymarketClient, normalize_polymarket_input
 from app.services import report_snapshot
 from app.services import report_store
+from conftest import login_test_client
 
 
 def make_client() -> TestClient:
@@ -25,7 +26,9 @@ def make_client() -> TestClient:
         yield object()
 
     app.dependency_overrides[get_session] = fake_session
-    return TestClient(app)
+    client = TestClient(app)
+    login_test_client(client)
+    return client
 
 
 def test_normalize_polymarket_input() -> None:
@@ -199,6 +202,116 @@ def test_account_markets_applies_query_filters_on_api(monkeypatch) -> None:
     assert [item["market_id"] for item in body["items"]] == ["xrp"]
 
 
+def test_account_market_detail_returns_404_when_account_missing(monkeypatch) -> None:
+    async def fake_account_exists(session, account_id):
+        return False
+
+    monkeypatch.setattr(routes_reports, "account_exists", fake_account_exists)
+
+    client = make_client()
+    response = client.get("/api/reports/accounts/0xabc/markets/btc")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "account not found"
+
+
+def test_account_market_detail_returns_404_when_market_missing(monkeypatch) -> None:
+    async def fake_account_exists(session, account_id):
+        return True
+
+    async def fake_get_report_snapshot(session, account_id):
+        return SimpleNamespace(markets=[make_market_performance("eth", "ETH Up or Down")])
+
+    monkeypatch.setattr(routes_reports, "account_exists", fake_account_exists)
+    monkeypatch.setattr(routes_reports, "get_report_snapshot", fake_get_report_snapshot)
+
+    client = make_client()
+    response = client.get("/api/reports/accounts/0xabc/markets/btc")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "market not found"
+
+
+def test_account_market_detail_returns_market_activities_and_metadata(monkeypatch) -> None:
+    async def fake_account_exists(session, account_id):
+        return True
+
+    market = make_market_performance("btc", "BTC Up or Down")
+
+    async def fake_get_report_snapshot(session, account_id):
+        return SimpleNamespace(markets=[market])
+
+    async def fake_list_account_market_activities(session, account_id, market_id):
+        return [
+            SimpleNamespace(
+                id="act-1",
+                timestamp=datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc),
+                type="TRADE",
+                condition_id="condition-1",
+                slug="btc",
+                event_slug="btc-event",
+                title="BTC Up or Down",
+                side="BUY",
+                outcome="Up",
+                asset="asset-1",
+                price=Decimal("0.51"),
+                size=Decimal("10"),
+                usdc_size=Decimal("5.10"),
+                transaction_hash="0xabc",
+                raw={"transactionHash": "0xabc"},
+            ),
+            SimpleNamespace(
+                id="act-2",
+                timestamp=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+                type="REDEEM",
+                condition_id="condition-1",
+                slug="btc",
+                event_slug="btc-event",
+                title="BTC Up or Down",
+                side=None,
+                outcome=None,
+                asset=None,
+                price=None,
+                size=Decimal("10"),
+                usdc_size=Decimal("10"),
+                transaction_hash=None,
+                raw={},
+            ),
+        ]
+
+    async def fake_list_market_metadata(session, slugs):
+        return {
+            "btc": SimpleNamespace(
+                slug="btc",
+                closed=True,
+                outcome="Up",
+                raw_outcome="Up",
+                event={"slug": "btc-event"},
+                market={"question": "BTC Up or Down"},
+                fetched_at=datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc),
+                updated_at=datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc),
+            )
+        }
+
+    monkeypatch.setattr(routes_reports, "account_exists", fake_account_exists)
+    monkeypatch.setattr(routes_reports, "get_report_snapshot", fake_get_report_snapshot)
+    monkeypatch.setattr(routes_reports, "list_account_market_activities", fake_list_account_market_activities)
+    monkeypatch.setattr(routes_reports, "list_market_metadata", fake_list_market_metadata)
+
+    client = make_client()
+    response = client.get("/api/reports/accounts/0xabc/markets/btc")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["market"]["market_id"] == "btc"
+    assert body["metadata"]["outcome"] == "Up"
+    assert [item["id"] for item in body["activities"]] == ["act-1", "act-2"]
+    assert body["activities"][0]["transaction_hash"] == "0xabc"
+    assert body["activities"][0]["price"] == 0.51
+    assert body["activities"][0]["size"] == 10.0
+    assert body["activities"][0]["usdc_size"] == 5.1
+
+
 @pytest.mark.asyncio
 async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> None:
     calls: dict[str, object] = {}
@@ -325,6 +438,34 @@ def test_report_summary_aggregates_activity_rules() -> None:
     assert markets[0].pnl_with_rebate == 7
     assert markets[0].result == "未结算"
     assert markets[0].incomplete is True
+
+
+def test_market_performance_does_not_double_count_redeemed_shares() -> None:
+    activities = [
+        make_activity("buy", "TRADE", "BUY", "Up", "2.5", "0", "5.35714"),
+        make_activity("redeem", "REDEEM", None, "Up", "0", "5.35714", "5.35714"),
+    ]
+
+    market = build_market_performance(activities)[0]
+
+    assert market.result == "上涨"
+    assert market.position_status == "无持仓"
+    assert market.up_shares == 0
+    assert market.down_shares == 0
+
+
+def test_market_performance_uses_redeem_amount_when_size_is_missing() -> None:
+    activities = [
+        make_activity("buy", "TRADE", "BUY", "Down", "4.13", "0", "7.27273"),
+        make_activity("redeem", "REDEEM", None, "Down", "0", "7.27", "0"),
+    ]
+
+    market = build_market_performance(activities)[0]
+
+    assert market.result == "下跌"
+    assert market.position_status == "无持仓"
+    assert market.up_shares == 0
+    assert market.down_shares == 0
 
 
 def test_market_performance_skips_activity_without_market_identity() -> None:

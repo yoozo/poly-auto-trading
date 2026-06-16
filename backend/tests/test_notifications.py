@@ -12,6 +12,7 @@ from app.schemas.notification import NotificationDelivery, TelegramStatus
 from app.schemas.signal import SignalRecord
 from app.services import notifications
 from app.services.signal_analysis import analyze_signal_input
+from conftest import login_test_client
 
 
 def make_client() -> TestClient:
@@ -21,7 +22,9 @@ def make_client() -> TestClient:
         yield object()
 
     app.dependency_overrides[get_session] = fake_session
-    return TestClient(app)
+    client = TestClient(app)
+    login_test_client(client)
+    return client
 
 
 def test_telegram_status_endpoint(monkeypatch) -> None:

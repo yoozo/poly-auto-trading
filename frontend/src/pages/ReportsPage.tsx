@@ -48,7 +48,11 @@ type MatrixRow = {
   className?: (market: MarketPerformance) => string;
 };
 
-export default function ReportsPage() {
+export default function ReportsPage({
+  onOpenMarketDetail,
+}: {
+  onOpenMarketDetail?: (accountId: string, marketId: string) => void;
+}) {
   const [form] = Form.useForm<AnalyzeForm>();
   const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -253,11 +257,13 @@ export default function ReportsPage() {
               />
             )}
             <MarketMatrix
+              accountId={selectedAccountId}
               loading={marketsQuery.isLoading}
               markets={markets}
               hasMore={marketsQuery.hasNextPage}
               loadingMore={marketsQuery.isFetchingNextPage}
               onLoadMore={loadNextMarketPage}
+              onOpenMarketDetail={onOpenMarketDetail}
             />
           </Card>
         </>
@@ -549,17 +555,21 @@ function ReportFilters({
 }
 
 function MarketMatrix({
+  accountId,
   loading,
   markets,
   hasMore,
   loadingMore,
   onLoadMore,
+  onOpenMarketDetail,
 }: {
+  accountId: string | null;
   loading: boolean;
   markets: MarketPerformance[];
   hasMore: boolean;
   loadingMore: boolean;
   onLoadMore: () => void;
+  onOpenMarketDetail?: (accountId: string, marketId: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState({ scrollLeft: 0, width: 0 });
@@ -571,7 +581,7 @@ function MarketMatrix({
         render: (market) => <ResultCell market={market} />,
         className: (market) => marketResultCellClass(market),
       },
-      { key: "position", label: "持仓状态", render: (market) => <Tag>{market.position_status}</Tag> },
+      { key: "position", label: "持仓状态", render: (market) => <Tag>{displayMarketPositionStatus(market)}</Tag> },
       { key: "redeem_time", label: "Redeem time", render: (market) => formatDate(market.redeem_time) },
       { key: "market_date", label: "市场日期", render: (market) => formatDate(market.market_date) },
       { key: "activity_count", label: "交易数", render: (market) => market.activity_count },
@@ -682,9 +692,20 @@ function MarketMatrix({
             {virtualColumns.leftWidth > 0 && <th className="virtual-spacer" style={{ width: virtualColumns.leftWidth }} />}
             {virtualColumns.visible.map((market, index) => (
               <th key={market.market_id} data-market-title={market.title} data-market-date={market.market_date ?? ""}>
-                <div className="market-column-title">
+                <a
+                  href={
+                    accountId
+                      ? `/reports/market-detail?account=${encodeURIComponent(accountId)}&market=${encodeURIComponent(market.market_id)}`
+                      : undefined
+                  }
+                  className="market-column-title market-column-title-link"
+                  onClick={() => {
+                    if (accountId) onOpenMarketDetail?.(accountId, market.market_id);
+                  }}
+                  aria-disabled={!accountId}
+                >
                   {virtualColumns.start + index + 1}. {market.title}
-                </div>
+                </a>
               </th>
             ))}
             {virtualColumns.rightWidth > 0 && <th className="virtual-spacer" style={{ width: virtualColumns.rightWidth }} />}
@@ -795,6 +816,10 @@ function marketResultTone(market: MarketPerformance) {
   if (market.result === "上涨" || market.result === "是") return "positive";
   if (market.result === "下跌" || market.result === "否") return "negative";
   return "neutral";
+}
+
+function displayMarketPositionStatus(market: MarketPerformance) {
+  return market.redeem_count > 0 ? "无持仓" : market.position_status;
 }
 
 function marketResultCellClass(market: MarketPerformance) {

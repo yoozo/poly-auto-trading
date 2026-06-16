@@ -141,3 +141,38 @@ class MarketPerformancePage(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class MarketActivityDetail(BaseModel):
+    id: str
+    timestamp: datetime
+    type: str
+    condition_id: str | None = None
+    slug: str | None = None
+    event_slug: str | None = None
+    title: str | None = None
+    side: str | None = None
+    outcome: str | None = None
+    asset: str | None = None
+    price: float | None = None
+    size: float | None = None
+    usdc_size: float | None = None
+    transaction_hash: str | None = None
+    raw: dict[str, Any]
+
+
+class MarketMetadataDetail(BaseModel):
+    slug: str
+    closed: bool
+    outcome: str | None = None
+    raw_outcome: str | None = None
+    event: dict[str, Any]
+    market: dict[str, Any]
+    fetched_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MarketDetailResponse(BaseModel):
+    market: MarketPerformance
+    activities: list[MarketActivityDetail]
+    metadata: MarketMetadataDetail | None = None
