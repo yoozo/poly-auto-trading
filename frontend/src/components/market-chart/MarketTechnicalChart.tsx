@@ -84,11 +84,11 @@ const DIFF_LINES: Array<{ key: DiffKey; color: string; label: string }> = [
   { key: "rsi_ema_diff", color: "#f97316", label: "RSI-EMA" }
 ];
 
-const DEFAULT_VISIBLE_CANDLES = 50;
+const INITIAL_VISIBLE_CANDLES = 50;
+const MIN_VISIBLE_CANDLES = 30;
 const ANCHOR_RIGHT_RATIO = 0.2;
 const LOAD_MORE_THRESHOLD = 24;
 const TARGET_BAR_WIDTH = 8;
-const MAX_BAR_WIDTH = 12;
 const RSI_DEFAULT_RANGE = { from: 20, to: 80 };
 const RSI_MAX_RANGE = { minValue: 0, maxValue: 100 };
 const DIFF_DEFAULT_RANGE = { from: -15, to: 15 };
@@ -375,11 +375,21 @@ export default function MarketTechnicalChart({
   }, [interval, countdownTargetMs, showRsi, isLoadingMore, onLoadMore]);
 
   useEffect(() => {
+    pendingRangeRef.current = null;
+    if (rangeSyncFrameRef.current) {
+      window.cancelAnimationFrame(rangeSyncFrameRef.current);
+      rangeSyncFrameRef.current = 0;
+    }
+    if (resizeFrameRef.current) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = 0;
+    }
     initializedRef.current = false;
     loadMoreQueuedRef.current = false;
     previousFirstTimeRef.current = null;
     previousLengthRef.current = 0;
     latestRangeRef.current = null;
+    lastMainWidthRef.current = 0;
     lastCrosshairTimeRef.current = null;
     rsiScaleInitializedRef.current = false;
     diffScaleInitializedRef.current = false;
@@ -998,7 +1008,7 @@ export default function MarketTechnicalChart({
   }
 
   function setInitialVisibleRange() {
-    const visibleBars = Math.min(candlesRef.current.length, DEFAULT_VISIBLE_CANDLES);
+    const visibleBars = Math.min(candlesRef.current.length, INITIAL_VISIBLE_CANDLES);
     const rightPadding = anchorRightPaddingBars(visibleBars);
     setVisibleRange({
       from: (candlesRef.current.length - visibleBars - 0.5) as Logical,
@@ -1008,9 +1018,9 @@ export default function MarketTechnicalChart({
 
   function shouldReanchorAfterBootstrap(previousLength: number, nextLength: number, addedBefore: number) {
     if (previousLength <= 0) return false;
-    if (previousLength >= DEFAULT_VISIBLE_CANDLES) return false;
-    if (addedBefore > 0) return nextLength >= Math.min(DEFAULT_VISIBLE_CANDLES, previousLength + addedBefore);
-    return nextLength >= DEFAULT_VISIBLE_CANDLES;
+    if (previousLength >= INITIAL_VISIBLE_CANDLES) return false;
+    if (addedBefore > 0) return nextLength >= Math.min(INITIAL_VISIBLE_CANDLES, previousLength + addedBefore);
+    return nextLength >= INITIAL_VISIBLE_CANDLES;
   }
 
   function handleMainWidthChange(nextWidth: number) {
@@ -1061,9 +1071,7 @@ export default function MarketTechnicalChart({
   }
 
   function minimumVisibleBars() {
-    const mainWidth = mainContainerRef.current?.clientWidth ?? 0;
-    if (mainWidth <= 0) return 80;
-    return Math.min(candlesRef.current.length, Math.max(40, Math.ceil(mainWidth / MAX_BAR_WIDTH)));
+    return Math.min(candlesRef.current.length, MIN_VISIBLE_CANDLES);
   }
 
   function setVisibleRange(range: LogicalRange) {
@@ -1105,30 +1113,16 @@ export default function MarketTechnicalChart({
   function updateTooltipAt(time: number) {
     const tooltip = tooltipRef.current;
     if (!tooltip) return;
-    const candle = candleByTimeRef.current.get(time);
-    const boll = bollByTimeRef.current.get(time);
     const indicator = indicatorByTimeRef.current.get(time);
-    if (!candle && !indicator) {
+    if (!indicator) {
       hideTooltip();
       return;
     }
 
     const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval}</span>`];
-    if (candle) {
-      rows.push(
-        `O ${formatPrice(candle.open)} · H ${formatPrice(candle.high)} · L ${formatPrice(candle.low)} · C ${formatPrice(candle.close)}`
-      );
-    }
-    if (boll) {
-      rows.push(
-        `BOLL20 U ${formatPrice(boll.upper)} · M ${formatPrice(boll.middle)} · L ${formatPrice(boll.lower)}`
-      );
-    }
-    if (indicator) {
-      rows.push(
-        `RSI14 ${formatFixed(indicator.rsi)} · EMA14 ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
-      );
-    }
+    rows.push(
+      `RSI14 ${formatFixed(indicator.rsi)} · EMA14 ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
+    );
     tooltip.innerHTML = rows.join("<br />");
     tooltip.hidden = false;
   }
