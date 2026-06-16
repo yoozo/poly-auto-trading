@@ -503,10 +503,14 @@ export default function MarketTechnicalChart({
       lastCrosshairTimeRef.current = null;
       hideTooltip();
     };
+    const onDoubleClick = () => {
+      resetIndicatorPriceScale(element);
+    };
 
     element.addEventListener("pointerdown", onPointerDown, { passive: true });
     element.addEventListener("mousemove", onMouseMove, { passive: true });
     element.addEventListener("mouseleave", onMouseLeave);
+    element.addEventListener("dblclick", onDoubleClick);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     window.addEventListener("blur", onPointerUp, { passive: true });
@@ -515,10 +519,24 @@ export default function MarketTechnicalChart({
       element.removeEventListener("pointerdown", onPointerDown);
       element.removeEventListener("mousemove", onMouseMove);
       element.removeEventListener("mouseleave", onMouseLeave);
+      element.removeEventListener("dblclick", onDoubleClick);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
       window.removeEventListener("blur", onPointerUp);
     };
+  }
+
+  function resetIndicatorPriceScale(element: HTMLDivElement) {
+    if (element === rsiContainerRef.current) {
+      rsiChartRef.current?.priceScale("right").setVisibleRange(RSI_DEFAULT_RANGE);
+      return;
+    }
+    if (element === diffContainerRef.current) {
+      const lineData = projectedIndicatorLineData("rsi_ema_diff");
+      diffChartRef.current?.priceScale("right").setVisibleRange(
+        lineData.length ? calculateDiffVisibleRange(lineData) : DIFF_DEFAULT_RANGE
+      );
+    }
   }
 
   function updateTooltipFromParam(param: MouseEventParams<Time>) {

@@ -1,5 +1,6 @@
-import { FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Empty, Segmented, Select, Space, Typography } from "antd";
+import { DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
+import { Button, Card, Dropdown, Empty, Segmented, Switch, Typography } from "antd";
+import type { MenuProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -32,6 +33,7 @@ const POLYMARKET_INTERVAL_MS: Record<PolymarketInterval, number> = {
   "1h": 60 * ONE_MINUTE_MS,
   "4h": 4 * 60 * ONE_MINUTE_MS,
 };
+const MAX_VISIBLE_MARKET_PILLS = 5;
 const ET_TIME_ZONE = "America/New_York";
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
@@ -431,9 +433,6 @@ export default function BTCWatchPage() {
                     </span>
                   </Typography.Text>
                 )}
-                <Typography.Text type={streamStatus === "connected" ? "success" : "warning"}>
-                  实时流 {streamStatusLabel(streamStatus)}
-                </Typography.Text>
                 {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
                 {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
               </div>
@@ -496,28 +495,55 @@ function PolymarketBtcPanel({
     markets.find((market) => market.window === "current") ??
     markets.find((market) => market.window === "next") ??
     markets[0];
-  const options = useMemo(
+  const railModel = useMemo(
+    () => buildMarketRailModel(markets, activeMarket?.id, selectedMarketId),
+    [activeMarket?.id, markets, selectedMarketId]
+  );
+  const moreMenuItems = useMemo<MenuProps["items"]>(
     () =>
-      markets.map((market) => ({
-        value: market.id,
-        label: `${formatMarketTime(market)} · ${marketWindowLabel(market, markets)}`,
+      railModel.moreMarkets.map((market) => ({
+        key: market.id,
+        label: formatMarketEndTime(market),
       })),
-    [markets]
+    [railModel.moreMarkets]
   );
 
   return (
     <Card className="polymarket-panel" styles={{ body: { padding: 12 } }}>
       <div className="polymarket-panel-head">
         <div className="polymarket-panel-title">
-          <Space size={10} wrap>
-            <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
-            <Segmented
-              size="small"
-              value={interval}
-              options={polymarketIntervals}
-              onChange={(value) => onIntervalChange(value as PolymarketInterval)}
-            />
-          </Space>
+          <div className="polymarket-title-row">
+            {activeMarket?.slug ? (
+              <a
+                className="polymarket-panel-title-link"
+                href={`https://polymarket.com/event/${activeMarket.slug}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span>Polymarket BTC Up/Down</span>
+                <ExportOutlined />
+              </a>
+            ) : (
+              <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
+            )}
+            <div className="polymarket-title-controls">
+              <Segmented
+                size="small"
+                value={interval}
+                options={polymarketIntervals}
+                onChange={(value) => onIntervalChange(value as PolymarketInterval)}
+              />
+              <span className="polymarket-follow-toggle" title="自动跟随当前市场">
+                <span className="polymarket-follow-toggle-label">跟随当前</span>
+                <Switch
+                  size="small"
+                  checked={autoSwitch}
+                  onChange={onAutoSwitchChange}
+                  aria-label="自动跟随当前市场"
+                />
+              </span>
+            </div>
+          </div>
           {activeMarket && (
             <Typography.Text type="secondary" className="polymarket-panel-subtitle">
               {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
@@ -526,28 +552,50 @@ function PolymarketBtcPanel({
             </Typography.Text>
           )}
         </div>
-        {activeMarket?.slug && (
-          <Button
-            size="small"
-            type="link"
-            href={`https://polymarket.com/event/${activeMarket.slug}`}
-            target="_blank"
-          >
-            打开市场
-          </Button>
-        )}
       </div>
       <div className="polymarket-market-selector">
-        <Select
-          size="small"
-          value={activeMarket?.id ?? selectedMarketId ?? undefined}
-          placeholder="选择市场"
-          options={options}
-          onChange={onSelectedMarketId}
-        />
-        <Checkbox checked={autoSwitch} onChange={(event) => onAutoSwitchChange(event.target.checked)}>
-          自动切换
-        </Checkbox>
+        <div className="polymarket-market-rail" role="tablist" aria-label="Polymarket 市场窗口">
+          {railModel.latestPastMarket && (
+            <button
+              type="button"
+              className={railModel.latestPastMarket.id === activeMarket?.id ? "polymarket-market-pill active" : "polymarket-market-pill"}
+              onClick={() => onSelectedMarketId(railModel.latestPastMarket!.id)}
+              aria-pressed={railModel.latestPastMarket.id === activeMarket?.id}
+            >
+              <span className="polymarket-market-pill-time">{formatMarketEndTime(railModel.latestPastMarket)}</span>
+            </button>
+          )}
+          {railModel.visibleMarkets.map((market) => {
+            const isActive = market.id === activeMarket?.id;
+            const isLive = marketWindowLabel(market, markets) === "当前";
+            return (
+              <button
+                key={market.id}
+                type="button"
+                className={isActive ? "polymarket-market-pill active" : "polymarket-market-pill"}
+                onClick={() => onSelectedMarketId(market.id)}
+                aria-pressed={isActive}
+              >
+                {isLive && <span className="polymarket-market-pill-live-dot" aria-hidden="true" />}
+                <span className="polymarket-market-pill-time">{formatMarketEndTime(market)}</span>
+              </button>
+            );
+          })}
+          {moreMenuItems && moreMenuItems.length > 0 && (
+            <Dropdown
+              menu={{
+                items: moreMenuItems,
+                selectable: false,
+                onClick: ({ key }) => onSelectedMarketId(String(key)),
+              }}
+              trigger={["click"]}
+            >
+              <Button className="polymarket-market-pill polymarket-market-pill-more" size="small">
+                More <DownOutlined />
+              </Button>
+            </Dropdown>
+          )}
+        </div>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       {!activeMarket && !error && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${interval} 市场`} />}
@@ -688,13 +736,6 @@ function marketComparisonLine({
   };
 }
 
-function streamStatusLabel(status: StreamStatus) {
-  if (status === "connected") return "已连接";
-  if (status === "reconnecting") return "重连中";
-  if (status === "closed") return "已关闭";
-  return "连接中";
-}
-
 function formatProbability(value: number | null) {
   if (value == null) return "-";
   return `${(value * 100).toFixed(1)}%`;
@@ -732,6 +773,16 @@ function formatMarketTime(market: PolymarketUpDownMarket) {
   return `${timeFormatter.format(start)}-${timeFormatter.format(end)}`;
 }
 
+function formatMarketEndTime(market: PolymarketUpDownMarket) {
+  const window = polymarketDisplayWindow(market);
+  if (!window) return market.window;
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(window.endMs));
+}
+
 function marketWindowLabel(market: PolymarketUpDownMarket, markets: PolymarketUpDownMarket[] = []) {
   const window = polymarketDisplayWindow(market);
   if (window) {
@@ -751,6 +802,65 @@ function marketWindowLabel(market: PolymarketUpDownMarket, markets: PolymarketUp
   if (market.window === "upcoming") return "未来";
   if (market.window === "expired") return "已结束";
   return "未知";
+}
+
+function sortMarketsForRail(markets: PolymarketUpDownMarket[]) {
+  return [...markets].sort((left, right) => marketWindowStartMs(left) - marketWindowStartMs(right));
+}
+
+function buildMarketRailModel(
+  markets: PolymarketUpDownMarket[],
+  activeMarketId: string | undefined,
+  selectedMarketId: string | null
+) {
+  const sortedMarkets = sortMarketsForRail(markets);
+  const currentMarket = sortedMarkets.find((market) => marketWindowLabel(market, sortedMarkets) === "当前");
+  const currentMarketId = currentMarket?.id;
+  const selectedMarket = selectedMarketId
+    ? sortedMarkets.find((market) => market.id === selectedMarketId)
+    : undefined;
+
+  const pastMarkets = sortedMarkets.filter((market) => marketWindowLabel(market, sortedMarkets) === "已结束");
+  const latestPastMarket = pastMarkets.at(-1);
+  const futureMarkets = sortedMarkets.filter(
+    (market) =>
+      market.id !== currentMarketId &&
+      marketWindowLabel(market, sortedMarkets) !== "已结束"
+  );
+
+  const visibleMarkets: PolymarketUpDownMarket[] = [];
+  const appendUnique = (market: PolymarketUpDownMarket | undefined) => {
+    if (!market) return;
+    if (latestPastMarket && market.id === latestPastMarket.id) return;
+    if (visibleMarkets.some((item) => item.id === market.id)) return;
+    visibleMarkets.push(market);
+  };
+
+  appendUnique(currentMarket ?? sortedMarkets.find((market) => market.id === activeMarketId) ?? sortedMarkets[0]);
+  if (selectedMarket && selectedMarket.id !== currentMarketId) appendUnique(selectedMarket);
+
+  for (const market of futureMarkets) {
+    if (visibleMarkets.length >= MAX_VISIBLE_MARKET_PILLS) break;
+    appendUnique(market);
+  }
+
+  appendUnique(currentMarket ?? sortedMarkets.find((market) => market.id === activeMarketId) ?? sortedMarkets[0]);
+  if (selectedMarket && selectedMarket.id !== currentMarketId) appendUnique(selectedMarket);
+
+  visibleMarkets.sort((left, right) => marketWindowStartMs(left) - marketWindowStartMs(right));
+
+  const visibleIds = new Set(visibleMarkets.map((market) => market.id));
+  const moreMarkets = futureMarkets.filter((market) => !visibleIds.has(market.id));
+
+  return {
+    latestPastMarket,
+    visibleMarkets,
+    moreMarkets,
+  };
+}
+
+function marketWindowStartMs(market: PolymarketUpDownMarket) {
+  return polymarketDisplayWindow(market)?.startMs ?? Number.POSITIVE_INFINITY;
 }
 
 type PolymarketDisplayWindow = {

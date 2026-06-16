@@ -611,6 +611,66 @@ body[data-theme="dark"] {
   gap: 4px;
 }
 
+.polymarket-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.polymarket-title-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
+.polymarket-panel-title-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+  color: #17202a;
+  flex: 0 0 auto;
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.polymarket-panel-title-link:hover {
+  color: #0f62fe;
+}
+
+.polymarket-panel-title-link .anticon {
+  color: #667085;
+  font-size: 12px;
+}
+
+.polymarket-panel-title-link:hover .anticon {
+  color: #0f62fe;
+}
+
+.polymarket-follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 2px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.polymarket-follow-toggle-label {
+  display: inline-flex;
+  align-items: center;
+}
+
 .polymarket-panel-subtitle {
   display: block;
   min-width: 0;
@@ -620,16 +680,106 @@ body[data-theme="dark"] {
 }
 
 .polymarket-market-selector {
-  display: grid;
+  display: block;
   align-items: center;
   min-width: 0;
   margin: 10px 0;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.polymarket-market-selector .ant-select {
+.polymarket-market-rail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.polymarket-market-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.polymarket-market-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  cursor: pointer;
+}
+
+.polymarket-market-pill:hover {
+  border-color: #d1d5db;
+  background: #e5e7eb;
+}
+
+.polymarket-market-pill.active {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+.polymarket-market-pill-time {
+  display: inline-flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.polymarket-market-pill-live-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  animation: polymarket-live-dot-pulse 1.4s ease-out infinite;
+}
+
+.polymarket-market-pill.active .polymarket-market-pill-live-dot {
+  background: #f87171;
+}
+
+.polymarket-market-pill-nav.ant-btn,
+.polymarket-market-pill-more.ant-btn {
+  border-color: #e5e7eb;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.polymarket-market-pill-nav.ant-btn:hover,
+.polymarket-market-pill-more.ant-btn:hover {
+  border-color: #d1d5db;
+  background: #e5e7eb;
+  color: #111827;
+}
+
+@keyframes polymarket-live-dot-pulse {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  }
+
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
 }
 
 .polymarket-market-meta {
@@ -846,9 +996,18 @@ body[data-theme="dark"] {
 
 @media (max-width: 720px) {
   .polymarket-panel-head,
-  .polymarket-market-selector,
   .polymarket-outcomes {
     grid-template-columns: 1fr;
+  }
+
+  .polymarket-title-controls {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .polymarket-title-controls::-webkit-scrollbar {
+    display: none;
   }
 
   .telegram-status-row {
@@ -1128,6 +1287,43 @@ body[data-theme="dark"] .report-metric-neutral {
   background: var(--panel-bg);
 }
 
+body[data-theme="dark"] .polymarket-market-rail {
+  border-radius: 999px;
+}
+
+body[data-theme="dark"] .polymarket-market-pill,
+body[data-theme="dark"] .polymarket-market-pill-nav.ant-btn,
+body[data-theme="dark"] .polymarket-market-pill-more.ant-btn {
+  border-color: #334155;
+  background: #1e2937;
+  color: #d7e0ea;
+  box-shadow: none;
+}
+
+body[data-theme="dark"] .polymarket-market-pill:hover,
+body[data-theme="dark"] .polymarket-market-pill-nav.ant-btn:hover,
+body[data-theme="dark"] .polymarket-market-pill-more.ant-btn:hover {
+  border-color: #475569;
+  background: #263244;
+  color: #f8fafc;
+}
+
+body[data-theme="dark"] .polymarket-market-pill.active {
+  border-color: #60a5fa;
+  background: #0f172a;
+  color: #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.18);
+}
+
+body[data-theme="dark"] .polymarket-market-pill-live-dot {
+  background: #fb7185;
+  box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.55);
+}
+
+body[data-theme="dark"] .polymarket-market-pill.active .polymarket-market-pill-live-dot {
+  background: #fb7185;
+}
+
 body[data-theme="dark"] .polymarket-outcome,
 body[data-theme="dark"] .polymarket-orderbook {
   border-color: var(--panel-border);
@@ -1162,6 +1358,18 @@ body[data-theme="dark"] .polymarket-orderbook-row .ask {
   color: #f87171;
 }
 
+body[data-theme="dark"] .polymarket-outcome.up .polymarket-outcome-price {
+  background: rgba(16, 185, 129, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.62);
+  color: #34d399;
+}
+
+body[data-theme="dark"] .polymarket-outcome.down .polymarket-outcome-price {
+  background: rgba(248, 113, 113, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.62);
+  color: #f87171;
+}
+
 body[data-theme="dark"] .polymarket-orderbook {
   border-color: #334155;
   background: #111820;
@@ -1180,6 +1388,23 @@ body[data-theme="dark"] .polymarket-orderbook-row {
 
 body[data-theme="dark"] .polymarket-orderbook-row:nth-child(2n + 1) {
   background: rgba(30, 41, 55, 0.42);
+}
+
+body[data-theme="dark"] .polymarket-panel-title-link {
+  color: var(--text-strong);
+}
+
+body[data-theme="dark"] .polymarket-panel-title-link .anticon {
+  color: var(--text-muted);
+}
+
+body[data-theme="dark"] .polymarket-panel-title-link:hover,
+body[data-theme="dark"] .polymarket-panel-title-link:hover .anticon {
+  color: #60a5fa;
+}
+
+body[data-theme="dark"] .polymarket-follow-toggle {
+  color: var(--text-muted);
 }
 
 .kline-countdown {
