@@ -553,31 +553,49 @@ body[data-theme="dark"] {
   text-overflow: ellipsis;
 }
 
-.watch-latest-price {
+.watch-market-diff {
   display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid #d8e0ea;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font-weight: 800;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
-.watch-latest-price-label {
-  color: #94a3b8;
+.watch-market-diff-interval {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.watch-latest-price-value {
-  font-weight: 800;
+.watch-market-diff-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 15px;
 }
 
-.watch-latest-price-up .watch-latest-price-value {
+.watch-market-diff-arrow {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.watch-market-diff-up .watch-market-diff-value {
   color: #10b981;
 }
 
-.watch-latest-price-down .watch-latest-price-value {
+.watch-market-diff-down .watch-market-diff-value {
   color: #ef4444;
 }
 
-.watch-latest-price-flat .watch-latest-price-value {
-  color: #cbd5e1;
+.watch-market-diff-flat .watch-market-diff-value {
+  color: #64748b;
 }
 
 .watch-fullscreen-button {
@@ -1290,6 +1308,16 @@ body[data-theme="dark"] .btc-chart-title {
 }
 
 body[data-theme="dark"] .btc-chart-status {
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .watch-market-diff {
+  border-color: #263244;
+  background: #111827;
+  color: #d7e0ea;
+}
+
+body[data-theme="dark"] .watch-market-diff-interval {
   color: #94a3b8;
 }
 

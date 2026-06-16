@@ -84,7 +84,7 @@ const DIFF_LINES: Array<{ key: DiffKey; color: string; label: string }> = [
   { key: "rsi_ema_diff", color: "#f97316", label: "RSI-EMA" }
 ];
 
-const DEFAULT_VISIBLE_CANDLES = 100;
+const DEFAULT_VISIBLE_CANDLES = 50;
 const ANCHOR_RIGHT_RATIO = 0.2;
 const LOAD_MORE_THRESHOLD = 24;
 const TARGET_BAR_WIDTH = 8;
@@ -383,6 +383,9 @@ export default function MarketTechnicalChart({
     lastCrosshairTimeRef.current = null;
     rsiScaleInitializedRef.current = false;
     diffScaleInitializedRef.current = false;
+    mainChartRef.current?.clearCrosshairPosition();
+    rsiChartRef.current?.clearCrosshairPosition();
+    diffChartRef.current?.clearCrosshairPosition();
     hideTooltip();
   }, [symbol, interval]);
 
@@ -1004,9 +1007,10 @@ export default function MarketTechnicalChart({
   }
 
   function shouldReanchorAfterBootstrap(previousLength: number, nextLength: number, addedBefore: number) {
-    if (previousLength <= 0 || addedBefore <= 0) return false;
+    if (previousLength <= 0) return false;
     if (previousLength >= DEFAULT_VISIBLE_CANDLES) return false;
-    return nextLength >= Math.min(DEFAULT_VISIBLE_CANDLES, previousLength + addedBefore);
+    if (addedBefore > 0) return nextLength >= Math.min(DEFAULT_VISIBLE_CANDLES, previousLength + addedBefore);
+    return nextLength >= DEFAULT_VISIBLE_CANDLES;
   }
 
   function handleMainWidthChange(nextWidth: number) {

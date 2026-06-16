@@ -109,8 +109,10 @@ export default function BTCWatchPage() {
     polymarketMarkets.find((market) => market.window === "next") ??
     polymarketMarkets[0];
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
-  const latestPriceTone =
-    latest && latest.close > latest.open ? "up" : latest && latest.close < latest.open ? "down" : "flat";
+  const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
+  const marketDiffTone =
+    marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
+  const marketDiffInterval = selectedPolymarket?.interval ?? polymarketInterval;
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
@@ -426,10 +428,17 @@ export default function BTCWatchPage() {
               </div>
               <div className="watch-toolbar-status">
                 {latest && (
-                  <Typography.Text className={`watch-latest-price watch-latest-price-${latestPriceTone}`}>
-                    <span className="watch-latest-price-label">最新</span>
-                    <span className="watch-latest-price-value">
-                      {latest.close.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                  <Typography.Text className={`watch-market-diff watch-market-diff-${marketDiffTone}`}>
+                    <span className="watch-market-diff-interval">{marketDiffInterval}</span>
+                    <span className="watch-market-diff-value">
+                      {marketPriceDiff === null ? (
+                        "--"
+                      ) : (
+                        <>
+                          <span className="watch-market-diff-arrow">{marketPriceDiff >= 0 ? "▲" : "▼"}</span>
+                          <span>${formatMarketPriceDiff(marketPriceDiff)}</span>
+                        </>
+                      )}
                     </span>
                   </Typography.Text>
                 )}
@@ -758,6 +767,15 @@ function formatCompact(value: number | null) {
 
 function formatBtcPrice(value: number) {
   return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function formatMarketPriceDiff(value: number) {
+  const abs = Math.abs(value);
+  const maximumFractionDigits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2;
+  return abs.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  });
 }
 
 function formatMarketTime(market: PolymarketUpDownMarket) {
