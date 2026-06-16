@@ -14,7 +14,7 @@ import {
   type Time,
   type UTCTimestamp
 } from "lightweight-charts";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { CandleInterval } from "../../api/client";
 import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
@@ -55,6 +55,19 @@ type RsiKey = "rsi" | "rsi_ema";
 type DiffKey = "rsi_ema_diff";
 type RsiSeriesKey = RsiKey | "ref70" | "ref30";
 type DiffSeriesKey = DiffKey | "ref0" | "ref12" | "ref-12";
+type ChartThemeMode = "light" | "dark";
+
+type TechnicalChartTheme = {
+  background: string;
+  text: string;
+  grid: string;
+  border: string;
+  candleUp: string;
+  candleDown: string;
+  rsiReference: string;
+  diffReference: string;
+  diffBand: string;
+};
 
 const BOLL_LINES: Array<{ key: BollKey; color: string; label: string }> = [
   { key: "middle", color: "#64748b", label: "BOLL Mid" },
@@ -80,6 +93,31 @@ const RSI_DEFAULT_RANGE = { from: 20, to: 80 };
 const RSI_MAX_RANGE = { minValue: 0, maxValue: 100 };
 const DIFF_DEFAULT_RANGE = { from: -15, to: 15 };
 
+const CHART_THEMES: Record<ChartThemeMode, TechnicalChartTheme> = {
+  dark: {
+    background: "#080b10",
+    text: "#94a3b8",
+    grid: "#111827",
+    border: "#1f2937",
+    candleUp: "#0f7a4f",
+    candleDown: "#b42318",
+    rsiReference: "#94a3b8",
+    diffReference: "#64748b",
+    diffBand: "#cbd5e1"
+  },
+  light: {
+    background: "#f8fafc",
+    text: "#475569",
+    grid: "#e2e8f0",
+    border: "#cbd5e1",
+    candleUp: "#047857",
+    candleDown: "#dc2626",
+    rsiReference: "#94a3b8",
+    diffReference: "#64748b",
+    diffBand: "#94a3b8"
+  }
+};
+
 export default function MarketTechnicalChart({
   symbol,
   interval,
@@ -97,6 +135,8 @@ export default function MarketTechnicalChart({
   countdownTargetMs = null,
   toolbar
 }: MarketTechnicalChartProps) {
+  const [themeMode, setThemeMode] = useState<ChartThemeMode>(() => readChartThemeMode());
+  const chartTheme = CHART_THEMES[themeMode];
   const mainContainerRef = useRef<HTMLDivElement | null>(null);
   const rsiContainerRef = useRef<HTMLDivElement | null>(null);
   const diffContainerRef = useRef<HTMLDivElement | null>(null);
@@ -146,6 +186,7 @@ export default function MarketTechnicalChart({
 
   const intervalRef = useRef(interval);
   const countdownTargetMsRef = useRef<number | null>(countdownTargetMs);
+  const chartThemeRef = useRef<TechnicalChartTheme>(chartTheme);
   const showRsiRef = useRef(showRsi);
   const isLoadingMoreRef = useRef(isLoadingMore);
   const onLoadMoreRef = useRef(onLoadMore);
@@ -184,22 +225,22 @@ export default function MarketTechnicalChart({
         }
       },
       layout: {
-        background: { type: ColorType.Solid, color: "#080b10" },
-        textColor: "#94a3b8",
+        background: { type: ColorType.Solid, color: chartThemeRef.current.background },
+        textColor: chartThemeRef.current.text,
         fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
       },
       grid: {
-        vertLines: { color: "#111827" },
-        horzLines: { color: "#111827" }
+        vertLines: { color: chartThemeRef.current.grid },
+        horzLines: { color: chartThemeRef.current.grid }
       },
       rightPriceScale: {
-        borderColor: "#1f2937",
+        borderColor: chartThemeRef.current.border,
         minimumWidth: 86,
         scaleMargins: priceScaleMargins
       },
       timeScale: {
         visible: showTimeScale,
-        borderColor: "#1f2937",
+        borderColor: chartThemeRef.current.border,
         timeVisible: true,
         secondsVisible: false,
         allowShiftVisibleRangeOnWhitespace: true,
@@ -214,16 +255,17 @@ export default function MarketTechnicalChart({
     if (!chartRootRef.current || !mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
 
     // 主图、RSI、diff 分成三个 chart，方便不同价格轴范围独立控制，但时间轴必须联动。
+    const activeTheme = chartThemeRef.current;
     const mainChart = createChart(mainContainerRef.current, chartOptions(mainContainerRef.current, !showRsiRef.current));
     const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }, false, 1));
     const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }, true, 1));
     const candleSeries = mainChart.addSeries(CandlestickSeries, {
-      upColor: "#0f7a4f",
-      downColor: "#b42318",
-      borderUpColor: "#0f7a4f",
-      borderDownColor: "#b42318",
-      wickUpColor: "#0f7a4f",
-      wickDownColor: "#b42318",
+      upColor: activeTheme.candleUp,
+      downColor: activeTheme.candleDown,
+      borderUpColor: activeTheme.candleUp,
+      borderDownColor: activeTheme.candleDown,
+      wickUpColor: activeTheme.candleUp,
+      wickDownColor: activeTheme.candleDown,
       priceFormat: { type: "price", precision: 2, minMove: 0.01 }
     });
 
@@ -312,6 +354,17 @@ export default function MarketTechnicalChart({
       diffPrimarySeriesRef.current = null;
     };
   }, [chartOptions]);
+
+  useEffect(() => {
+    chartThemeRef.current = chartTheme;
+    applyChartTheme(chartTheme);
+  }, [chartTheme]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => setThemeMode(readChartThemeMode()));
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     intervalRef.current = interval;
@@ -466,6 +519,36 @@ export default function MarketTechnicalChart({
         syncingRangeRef.current = false;
       }
     });
+  }
+
+  function applyChartTheme(theme: TechnicalChartTheme) {
+    const chartVisualOptions = {
+      layout: {
+        background: { type: ColorType.Solid, color: theme.background },
+        textColor: theme.text,
+        fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      },
+      grid: {
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid }
+      },
+      rightPriceScale: { borderColor: theme.border },
+      timeScale: { borderColor: theme.border }
+    };
+    mainChartRef.current?.applyOptions(chartVisualOptions);
+    rsiChartRef.current?.applyOptions(chartVisualOptions);
+    diffChartRef.current?.applyOptions(chartVisualOptions);
+    candleSeriesRef.current?.applyOptions({
+      upColor: theme.candleUp,
+      downColor: theme.candleDown,
+      borderUpColor: theme.candleUp,
+      borderDownColor: theme.candleDown,
+      wickUpColor: theme.candleUp,
+      wickDownColor: theme.candleDown
+    });
+    if (rsiChartRef.current) renderRsiReferenceLines(rsiChartRef.current, showRsiRef.current);
+    if (diffChartRef.current) renderDiffReferenceLines(diffChartRef.current, showRsiRef.current);
+    restoreCrosshairPosition();
   }
 
   function bindChartDom(element: HTMLDivElement) {
@@ -658,7 +741,7 @@ export default function MarketTechnicalChart({
         });
         bollSeriesRef.current[line.key] = series;
       }
-      series.applyOptions({ visible: showBollinger });
+      series.applyOptions({ color: line.color, visible: showBollinger });
       const valuesByTime = new Map<number, number>();
       for (const point of indicators) {
         const value = point.bollinger[line.key];
@@ -722,7 +805,7 @@ export default function MarketTechnicalChart({
         rsiSeriesRef.current[line.key] = series;
         if (line.key === "rsi") rsiPrimarySeriesRef.current = series;
       }
-      series.applyOptions({ visible: showRsi });
+      series.applyOptions({ color: line.color, visible: showRsi });
       const lineData = projectedIndicatorLineData(line.key);
       if (lineData.length === 0) {
         series.setData([]);
@@ -761,7 +844,7 @@ export default function MarketTechnicalChart({
         diffSeriesRef.current[line.key] = series;
         diffPrimarySeriesRef.current = series;
       }
-      series.applyOptions({ visible: showRsi });
+      series.applyOptions({ color: line.color, visible: showRsi });
       const lineData = projectedIndicatorLineData(line.key);
       if (lineData.length === 0) {
         series.setData([]);
@@ -804,9 +887,10 @@ export default function MarketTechnicalChart({
   function renderRsiReferenceLines(chart: IChartApi, shouldRender: boolean) {
     const first = candlesRef.current[0];
     const last = candlesRef.current.at(-1);
+    const theme = chartThemeRef.current;
     const refs = [
-      { key: "ref70", value: 70, color: "#94a3b8", lineStyle: LineStyle.Dashed },
-      { key: "ref30", value: 30, color: "#94a3b8", lineStyle: LineStyle.Dashed }
+      { key: "ref70", value: 70, color: theme.rsiReference, lineStyle: LineStyle.Dashed },
+      { key: "ref30", value: 30, color: theme.rsiReference, lineStyle: LineStyle.Dashed }
     ] as const;
     for (const refLine of refs) {
       let series = rsiSeriesRef.current[refLine.key];
@@ -821,7 +905,7 @@ export default function MarketTechnicalChart({
         });
         rsiSeriesRef.current[refLine.key] = series;
       }
-      series.applyOptions({ visible: shouldRender });
+      series.applyOptions({ color: refLine.color, visible: shouldRender });
       if (!first || !last) {
         series.setData([]);
       } else if (candleTime(first) === candleTime(last)) {
@@ -838,10 +922,11 @@ export default function MarketTechnicalChart({
   function renderDiffReferenceLines(chart: IChartApi, shouldRender: boolean) {
     const first = candlesRef.current[0];
     const last = candlesRef.current.at(-1);
+    const theme = chartThemeRef.current;
     const refs = [
-      { key: "ref0", value: 0, color: "#64748b", lineStyle: LineStyle.Dashed },
-      { key: "ref12", value: 12, color: "#cbd5e1", lineStyle: LineStyle.Solid },
-      { key: "ref-12", value: -12, color: "#cbd5e1", lineStyle: LineStyle.Solid }
+      { key: "ref0", value: 0, color: theme.diffReference, lineStyle: LineStyle.Dashed },
+      { key: "ref12", value: 12, color: theme.diffBand, lineStyle: LineStyle.Solid },
+      { key: "ref-12", value: -12, color: theme.diffBand, lineStyle: LineStyle.Solid }
     ] as const;
     for (const refLine of refs) {
       let series = diffSeriesRef.current[refLine.key];
@@ -856,7 +941,7 @@ export default function MarketTechnicalChart({
         });
         diffSeriesRef.current[refLine.key] = series;
       }
-      series.applyOptions({ visible: shouldRender });
+      series.applyOptions({ color: refLine.color, visible: shouldRender });
       if (!first || !last) {
         series.setData([]);
       } else if (candleTime(first) === candleTime(last)) {
@@ -1105,6 +1190,11 @@ function formatDiffHtml(value: number | null | undefined) {
   const abs = Math.abs(value);
   const className = abs > 15 ? "diff-strong" : abs > 12 ? "diff-watch" : "diff-normal";
   return `<span class="${className}">${value.toFixed(2)}</span>`;
+}
+
+function readChartThemeMode(): ChartThemeMode {
+  if (typeof document === "undefined") return "light";
+  return document.body.dataset.theme === "dark" ? "dark" : "light";
 }
 
 function uniqueCandlesByChartTime(candles: MarketCandle[]) {
