@@ -45,6 +45,7 @@ export type MarketTechnicalChartProps = {
   indicatorStatusText?: string;
   loadingText?: string;
   fitAnchorVersion?: number;
+  initialVisibleCandles?: number;
   comparisonLine?: ChartComparisonLine | null;
   countdownTargetMs?: number | null;
   toolbar?: ReactNode;
@@ -131,6 +132,7 @@ export default function MarketTechnicalChart({
   indicatorStatusText,
   loadingText = "加载历史中...",
   fitAnchorVersion = 0,
+  initialVisibleCandles = INITIAL_VISIBLE_CANDLES,
   comparisonLine = null,
   countdownTargetMs = null,
   toolbar
@@ -474,7 +476,7 @@ export default function MarketTechnicalChart({
     previousFirstTimeRef.current = nextFirst;
     previousLengthRef.current = chartCandles.length;
     restoreCrosshairPosition();
-  }, [candles, indicators, showBollinger, showRsi, interval]);
+  }, [candles, indicators, showBollinger, showRsi, interval, initialVisibleCandles]);
 
   useEffect(() => {
     const mainChart = mainChartRef.current;
@@ -507,7 +509,7 @@ export default function MarketTechnicalChart({
     if (fitAnchorVersion > 0 && candlesRef.current.length > 0) {
       window.requestAnimationFrame(() => setInitialVisibleRange());
     }
-  }, [fitAnchorVersion]);
+  }, [fitAnchorVersion, initialVisibleCandles]);
 
   useEffect(() => {
     renderComparisonLine();
@@ -1008,7 +1010,7 @@ export default function MarketTechnicalChart({
   }
 
   function setInitialVisibleRange() {
-    const visibleBars = Math.min(candlesRef.current.length, INITIAL_VISIBLE_CANDLES);
+    const visibleBars = Math.min(candlesRef.current.length, initialVisibleCandles);
     const rightPadding = anchorRightPaddingBars(visibleBars);
     setVisibleRange({
       from: (candlesRef.current.length - visibleBars - 0.5) as Logical,
@@ -1018,9 +1020,9 @@ export default function MarketTechnicalChart({
 
   function shouldReanchorAfterBootstrap(previousLength: number, nextLength: number, addedBefore: number) {
     if (previousLength <= 0) return false;
-    if (previousLength >= INITIAL_VISIBLE_CANDLES) return false;
-    if (addedBefore > 0) return nextLength >= Math.min(INITIAL_VISIBLE_CANDLES, previousLength + addedBefore);
-    return nextLength >= INITIAL_VISIBLE_CANDLES;
+    if (previousLength >= initialVisibleCandles) return false;
+    if (addedBefore > 0) return nextLength >= Math.min(initialVisibleCandles, previousLength + addedBefore);
+    return nextLength >= initialVisibleCandles;
   }
 
   function handleMainWidthChange(nextWidth: number) {

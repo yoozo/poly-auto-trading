@@ -34,6 +34,9 @@ const POLYMARKET_INTERVAL_MS: Record<PolymarketInterval, number> = {
   "4h": 4 * 60 * ONE_MINUTE_MS,
 };
 const MAX_VISIBLE_MARKET_PILLS = 5;
+const COMPACT_VISIBLE_CANDLES = 50;
+const WIDE_VISIBLE_CANDLES = 100;
+const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
 const ET_TIME_ZONE = "America/New_York";
 const MONTH_INDEX: Record<string, number> = {
   january: 0,
@@ -63,6 +66,11 @@ export default function BTCWatchPage() {
   const [indicatorPoints, setIndicatorPoints] = useState<MarketIndicatorPoint[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [initialVisibleCandles, setInitialVisibleCandles] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia(WIDE_LAYOUT_QUERY).matches
+      ? WIDE_VISIBLE_CANDLES
+      : COMPACT_VISIBLE_CANDLES
+  );
   const [fitAnchorVersion, setFitAnchorVersion] = useState(0);
   const [polymarketInterval, setPolymarketInterval] = useState<PolymarketInterval>(() => {
     const saved = localStorage.getItem(POLY_INTERVAL_KEY);
@@ -79,6 +87,21 @@ export default function BTCWatchPage() {
   const activeIntervalRef = useRef<CandleInterval>(interval);
   // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
   const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(WIDE_LAYOUT_QUERY);
+    const syncVisibleCandles = () => {
+      const nextVisibleCandles = mediaQuery.matches ? WIDE_VISIBLE_CANDLES : COMPACT_VISIBLE_CANDLES;
+      setInitialVisibleCandles((current) => {
+        if (current === nextVisibleCandles) return current;
+        setFitAnchorVersion((version) => version + 1);
+        return nextVisibleCandles;
+      });
+    };
+    syncVisibleCandles();
+    mediaQuery.addEventListener("change", syncVisibleCandles);
+    return () => mediaQuery.removeEventListener("change", syncVisibleCandles);
+  }, []);
 
   const { data: latestCandles = [], error } = useQuery({
     queryKey: ["candles", interval],
@@ -377,7 +400,7 @@ export default function BTCWatchPage() {
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((value) => {
       const nextValue = !value;
-      if (nextValue) setFitAnchorVersion((version) => version + 1);
+      setFitAnchorVersion((version) => version + 1);
       return nextValue;
     });
   }, []);
@@ -397,6 +420,7 @@ export default function BTCWatchPage() {
           isLoadingMore={isLoadingMore}
           latestStreamStatus={streamStatus}
           fitAnchorVersion={fitAnchorVersion}
+          initialVisibleCandles={initialVisibleCandles}
           comparisonLine={comparisonLine}
           countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
           toolbar={
