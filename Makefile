@@ -16,10 +16,16 @@ API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 5173
+POLYMARKET_EVENT_INPUT := $(or $(SLUG),$(word 2,$(MAKECMDGOALS)))
+
+ifneq ($(filter poly-event,$(MAKECMDGOALS)),)
+%:
+	@:
+endif
 
 .PHONY: help install install-api install-web dev dev-api dev-web \
 	db-up db-create migrate migrate-down migrate-current migrate-history \
-	lsof test test-api test-web lint lint-api build build-web check clean clean-api clean-web
+	lsof poly-event test test-api test-web lint lint-api build build-web check clean clean-api clean-web
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nCommands:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -65,6 +71,16 @@ lsof: ## Show processes listening on API, web, and database ports.
 		echo "== port $$port =="; \
 		lsof -nP -iTCP:$$port -sTCP:LISTEN || true; \
 	done
+
+poly-event: ## Resolve a Polymarket event slug/URL. Usage: make poly-event SLUG=btc-updown-5m-1781443800
+	@test -n "$(POLYMARKET_EVENT_INPUT)" || (echo "Usage: make poly-event <event-slug-or-url>" >&2; exit 2)
+	@input="$(POLYMARKET_EVENT_INPUT)"; \
+	slug="$${input#https://polymarket.com/event/}"; \
+	slug="$${slug#http://polymarket.com/event/}"; \
+	slug="$${slug%%\?*}"; \
+	slug="$${slug%%/*}"; \
+	curl -s "https://gamma-api.polymarket.com/events/slug/$$slug" \
+		| jq '.markets[] | {question, conditionId, outcomes: (.outcomes | fromjson), clobTokenIds: (.clobTokenIds | fromjson), negRisk, tickSize: .orderPriceMinTickSize}'
 
 migrate: ## Run Alembic migrations.
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) alembic upgrade head

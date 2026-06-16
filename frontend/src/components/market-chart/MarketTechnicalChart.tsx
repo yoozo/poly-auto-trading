@@ -44,6 +44,7 @@ export type MarketTechnicalChartProps = {
   loadingText?: string;
   fitAnchorVersion?: number;
   comparisonLine?: ChartComparisonLine | null;
+  countdownTargetMs?: number | null;
 };
 
 type BollKey = "middle" | "upper" | "lower";
@@ -89,7 +90,8 @@ export default function MarketTechnicalChart({
   indicatorStatusText,
   loadingText = "加载历史中...",
   fitAnchorVersion = 0,
-  comparisonLine = null
+  comparisonLine = null,
+  countdownTargetMs = null
 }: MarketTechnicalChartProps) {
   const mainContainerRef = useRef<HTMLDivElement | null>(null);
   const rsiContainerRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +137,7 @@ export default function MarketTechnicalChart({
   const diffScaleInitializedRef = useRef(false);
 
   const intervalRef = useRef(interval);
+  const countdownTargetMsRef = useRef<number | null>(countdownTargetMs);
   const showRsiRef = useRef(showRsi);
   const isLoadingMoreRef = useRef(isLoadingMore);
   const onLoadMoreRef = useRef(onLoadMore);
@@ -295,10 +298,11 @@ export default function MarketTechnicalChart({
 
   useEffect(() => {
     intervalRef.current = interval;
+    countdownTargetMsRef.current = countdownTargetMs;
     showRsiRef.current = showRsi;
     isLoadingMoreRef.current = isLoadingMore;
     onLoadMoreRef.current = onLoadMore;
-  }, [interval, showRsi, isLoadingMore, onLoadMore]);
+  }, [interval, countdownTargetMs, showRsi, isLoadingMore, onLoadMore]);
 
   useEffect(() => {
     initializedRef.current = false;
@@ -411,7 +415,7 @@ export default function MarketTechnicalChart({
     const timer = window.setInterval(updateCountdown, 1000);
     updateCountdown();
     return () => window.clearInterval(timer);
-  }, [interval, latestCandle]);
+  }, [countdownTargetMs, latestCandle]);
 
   useEffect(() => {
     if (fitAnchorVersion > 0 && candlesRef.current.length > 0) {
@@ -922,13 +926,12 @@ export default function MarketTechnicalChart({
 
   function updateCountdown() {
     const element = countdownRef.current;
-    const latest = candlesRef.current.at(-1);
-    if (!element || !latest) {
+    const targetMs = countdownTargetMsRef.current;
+    if (!element || targetMs == null || !Number.isFinite(targetMs)) {
       if (element) element.hidden = true;
       return;
     }
-    const closeAt = new Date(latest.open_time).getTime() + intervalMs(intervalRef.current);
-    const remainingSeconds = Math.max(0, Math.ceil((closeAt - Date.now()) / 1000));
+    const remainingSeconds = Math.max(0, Math.ceil((targetMs - Date.now()) / 1000));
     const minutes = Math.floor(remainingSeconds / 60);
     const seconds = remainingSeconds % 60;
     element.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`;

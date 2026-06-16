@@ -23,6 +23,7 @@ type RouteKey = "/dashboard" | "/btc-watch" | "/signals" | "/reports" | "/telegr
 type ThemeMode = "light" | "dark";
 
 const THEME_MODE_KEY = "poly-auto.themeMode";
+const SIDER_COLLAPSED_KEY = "poly-auto.siderCollapsed";
 
 const route = {
   path: "/",
@@ -48,6 +49,7 @@ function renderPage(pathname: RouteKey) {
 export default function App() {
   const [pathname, setPathname] = useState<RouteKey>("/dashboard");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
+  const [siderCollapsed, setSiderCollapsed] = useState(() => readSiderCollapsed());
   const pageTitle = pathname === "/btc-watch" ? false : route.routes.find((item) => item.path === pathname)?.name;
 
   useEffect(() => {
@@ -71,6 +73,12 @@ export default function App() {
         logo={false}
         route={route}
         location={{ pathname }}
+        collapsed={siderCollapsed}
+        breakpoint={false}
+        onCollapse={(collapsed) => {
+          setSiderCollapsed(collapsed);
+          localStorage.setItem(SIDER_COLLAPSED_KEY, collapsed ? "1" : "0");
+        }}
         menuItemRender={(item, dom) => (
           <button
             className="menu-link"
@@ -105,4 +113,8 @@ export default function App() {
 
 function readThemeMode(): ThemeMode {
   return localStorage.getItem(THEME_MODE_KEY) === "dark" ? "dark" : "light";
+}
+
+function readSiderCollapsed() {
+  return localStorage.getItem(SIDER_COLLAPSED_KEY) === "1";
 }

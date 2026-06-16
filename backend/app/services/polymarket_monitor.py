@@ -39,8 +39,11 @@ class PolymarketMarketMonitor:
             service_health_store.set("polymarket_ws", "idle")
             return
         self._tasks = [
+            # 定时刷新任务：每个边界窗口到期时补齐市场快照，解决首次启动和周期发现问题
             asyncio.create_task(self.refresh_loop(), name="polymarket-market-refresh"),
+            # WebSocket 任务：监听实时推送并发现市场变化；变化时触发订阅重建和快速兜底
             asyncio.create_task(self.ws_loop(), name="polymarket-market-ws"),
+            # 广播任务：按固定周期把变更汇总后推送前端，降低瞬时抖动导致的高频更新
             asyncio.create_task(self.broadcast_loop(), name="polymarket-market-broadcast"),
         ]
 
@@ -145,20 +148,26 @@ class PolymarketMarketMonitor:
                 backoff = min(backoff * 2, 30.0)
 
     async def _ws_once(self) -> None:
+        # 等待 token 列表准备好；若还没有可订阅市场，阻塞等待，避免空订阅导致无效连接。
         token_ids = await self._wait_for_token_ids()
         service_health_store.set(
             "polymarket_ws",
             "connecting",
             metadata={"token_count": len(token_ids), "endpoint": settings.polymarket_ws_market_url},
         )
+        # 建立 WS 连接后立即发送订阅请求，进入运行态，并启动心跳/订阅变更监听/消息接收三个并发任务。
         async with websockets.connect(settings.polymarket_ws_market_url, ping_interval=None) as websocket:
             await websocket.send(json.dumps(subscription_payload(token_ids)))
             service_health_store.set("polymarket_ws", "running", metadata={"token_count": len(token_ids)})
+            # ping_task：保持连接活性
             ping_task = asyncio.create_task(self._ping_loop(websocket), name="polymarket-market-ping")
+            # token_task：监听 token 集合变化，变化则视为订阅需重建（抛出重连异常）
             token_task = asyncio.create_task(self._token_change_event.wait(), name="polymarket-token-change")
+            # receive_task：持续读取服务端推送，处理盘口/市场变更消息
             receive_task = asyncio.create_task(websocket.recv(), name="polymarket-market-recv")
             try:
                 while True:
+                    # 任何一个任务先完成就处理：收到消息则消费并重建读取任务；订阅变更则触发重连。
                     done, pending = await asyncio.wait(
                         {token_task, receive_task},
                         return_when=asyncio.FIRST_COMPLETED,
@@ -169,11 +178,14 @@ class PolymarketMarketMonitor:
                     if receive_task in done:
                         raw_message = receive_task.result()
                         await self.handle_raw_message(raw_message)
+                        # 每次处理完一条消息后继续监听下一条
                         receive_task = asyncio.create_task(websocket.recv(), name="polymarket-market-recv")
                     for task in pending:
+                        # 防御式：若 pending 任务已提前结束，取一次结果避免 silent exception
                         if task.done():
                             task.result()
             finally:
+                # 连接退出时统一取消子任务并等待关闭，避免泄漏
                 ping_task.cancel()
                 token_task.cancel()
                 receive_task.cancel()

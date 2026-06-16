@@ -621,13 +621,51 @@ body[data-theme="dark"] {
   color: #b42318;
 }
 
+.polymarket-outcome-price {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.polymarket-outcome.up .polymarket-outcome-price {
+  background: #e7f6ee;
+  box-shadow: inset 0 0 0 1px #8fd5ae;
+}
+
+.polymarket-outcome.down .polymarket-outcome-price {
+  background: #fff1ef;
+  box-shadow: inset 0 0 0 1px #ffa39e;
+}
+
 .polymarket-quote-grid {
-  grid-template-columns: repeat(3, auto minmax(52px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   color: #667085;
   font-size: 12px;
 }
 
-.polymarket-quote-grid strong {
+.polymarket-quote-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.polymarket-quote-item span,
+.polymarket-quote-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.polymarket-quote-item strong {
   color: #17202a;
   font-variant-numeric: tabular-nums;
 }
@@ -1050,4 +1088,75 @@ body[data-theme="dark"] .polymarket-orderbook-row:nth-child(2n + 1) {
 
 .rsi-chart {
   height: 220px;
+}
+
+@media (max-width: 1360px) {
+  .watch-page:not(.watch-page-fullscreen) {
+    height: calc(100vh - 112px);
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) clamp(260px, 34vh, 340px);
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .watch-chart-card,
+  .watch-page:not(.watch-page-fullscreen) .polymarket-panel {
+    grid-column: 1;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .btc-watch-chart {
+    min-height: 0;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-panel {
+    min-height: 0;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-panel .ant-card-body {
+    overflow: auto;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .watch-page:not(.watch-page-fullscreen) {
+    grid-template-rows: auto minmax(0, 1fr) minmax(280px, 38vh);
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-outcome {
+    padding: 8px;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-outcome-price {
+    min-width: 44px;
+    padding: 3px 6px;
+    font-size: 16px;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-quote-grid {
+    gap: 4px;
+    font-size: 11px;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-quote-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+  }
+
+  .watch-page:not(.watch-page-fullscreen) .polymarket-orderbook {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .watch-page:not(.watch-page-fullscreen) .polymarket-quote-grid {
+    display: none;
+  }
 }

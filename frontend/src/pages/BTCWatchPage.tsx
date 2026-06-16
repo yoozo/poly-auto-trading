@@ -106,6 +106,7 @@ export default function BTCWatchPage() {
     polymarketMarkets.find((market) => market.window === "current") ??
     polymarketMarkets.find((market) => market.window === "next") ??
     polymarketMarkets[0];
+  const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
@@ -431,6 +432,7 @@ export default function BTCWatchPage() {
           latestStreamStatus={streamStatus}
           fitAnchorVersion={fitAnchorVersion}
           comparisonLine={comparisonLine}
+          countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
         />
       </Card>
       {!isFullscreen && (
@@ -548,19 +550,26 @@ function PolymarketBtcPanel({
 }
 
 function OutcomeQuoteCard({ quote }: { quote: PolymarketOutcomeQuote }) {
+  const displayPrice = formatCents(quote.buy_price ?? quote.best_ask ?? quote.price);
   return (
     <div className={`polymarket-outcome ${quote.name.toLowerCase() === "up" ? "up" : "down"}`}>
       <div className="polymarket-outcome-title">
         <span>{quote.name}</span>
-        <strong>{formatCents(quote.buy_price ?? quote.best_ask ?? quote.price)}</strong>
+        <strong className="polymarket-outcome-price">{displayPrice}</strong>
       </div>
       <div className="polymarket-quote-grid">
-        <span>Sell</span>
-        <strong>{formatCents(quote.sell_price ?? quote.best_bid)}</strong>
-        <span>Buy</span>
-        <strong>{formatCents(quote.buy_price ?? quote.best_ask)}</strong>
-        <span>Last</span>
-        <strong>{formatCents(quote.last_trade_price)}</strong>
+        <span className="polymarket-quote-item">
+          <span>Sell</span>
+          <strong>{formatCents(quote.sell_price ?? quote.best_bid)}</strong>
+        </span>
+        <span className="polymarket-quote-item">
+          <span>Buy</span>
+          <strong>{formatCents(quote.buy_price ?? quote.best_ask)}</strong>
+        </span>
+        <span className="polymarket-quote-item">
+          <span>Last</span>
+          <strong>{formatCents(quote.last_trade_price)}</strong>
+        </span>
       </div>
       <OrderBook quote={quote} />
     </div>
