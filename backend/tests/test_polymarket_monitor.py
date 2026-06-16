@@ -1,12 +1,15 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import websockets
 
 from app.services import polymarket_monitor
 from app.services.polymarket_monitor import (
     PolymarketMarketMonitor,
     calculate_next_refresh_delay,
     calculate_signal_refresh_delay,
+    cancel_tasks,
 )
 
 
@@ -115,3 +118,14 @@ async def test_wait_until_next_refresh_coalesces_repeated_signal(monkeypatch: py
 
     assert sleep_delays == [20]
     assert monitor._refresh_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_tasks_suppresses_connection_closed_from_done_task() -> None:
+    async def closed_task() -> None:
+        raise websockets.exceptions.ConnectionClosedError(None, None)
+
+    task = asyncio.create_task(closed_task())
+    await asyncio.sleep(0)
+
+    await cancel_tasks(task)

@@ -141,6 +141,16 @@ class PolymarketMarketMonitor:
             except PolymarketSubscriptionChanged:
                 service_health_store.set("polymarket_ws", "reconnecting", metadata={"reason": "subscription_changed"})
                 backoff = 1.0
+            except websockets.exceptions.ConnectionClosed as exc:
+                logger.info("Polymarket market websocket closed; reconnecting: %s", exc)
+                service_health_store.set(
+                    "polymarket_ws",
+                    "reconnecting",
+                    last_error=str(exc),
+                    metadata={"reason": "connection_closed"},
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
             except Exception as exc:
                 logger.exception("Polymarket market websocket failed")
                 service_health_store.set("polymarket_ws", "reconnecting", last_error=str(exc))
@@ -299,7 +309,7 @@ async def cancel_tasks(*tasks: asyncio.Task) -> None:
     for task in tasks:
         try:
             await task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, websockets.exceptions.ConnectionClosed):
             pass
 
 

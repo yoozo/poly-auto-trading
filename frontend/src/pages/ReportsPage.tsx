@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Checkbox,
+  DatePicker,
   Form,
   Input,
   InputNumber,
@@ -14,6 +15,8 @@ import {
   Typography,
 } from "antd";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dayjs from "dayjs";
+import type { Dayjs } from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -31,6 +34,7 @@ const MARKET_PAGE_SIZE = 20;
 const MARKET_MATRIX_LOAD_THRESHOLD_PX = 96;
 const MARKET_MATRIX_COLUMN_WIDTH = 260;
 const MARKET_MATRIX_OVERSCAN = 3;
+const { RangePicker } = DatePicker;
 
 type AnalyzeForm = {
   input: string;
@@ -53,6 +57,7 @@ export default function ReportsPage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [onlyBilateral, setOnlyBilateral] = useState(false);
+  const debouncedSearchText = useDebouncedValue(searchText, 350);
 
   const accountsQuery = useQuery({
     queryKey: ["report-accounts"],
@@ -64,12 +69,12 @@ export default function ReportsPage() {
     enabled: Boolean(selectedAccountId),
   });
   const marketsQuery = useInfiniteQuery({
-    queryKey: ["account-markets", selectedAccountId, searchText, startDate, endDate, onlyBilateral],
+    queryKey: ["account-markets", selectedAccountId, debouncedSearchText, startDate, endDate, onlyBilateral],
     queryFn: ({ pageParam = 0 }) =>
       api.accountMarkets(selectedAccountId as string, {
         offset: pageParam,
         limit: MARKET_PAGE_SIZE,
-        search: searchText,
+        search: debouncedSearchText,
         startDate,
         endDate,
         onlyBilateral,
@@ -104,6 +109,7 @@ export default function ReportsPage() {
   const task = taskQuery.data;
   const isRunning = task?.status === "running" || analyzeMutation.isPending;
   const markets = useMemo(() => marketsQuery.data?.pages.flatMap((page) => page.items) ?? [], [marketsQuery.data]);
+  const filteredMarketTotal = marketsQuery.data?.pages[0]?.total ?? 0;
   const loadNextMarketPage = useCallback(() => {
     if (!marketsQuery.hasNextPage || marketsQuery.isFetchingNextPage) return;
     void marketsQuery.fetchNextPage();
@@ -211,28 +217,29 @@ export default function ReportsPage() {
           <Card
             className="market-details-card"
             title={
-              <Space size={8}>
-                <span>市场明细</span>
-                {marketsQuery.isFetching && (
-                  <Typography.Text type="secondary" className="inline-loading">
-                    <Spin size="small" /> 加载中
-                  </Typography.Text>
-                )}
-              </Space>
-            }
-            extra={
-              <ReportFilters
-                searchText={searchText}
-                startDate={startDate}
-                endDate={endDate}
-                onlyBilateral={onlyBilateral}
-                onSearchText={setSearchText}
-                onStartDate={setStartDate}
-                onEndDate={setEndDate}
-                onOnlyBilateral={setOnlyBilateral}
-              />
+              <div className="market-details-title">
+                <Space size={8} wrap>
+                  <span>市场明细</span>
+                  {!marketsQuery.isLoading && <Tag color="blue">已加载 {markets.length} / {filteredMarketTotal}</Tag>}
+                  {marketsQuery.isFetching && (
+                    <Typography.Text type="secondary" className="inline-loading">
+                      <Spin size="small" /> 加载中
+                    </Typography.Text>
+                  )}
+                </Space>
+              </div>
             }
           >
+            <ReportFilters
+              searchText={searchText}
+              startDate={startDate}
+              endDate={endDate}
+              onlyBilateral={onlyBilateral}
+              onSearchText={setSearchText}
+              onStartDate={setStartDate}
+              onEndDate={setEndDate}
+              onOnlyBilateral={setOnlyBilateral}
+            />
             {marketsQuery.error instanceof Error && (
               <Alert
                 type="error"
@@ -257,6 +264,17 @@ export default function ReportsPage() {
       )}
     </div>
   );
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [delayMs, value]);
+
+  return debouncedValue;
 }
 
 function ReportStats({ summary, loading }: { summary: AccountSummary | undefined; loading: boolean }) {
@@ -477,20 +495,43 @@ function ReportFilters({
   onEndDate: (value: string) => void;
   onOnlyBilateral: (value: boolean) => void;
 }) {
+  const dateRangeValue: [Dayjs | null, Dayjs | null] | null =
+    startDate || endDate
+      ? [startDate ? dayjs(startDate) : null, endDate ? dayjs(endDate) : null]
+      : null;
+
   return (
-    <Space wrap size={8} className="report-filters">
-      <Typography.Text type="secondary">搜索</Typography.Text>
-      <Input
-        size="small"
-        value={searchText}
-        onChange={(event) => onSearchText(event.target.value)}
-        placeholder="btc / 关键词"
-        allowClear
-      />
-      <Typography.Text type="secondary">开始</Typography.Text>
-      <Input size="small" type="date" value={startDate} onChange={(event) => onStartDate(event.target.value)} />
-      <Typography.Text type="secondary">结束</Typography.Text>
-      <Input size="small" type="date" value={endDate} onChange={(event) => onEndDate(event.target.value)} />
+    <div className="report-filters">
+      <div className="report-filter-group report-filter-search">
+        <Typography.Text type="secondary">搜索</Typography.Text>
+        <Input
+          size="small"
+          value={searchText}
+          onChange={(event) => onSearchText(event.target.value)}
+          placeholder="btc / 关键词"
+          allowClear
+        />
+      </div>
+      <div className="report-filter-group report-filter-date">
+        <Typography.Text type="secondary">市场日期</Typography.Text>
+        <RangePicker
+          size="small"
+          value={dateRangeValue}
+          format="YYYY-MM-DD"
+          allowClear
+          inputReadOnly
+          placeholder={["开始日期", "结束日期"]}
+          presets={[
+            { label: "今天", value: [dayjs(), dayjs()] },
+            { label: "最近 7 天", value: [dayjs().subtract(6, "day"), dayjs()] },
+            { label: "最近 30 天", value: [dayjs().subtract(29, "day"), dayjs()] },
+          ]}
+          onChange={(_, dateStrings) => {
+            onStartDate(dateStrings[0] || "");
+            onEndDate(dateStrings[1] || "");
+          }}
+        />
+      </div>
       <Button
         size="small"
         onClick={() => {
@@ -503,7 +544,7 @@ function ReportFilters({
       <Checkbox checked={onlyBilateral} onChange={(event) => onOnlyBilateral(event.target.checked)}>
         只显示双向份额
       </Checkbox>
-    </Space>
+    </div>
   );
 }
 

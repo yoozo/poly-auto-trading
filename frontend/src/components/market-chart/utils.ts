@@ -2,6 +2,7 @@ import type { CandleInterval } from "../../api/client";
 import type { MarketCandle, MarketIndicatorPoint } from "./types";
 
 export type TimeValue = { time: number; value: number };
+const CHART_TIME_ZONE = "Asia/Shanghai";
 
 export function toUnixTime(value: string) {
   return Math.floor(new Date(value).getTime() / 1000);
@@ -79,7 +80,27 @@ export function formatSigned(value: number | null | undefined) {
 }
 
 export function formatTooltipTime(time: number) {
-  return new Date(time * 1000).toLocaleString();
+  return new Date(time * 1000).toLocaleString("zh-CN", {
+    timeZone: CHART_TIME_ZONE,
+    hour12: false,
+  });
+}
+
+export function formatAxisTime(time: number) {
+  const date = new Date(time * 1000);
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: CHART_TIME_ZONE,
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  const hour = value("hour");
+  const minute = value("minute");
+  if (hour && minute && `${hour}:${minute}` !== "00:00") return `${hour}:${minute}`;
+  return `${value("month")}月${value("day")}日`;
 }
 
 export function mergeCandles(existing: MarketCandle[], incoming: MarketCandle[]) {

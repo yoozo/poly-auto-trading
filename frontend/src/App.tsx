@@ -2,7 +2,6 @@ import {
   AlertOutlined,
   BarChartOutlined,
   BellOutlined,
-  DashboardOutlined,
   LineChartOutlined,
   MoonOutlined,
   SettingOutlined
@@ -13,13 +12,12 @@ import zhCN from "antd/locale/zh_CN";
 import { lazy, Suspense, useEffect, useState } from "react";
 
 const BTCWatchPage = lazy(() => import("./pages/BTCWatchPage"));
-const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const SignalsPage = lazy(() => import("./pages/SignalsPage"));
 const SystemStatusPage = lazy(() => import("./pages/SystemStatusPage"));
 const TelegramNotificationsPage = lazy(() => import("./pages/TelegramNotificationsPage"));
 
-type RouteKey = "/dashboard" | "/btc-watch" | "/signals" | "/reports" | "/telegram" | "/settings";
+type RouteKey = "/btc-watch" | "/signals" | "/reports" | "/telegram" | "/settings";
 type ThemeMode = "light" | "dark";
 
 const THEME_MODE_KEY = "poly-auto.themeMode";
@@ -28,7 +26,6 @@ const SIDER_COLLAPSED_KEY = "poly-auto.siderCollapsed";
 const route = {
   path: "/",
   routes: [
-    { path: "/dashboard", name: "总览", icon: <DashboardOutlined /> },
     { path: "/btc-watch", name: "BTC 看盘", icon: <LineChartOutlined /> },
     { path: "/signals", name: "信号", icon: <AlertOutlined /> },
     { path: "/telegram", name: "Telegram 提醒", icon: <BellOutlined /> },
@@ -43,11 +40,11 @@ function renderPage(pathname: RouteKey) {
   if (pathname === "/reports") return <ReportsPage />;
   if (pathname === "/telegram") return <TelegramNotificationsPage />;
   if (pathname === "/settings") return <SystemStatusPage />;
-  return <DashboardPage />;
+  return <BTCWatchPage />;
 }
 
 export default function App() {
-  const [pathname, setPathname] = useState<RouteKey>("/dashboard");
+  const [pathname, setPathname] = useState<RouteKey>("/btc-watch");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
   const [siderCollapsed, setSiderCollapsed] = useState(() => readSiderCollapsed());
   const pageTitle = pathname === "/btc-watch" ? false : route.routes.find((item) => item.path === pathname)?.name;
@@ -83,7 +80,7 @@ export default function App() {
           <button
             className="menu-link"
             type="button"
-            onClick={() => setPathname((item.path || "/dashboard") as RouteKey)}
+            onClick={() => setPathname((item.path || "/btc-watch") as RouteKey)}
           >
             {dom}
           </button>

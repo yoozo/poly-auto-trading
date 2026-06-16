@@ -164,6 +164,41 @@ def test_account_markets_returns_paginated_filtered_page(monkeypatch) -> None:
     assert [item["market_id"] for item in body["items"]] == ["eth"]
 
 
+def test_account_markets_applies_query_filters_on_api(monkeypatch) -> None:
+    async def fake_account_exists(session, account_id):
+        return True
+
+    btc = make_market_performance("btc", "BTC Up or Down")
+    btc.market_date = datetime(2026, 6, 13, tzinfo=timezone.utc)
+    btc.up_shares = 1
+    btc.down_shares = 0
+    old_xrp = make_market_performance("old-xrp", "XRP Up or Down")
+    old_xrp.market_date = datetime(2026, 6, 12, tzinfo=timezone.utc)
+    old_xrp.up_shares = 1
+    old_xrp.down_shares = 1
+    xrp = make_market_performance("xrp", "XRP Up or Down")
+    xrp.market_date = datetime(2026, 6, 13, 12, tzinfo=timezone.utc)
+    xrp.up_shares = 1
+    xrp.down_shares = 1
+
+    async def fake_get_report_snapshot(session, account_id):
+        return SimpleNamespace(markets=[btc, old_xrp, xrp])
+
+    monkeypatch.setattr(routes_reports, "account_exists", fake_account_exists)
+    monkeypatch.setattr(routes_reports, "get_report_snapshot", fake_get_report_snapshot)
+
+    client = make_client()
+    response = client.get(
+        "/api/reports/accounts/0xabc/markets"
+        "?search=xrp&start_date=2026-06-13&end_date=2026-06-13&only_bilateral=true"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert [item["market_id"] for item in body["items"]] == ["xrp"]
+
+
 @pytest.mark.asyncio
 async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> None:
     calls: dict[str, object] = {}
@@ -292,6 +327,20 @@ def test_report_summary_aggregates_activity_rules() -> None:
     assert markets[0].incomplete is True
 
 
+def test_market_performance_skips_activity_without_market_identity() -> None:
+    activity = make_activity("missing-market", "MAKER_REBATE", None, None, "2", "0", "0")
+    activity.title = None
+    activity.slug = None
+    activity.condition_id = None
+
+    summary = build_account_summary("0xabc", [activity])
+    markets = build_market_performance([activity])
+
+    assert summary.activity_count == 1
+    assert summary.market_count == 0
+    assert markets == []
+
+
 def test_market_performance_sorts_by_market_close_time_desc() -> None:
     activities = [
         make_activity(
@@ -382,6 +431,52 @@ def test_market_metadata_overrides_inferred_market_result() -> None:
     assert markets[0].result == "下跌"
     assert markets[0].title == "Bitcoin Up or Down"
     assert markets[0].market_date == datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+
+
+def test_up_down_title_market_date_is_not_overridden_by_event_metadata() -> None:
+    activities = [
+        make_activity(
+            "xrp-0940",
+            "TRADE",
+            "BUY",
+            "Down",
+            "1",
+            "0",
+            "1",
+            title="XRP Up or Down - June 13, 9:40AM-9:45AM ET",
+            slug="xrp-0940",
+            timestamp=datetime(2026, 6, 13, 13, 44, tzinfo=timezone.utc),
+        ),
+        make_activity(
+            "xrp-0945",
+            "TRADE",
+            "BUY",
+            "Up",
+            "1",
+            "0",
+            "1",
+            title="XRP Up or Down - June 13, 9:45AM-9:50AM ET",
+            slug="xrp-0945",
+            timestamp=datetime(2026, 6, 13, 13, 49, tzinfo=timezone.utc),
+        ),
+    ]
+    shared_event_date = "2026-06-13T12:00:00Z"
+    metadata = {
+        activity.slug: SimpleNamespace(
+            slug=activity.slug,
+            closed=False,
+            outcome=None,
+            raw_outcome=None,
+            event={"endDate": shared_event_date},
+            market={"question": activity.title},
+        )
+        for activity in activities
+    }
+
+    markets = {market.slug: market for market in build_market_performance(activities, market_metadata=metadata)}
+
+    assert markets["xrp-0940"].market_date == datetime(2026, 6, 13, 13, 45, tzinfo=timezone.utc)
+    assert markets["xrp-0945"].market_date == datetime(2026, 6, 13, 13, 50, tzinfo=timezone.utc)
 
 
 def test_parse_metadata_date_handles_nested_state_snake_case() -> None:
@@ -602,6 +697,7 @@ def make_activity(
     size: str,
     title: str = "BTC Up or Down",
     timestamp: datetime | None = None,
+    slug: str = "btc-up-down",
 ):
     amount = Decimal(recovery) if activity_type in {"SELL", "REDEEM", "MERGE"} else Decimal(usdc_size)
     if activity_type == "TRADE" and side == "SELL":
@@ -611,7 +707,7 @@ def make_activity(
         timestamp=timestamp or datetime(2026, 1, 1, tzinfo=timezone.utc),
         type=activity_type,
         condition_id="0x" + "1" * 64,
-        slug="btc-up-down",
+        slug=slug,
         event_slug="btc",
         title=title,
         side=side,

@@ -274,6 +274,7 @@ def filter_market_performance(
     end_date: str,
     only_bilateral: bool,
 ) -> list[MarketPerformance]:
+    # 市场明细统一在接口层过滤/分页，前端只消费已筛选后的矩阵页。
     keyword = search.strip().lower()
     start = parse_filter_date(start_date, end_of_day=False)
     end = parse_filter_date(end_date, end_of_day=True)

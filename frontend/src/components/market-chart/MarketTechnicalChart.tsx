@@ -15,10 +15,12 @@ import {
   type UTCTimestamp
 } from "lightweight-charts";
 import { useCallback, useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import type { CandleInterval } from "../../api/client";
 import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
 import {
   candleTime,
+  formatAxisTime,
   formatFixed,
   formatPrice,
   formatSigned,
@@ -45,6 +47,7 @@ export type MarketTechnicalChartProps = {
   fitAnchorVersion?: number;
   comparisonLine?: ChartComparisonLine | null;
   countdownTargetMs?: number | null;
+  toolbar?: ReactNode;
 };
 
 type BollKey = "middle" | "upper" | "lower";
@@ -91,11 +94,13 @@ export default function MarketTechnicalChart({
   loadingText = "加载历史中...",
   fitAnchorVersion = 0,
   comparisonLine = null,
-  countdownTargetMs = null
+  countdownTargetMs = null,
+  toolbar
 }: MarketTechnicalChartProps) {
   const mainContainerRef = useRef<HTMLDivElement | null>(null);
   const rsiContainerRef = useRef<HTMLDivElement | null>(null);
   const diffContainerRef = useRef<HTMLDivElement | null>(null);
+  const chartRootRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const countdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -126,6 +131,9 @@ export default function MarketTechnicalChart({
   const pendingRangeRef = useRef<{ targets: IChartApi[]; range: LogicalRange } | null>(null);
   const rangeSyncFrameRef = useRef<number>(0);
   const syncingCrosshairRef = useRef(false);
+  const programmaticCrosshairRef = useRef(false);
+  const programmaticCrosshairFrameRef = useRef<number>(0);
+  const lastCrosshairTimeRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
   const loadMoreQueuedRef = useRef(false);
   const previousFirstTimeRef = useRef<number | null>(null);
@@ -155,10 +163,16 @@ export default function MarketTechnicalChart({
     .join(" · ");
 
   const chartOptions = useCallback(
-    (container: HTMLDivElement, showTimeScale: boolean, priceScaleMargins = { top: 0.12, bottom: 0.12 }) => ({
+    (
+      container: HTMLDivElement,
+      showTimeScale: boolean,
+      priceScaleMargins = { top: 0.12, bottom: 0.12 },
+      showTimeLabels = showTimeScale,
+      minHeight = 120
+    ) => ({
       autoSize: true,
       width: Math.max(320, container.clientWidth),
-      height: Math.max(120, container.clientHeight),
+      height: Math.max(minHeight, container.clientHeight),
       localization: {
         locale: "zh-CN",
         timeFormatter: (time: Time) => {
@@ -188,7 +202,8 @@ export default function MarketTechnicalChart({
         borderColor: "#1f2937",
         timeVisible: true,
         secondsVisible: false,
-        allowShiftVisibleRangeOnWhitespace: true
+        allowShiftVisibleRangeOnWhitespace: true,
+        tickMarkFormatter: (time: Time) => (showTimeLabels && typeof time === "number" ? formatAxisTime(time) : "")
       },
       crosshair: { mode: CrosshairMode.Normal }
     }),
@@ -196,12 +211,12 @@ export default function MarketTechnicalChart({
   );
 
   useEffect(() => {
-    if (!mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
+    if (!chartRootRef.current || !mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
 
     // 主图、RSI、diff 分成三个 chart，方便不同价格轴范围独立控制，但时间轴必须联动。
     const mainChart = createChart(mainContainerRef.current, chartOptions(mainContainerRef.current, !showRsiRef.current));
-    const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }));
-    const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }));
+    const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }, false, 1));
+    const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }, true, 1));
     const candleSeries = mainChart.addSeries(CandlestickSeries, {
       upColor: "#0f7a4f",
       downColor: "#b42318",
@@ -266,12 +281,13 @@ export default function MarketTechnicalChart({
     const unbindRsiDom = bindChartDom(rsiContainerRef.current);
     const unbindDiffDom = bindChartDom(diffContainerRef.current);
     const resizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const width = Math.round(entry.contentRect.width);
+      const mainRect = mainContainerRef.current?.getBoundingClientRect();
+      if (!mainRect) return;
+      const width = Math.round(mainRect.width);
       handleMainWidthChange(width);
+      resizeCharts();
     });
-    resizeObserver.observe(mainContainerRef.current);
+    resizeObserver.observe(chartRootRef.current);
 
     return () => {
       unbindMainDom();
@@ -279,6 +295,7 @@ export default function MarketTechnicalChart({
       unbindDiffDom();
       if (rangeSyncFrameRef.current) window.cancelAnimationFrame(rangeSyncFrameRef.current);
       if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current);
+      if (programmaticCrosshairFrameRef.current) window.cancelAnimationFrame(programmaticCrosshairFrameRef.current);
       resizeObserver.disconnect();
       mainChart.remove();
       rsiChart.remove();
@@ -310,6 +327,7 @@ export default function MarketTechnicalChart({
     previousFirstTimeRef.current = null;
     previousLengthRef.current = 0;
     latestRangeRef.current = null;
+    lastCrosshairTimeRef.current = null;
     rsiScaleInitializedRef.current = false;
     diffScaleInitializedRef.current = false;
     hideTooltip();
@@ -389,6 +407,7 @@ export default function MarketTechnicalChart({
 
     previousFirstTimeRef.current = nextFirst;
     previousLengthRef.current = chartCandles.length;
+    restoreCrosshairPosition();
   }, [candles, indicators, showBollinger, showRsi, interval]);
 
   useEffect(() => {
@@ -408,6 +427,7 @@ export default function MarketTechnicalChart({
       renderRsi();
       renderDiff();
       if (latestRangeRef.current) setVisibleRange(latestRangeRef.current);
+      restoreCrosshairPosition();
     });
   }, [showRsi]);
 
@@ -451,6 +471,7 @@ export default function MarketTechnicalChart({
   function bindChartDom(element: HTMLDivElement) {
     const onPointerDown = () => {
       draggingRef.current = true;
+      lastCrosshairTimeRef.current = null;
       hideTooltip();
     };
     const onPointerUp = () => {
@@ -474,12 +495,18 @@ export default function MarketTechnicalChart({
         return;
       }
       const nearest = nearestTimeValue(mainCrosshairDataRef.current, time);
-      updateTooltipAt(nearest?.time ?? time);
+      const hoverTime = nearest?.time ?? time;
+      lastCrosshairTimeRef.current = hoverTime;
+      updateTooltipAt(hoverTime);
+    };
+    const onMouseLeave = () => {
+      lastCrosshairTimeRef.current = null;
+      hideTooltip();
     };
 
     element.addEventListener("pointerdown", onPointerDown, { passive: true });
     element.addEventListener("mousemove", onMouseMove, { passive: true });
-    element.addEventListener("mouseleave", hideTooltip);
+    element.addEventListener("mouseleave", onMouseLeave);
     window.addEventListener("pointerup", onPointerUp, { passive: true });
     window.addEventListener("pointercancel", onPointerUp, { passive: true });
     window.addEventListener("blur", onPointerUp, { passive: true });
@@ -487,7 +514,7 @@ export default function MarketTechnicalChart({
     return () => {
       element.removeEventListener("pointerdown", onPointerDown);
       element.removeEventListener("mousemove", onMouseMove);
-      element.removeEventListener("mouseleave", hideTooltip);
+      element.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
       window.removeEventListener("blur", onPointerUp);
@@ -495,12 +522,13 @@ export default function MarketTechnicalChart({
   }
 
   function updateTooltipFromParam(param: MouseEventParams<Time>) {
-    if (draggingRef.current || param.time === undefined) return;
+    if (draggingRef.current || programmaticCrosshairRef.current || param.time === undefined) return;
     const nearest = nearestTimeValue(mainCrosshairDataRef.current, Number(param.time));
     if (!nearest) {
       hideTooltip();
       return;
     }
+    lastCrosshairTimeRef.current = nearest.time;
     updateTooltipAt(nearest.time);
   }
 
@@ -515,15 +543,51 @@ export default function MarketTechnicalChart({
     if (!Number.isFinite(sourceTime)) return;
     syncingCrosshairRef.current = true;
     try {
-      const nearest = nearestTimeValue(targetData, sourceTime);
-      if (!nearest || !Number.isFinite(nearest.value)) {
-        targetChart.clearCrosshairPosition();
-        return;
-      }
-      targetChart.setCrosshairPosition(nearest.value, sourceTime as UTCTimestamp, targetSeries);
+      setChartCrosshair(targetChart, targetSeries, targetData, sourceTime);
     } finally {
       syncingCrosshairRef.current = false;
     }
+  }
+
+  function setChartCrosshair(
+    targetChart: IChartApi,
+    targetSeries: ISeriesApi<"Line"> | ISeriesApi<"Candlestick"> | null,
+    targetData: TimeValue[],
+    time: number
+  ) {
+    if (!targetSeries) return;
+    const nearest = nearestTimeValue(targetData, time);
+    if (!nearest || !Number.isFinite(nearest.value)) {
+      targetChart.clearCrosshairPosition();
+      return;
+    }
+    markProgrammaticCrosshair();
+    targetChart.setCrosshairPosition(nearest.value, time as UTCTimestamp, targetSeries);
+  }
+
+  function markProgrammaticCrosshair() {
+    programmaticCrosshairRef.current = true;
+    if (programmaticCrosshairFrameRef.current) window.cancelAnimationFrame(programmaticCrosshairFrameRef.current);
+    programmaticCrosshairFrameRef.current = window.requestAnimationFrame(() => {
+      programmaticCrosshairFrameRef.current = 0;
+      programmaticCrosshairRef.current = false;
+    });
+  }
+
+  function restoreCrosshairPosition() {
+    const time = lastCrosshairTimeRef.current;
+    if (time === null || !Number.isFinite(time)) return;
+    const mainChart = mainChartRef.current;
+    const rsiChart = rsiChartRef.current;
+    const diffChart = diffChartRef.current;
+    if (!mainChart) return;
+    // 数据刷新会触发 lightweight-charts 内部 crosshair 事件；刷新后按用户最后 hover 的 K 线恢复位置。
+    setChartCrosshair(mainChart, candleSeriesRef.current, mainCrosshairDataRef.current, time);
+    if (showRsiRef.current && rsiChart && diffChart) {
+      setChartCrosshair(rsiChart, rsiPrimarySeriesRef.current, rsiCrosshairDataRef.current, time);
+      setChartCrosshair(diffChart, diffPrimarySeriesRef.current, diffCrosshairDataRef.current, time);
+    }
+    updateTooltipAt(time);
   }
 
   function maybeLoadMore(range: LogicalRange | null) {
@@ -688,7 +752,6 @@ export default function MarketTechnicalChart({
       }
       series.setData(fullTimelineLineData(lineData));
       diffCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
-      updateDiffVisibleRange(lineData);
     }
     renderDiffReferenceLines(chart, showRsi);
     chart.priceScale("right").applyOptions({
@@ -697,17 +760,11 @@ export default function MarketTechnicalChart({
       scaleMargins: { top: 0.12, bottom: 0.12 }
     });
     if (showRsi && !diffScaleInitializedRef.current) {
-      chart.priceScale("right").setVisibleRange(DIFF_DEFAULT_RANGE);
+      // 首次打开时按当前数据给 diff 一个合适范围；之后实时刷新不再覆盖用户手动缩放。
+      const lineData = projectedIndicatorLineData("rsi_ema_diff");
+      chart.priceScale("right").setVisibleRange(lineData.length ? calculateDiffVisibleRange(lineData) : DIFF_DEFAULT_RANGE);
       diffScaleInitializedRef.current = true;
     }
-  }
-
-  function updateDiffVisibleRange(lineData: TimeValue[]) {
-    const chart = diffChartRef.current;
-    if (!chart || !showRsi || !lineData.length) return;
-    const currentRange = calculateDiffVisibleRange(lineData);
-    chart.priceScale("right").setVisibleRange(currentRange);
-    diffScaleInitializedRef.current = true;
   }
 
   function calculateDiffVisibleRange(lineData: TimeValue[]) {
@@ -917,10 +974,10 @@ export default function MarketTechnicalChart({
       mainChartRef.current.resize(Math.max(320, main.clientWidth), Math.max(120, main.clientHeight), true);
     }
     if (rsi && rsiChartRef.current && showRsiRef.current) {
-      rsiChartRef.current.resize(Math.max(320, rsi.clientWidth), Math.max(120, rsi.clientHeight), true);
+      rsiChartRef.current.resize(Math.max(320, rsi.clientWidth), Math.max(1, rsi.clientHeight), true);
     }
     if (diff && diffChartRef.current && showRsiRef.current) {
-      diffChartRef.current.resize(Math.max(320, diff.clientWidth), Math.max(80, diff.clientHeight), true);
+      diffChartRef.current.resize(Math.max(320, diff.clientWidth), Math.max(1, diff.clientHeight), true);
     }
   }
 
@@ -974,10 +1031,10 @@ export default function MarketTechnicalChart({
   }
 
   return (
-    <div className={showRsi ? "btc-watch-chart" : "btc-watch-chart btc-watch-chart-single"}>
-      <section className="btc-chart-panel">
+    <div ref={chartRootRef} className={showRsi ? "btc-watch-chart" : "btc-watch-chart btc-watch-chart-single"}>
+      {toolbar && <div className="btc-chart-toolbar">{toolbar}</div>}
+      <section className="btc-chart-panel btc-main-panel">
         <div className="btc-chart-title">
-          <strong>{symbol} K-line</strong>
           <div className="btc-chart-legend">
             {showBollinger &&
               BOLL_LINES.map((line) => (
@@ -996,10 +1053,10 @@ export default function MarketTechnicalChart({
           <div className="chart-tooltip" ref={tooltipRef} hidden />
         </div>
       </section>
-      <section className="btc-chart-panel" hidden={!showRsi}>
+      <section className="btc-chart-panel btc-rsi-panel" hidden={!showRsi}>
         <div className="btc-chart-canvas btc-rsi-chart" ref={rsiContainerRef} />
       </section>
-      <section className="btc-chart-panel" hidden={!showRsi}>
+      <section className="btc-chart-panel btc-diff-panel" hidden={!showRsi}>
         <div className="btc-chart-canvas btc-diff-chart" ref={diffContainerRef} />
       </section>
     </div>

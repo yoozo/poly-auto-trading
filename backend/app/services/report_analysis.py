@@ -206,8 +206,11 @@ def aggregate_markets(
 ) -> dict[str, MarketAccumulator]:
     markets: dict[str, MarketAccumulator] = {}
     for activity in sorted(activities, key=lambda item: item.timestamp):
-        market_id = market_key(activity)
-        title = activity.title or activity.slug or activity.condition_id or "(unknown)"
+        market_id = market_identity(activity)
+        if not market_id:
+            # 没有任何市场身份的 activity 不能可靠归属，避免在矩阵里生成 "(unknown)" 假市场。
+            continue
+        title = activity.title or activity.slug or activity.condition_id or market_id
         market = markets.setdefault(
             market_id,
             MarketAccumulator(
@@ -222,7 +225,11 @@ def aggregate_markets(
         market.slug = market.slug or activity.slug
         market.condition_id = market.condition_id or activity.condition_id
         market.event_slug = market.event_slug or activity.event_slug
-        market.market_date = parse_market_close_time(title, activity.timestamp) or max_date(market.market_date, activity.timestamp)
+        title_market_date = parse_market_close_time(title, activity.timestamp)
+        if title_market_date:
+            market.market_date = title_market_date
+        elif market.market_date is None:
+            market.market_date = activity.timestamp
         market.first_activity_at = min_date(market.first_activity_at, activity.timestamp)
         market.last_activity_at = max_date(market.last_activity_at, activity.timestamp)
         apply_activity(market, activity)
@@ -248,7 +255,10 @@ def apply_market_metadata(
     if title:
         market.title = title
     market_date = parse_metadata_date(metadata.market) or parse_metadata_date(metadata.event)
-    if market_date:
+    # Up/Down 标题通常带有精确 ET 窗口；event 级 metadata 可能是同一组市场的起始时间，
+    # 不能覆盖标题解析出的每个子市场时间，否则矩阵里多个市场会显示同一个日期。
+    title_market_date = parse_market_close_time(market.title, market.market_date or datetime.now(timezone.utc))
+    if market_date and title_market_date is None:
         market.market_date = market_date
 
 
@@ -405,7 +415,11 @@ def build_daily_performance(
 
 
 def market_key(activity: ActivityLike) -> str:
-    return activity.title or activity.slug or activity.condition_id or "(unknown)"
+    return market_identity(activity) or "(unknown)"
+
+
+def market_identity(activity: ActivityLike) -> str | None:
+    return activity.title or activity.slug or activity.condition_id
 
 
 def market_detail_time(market: MarketAccumulator) -> datetime | None:

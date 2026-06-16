@@ -1,5 +1,5 @@
 import { FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Empty, Segmented, Select, Space, Switch, Typography } from "antd";
+import { Button, Card, Checkbox, Empty, Segmented, Select, Space, Typography } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -107,6 +107,8 @@ export default function BTCWatchPage() {
     polymarketMarkets.find((market) => market.window === "next") ??
     polymarketMarkets[0];
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
+  const latestPriceTone =
+    latest && latest.close > latest.open ? "up" : latest && latest.close < latest.open ? "down" : "flat";
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
@@ -378,46 +380,6 @@ export default function BTCWatchPage() {
 
   return (
     <div className={isFullscreen ? "watch-page watch-page-fullscreen" : "watch-page"}>
-      <Card className="watch-toolbar" styles={{ body: { padding: 8 } }}>
-        <div className="watch-toolbar-inner">
-          <div className="watch-toolbar-controls">
-            <Typography.Text strong>BTCUSDT</Typography.Text>
-            <Segmented
-              size="small"
-              options={intervals}
-              value={interval}
-              onChange={(value) => setInterval(value as CandleInterval)}
-            />
-            <Button
-              size="small"
-              icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-              onClick={toggleFullscreen}
-            >
-              {isFullscreen ? "退出全屏" : "全屏"}
-            </Button>
-            <Space size={6}>
-              <Typography.Text type="secondary">BOLL</Typography.Text>
-              <Switch size="small" checked={showBollinger} onChange={setShowBollinger} />
-            </Space>
-            <Space size={6}>
-              <Typography.Text type="secondary">RSI</Typography.Text>
-              <Switch size="small" checked={showRsi} onChange={setShowRsi} />
-            </Space>
-          </div>
-          <div className="watch-toolbar-status">
-            {latest && (
-              <Typography.Text type="secondary">
-                最新 {latest.close.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-              </Typography.Text>
-            )}
-            <Typography.Text type={streamStatus === "connected" ? "success" : "warning"}>
-              实时流 {streamStatusLabel(streamStatus)}
-            </Typography.Text>
-            {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
-            {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
-          </div>
-        </div>
-      </Card>
       <Card className="watch-chart-card btc-watch-card" styles={{ body: { padding: 0 } }}>
         <BtcWatchChart
           key={`BTCUSDT-${interval}`}
@@ -433,6 +395,58 @@ export default function BTCWatchPage() {
           fitAnchorVersion={fitAnchorVersion}
           comparisonLine={comparisonLine}
           countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
+          toolbar={
+            <div className="watch-toolbar-inner">
+              <div className="watch-toolbar-controls">
+                <Typography.Text strong>BTCUSDT</Typography.Text>
+                <Segmented
+                  size="small"
+                  options={intervals}
+                  value={interval}
+                  onChange={(value) => setInterval(value as CandleInterval)}
+                />
+                <Button
+                  className={showBollinger ? "watch-indicator-button active" : "watch-indicator-button"}
+                  size="small"
+                  aria-pressed={showBollinger}
+                  onClick={() => setShowBollinger((value) => !value)}
+                >
+                  BOLL
+                </Button>
+                <Button
+                  className={showRsi ? "watch-indicator-button active" : "watch-indicator-button"}
+                  size="small"
+                  aria-pressed={showRsi}
+                  onClick={() => setShowRsi((value) => !value)}
+                >
+                  RSI
+                </Button>
+              </div>
+              <div className="watch-toolbar-status">
+                {latest && (
+                  <Typography.Text className={`watch-latest-price watch-latest-price-${latestPriceTone}`}>
+                    <span className="watch-latest-price-label">最新</span>
+                    <span className="watch-latest-price-value">
+                      {latest.close.toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                    </span>
+                  </Typography.Text>
+                )}
+                <Typography.Text type={streamStatus === "connected" ? "success" : "warning"}>
+                  实时流 {streamStatusLabel(streamStatus)}
+                </Typography.Text>
+                {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
+                {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
+              </div>
+              <Button
+                className="watch-fullscreen-button"
+                size="small"
+                icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+                onClick={toggleFullscreen}
+                aria-label={isFullscreen ? "退出全屏" : "全屏"}
+                title={isFullscreen ? "退出全屏" : "全屏"}
+              />
+            </div>
+          }
         />
       </Card>
       {!isFullscreen && (
@@ -494,15 +508,24 @@ function PolymarketBtcPanel({
   return (
     <Card className="polymarket-panel" styles={{ body: { padding: 12 } }}>
       <div className="polymarket-panel-head">
-        <Space size={10} wrap>
-          <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
-          <Segmented
-            size="small"
-            value={interval}
-            options={polymarketIntervals}
-            onChange={(value) => onIntervalChange(value as PolymarketInterval)}
-          />
-        </Space>
+        <div className="polymarket-panel-title">
+          <Space size={10} wrap>
+            <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
+            <Segmented
+              size="small"
+              value={interval}
+              options={polymarketIntervals}
+              onChange={(value) => onIntervalChange(value as PolymarketInterval)}
+            />
+          </Space>
+          {activeMarket && (
+            <Typography.Text type="secondary" className="polymarket-panel-subtitle">
+              {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
+              {activeMarket.accepting_orders ? "可交易" : "暂停接单"} · 流动性{" "}
+              {formatCompact(activeMarket.liquidity)}
+            </Typography.Text>
+          )}
+        </div>
         {activeMarket?.slug && (
           <Button
             size="small"
@@ -530,14 +553,6 @@ function PolymarketBtcPanel({
       {!activeMarket && !error && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${interval} 市场`} />}
       {activeMarket && (
         <div className="polymarket-market">
-          <div className="polymarket-market-meta">
-            <Typography.Text strong>{activeMarket.title}</Typography.Text>
-            <Typography.Text type="secondary">
-              {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
-              {activeMarket.accepting_orders ? "可交易" : "暂停接单"} · 流动性{" "}
-              {formatCompact(activeMarket.liquidity)}
-            </Typography.Text>
-          </div>
           <div className="polymarket-outcomes">
             {activeMarket.outcome_quotes.map((quote) => (
               <OutcomeQuoteCard key={`${activeMarket.id}:${quote.name}`} quote={quote} />
