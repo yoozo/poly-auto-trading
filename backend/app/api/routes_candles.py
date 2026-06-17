@@ -16,6 +16,7 @@ from app.services.candle_backfill import (
 )
 from app.services.candle_store import list_candles, list_candles_between, upsert_candles
 from app.services.indicators import calculate_indicator_points
+from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
 from app.services.market_ws_hub import market_ws_hub
 
 router = APIRouter(tags=["candles"])
@@ -31,6 +32,16 @@ async def candle_backfill_status() -> CandleBackfillStatus:
 @router.post("/candles/backfill", response_model=CandleBackfillStatus)
 async def start_candle_backfill(symbol: str = settings.binance_symbol) -> CandleBackfillStatus:
     return await candle_backfill_runner.start_all(symbol=symbol)
+
+
+@router.get("/indicators/backfill", response_model=IndicatorBackfillStatus)
+async def indicator_backfill_status() -> IndicatorBackfillStatus:
+    return await indicator_backfill_runner.status()
+
+
+@router.post("/indicators/backfill", response_model=IndicatorBackfillStatus)
+async def start_indicator_backfill(symbol: str = settings.binance_symbol) -> IndicatorBackfillStatus:
+    return await indicator_backfill_runner.start_all(symbol=symbol)
 
 
 @router.get("/candles", response_model=list[Candle])

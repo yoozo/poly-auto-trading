@@ -115,6 +115,41 @@ async def list_candles_between(
     ]
 
 
+async def list_candles_from(
+    session: AsyncSession,
+    symbol: str,
+    interval: Interval,
+    start: datetime,
+    limit: int,
+) -> list[Candle]:
+    statement = (
+        select(CandleModel)
+        .where(
+            CandleModel.symbol == symbol.upper(),
+            CandleModel.interval == interval,
+            CandleModel.open_time >= start,
+        )
+        .order_by(CandleModel.open_time.asc())
+        .limit(limit)
+    )
+    result = await session.scalars(statement)
+    return [
+        Candle(
+            symbol=model.symbol,
+            interval=model.interval,  # type: ignore[arg-type]
+            open_time=model.open_time,
+            close_time=model.close_time,
+            open=float(model.open),
+            high=float(model.high),
+            low=float(model.low),
+            close=float(model.close),
+            volume=float(model.volume),
+            is_closed=model.is_closed,
+        )
+        for model in result.all()
+    ]
+
+
 async def get_latest_candle(
     session: AsyncSession,
     symbol: str,

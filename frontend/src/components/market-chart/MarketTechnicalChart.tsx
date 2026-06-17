@@ -1200,7 +1200,19 @@ function readChartThemeMode(): ChartThemeMode {
 function uniqueCandlesByChartTime(candles: MarketCandle[]) {
   const byTime = new Map<string, MarketCandle>();
   for (const candle of candles) {
+    // lightweight-charts 不接受空 OHLC，图表边界兜底过滤上游异常数据。
+    if (!isValidChartCandle(candle)) continue;
     byTime.set(`${candle.symbol}:${candle.interval}:${candleTime(candle)}`, candle);
   }
   return Array.from(byTime.values()).sort((left, right) => candleTime(left) - candleTime(right));
+}
+
+function isValidChartCandle(candle: MarketCandle) {
+  return (
+    Number.isFinite(candleTime(candle)) &&
+    Number.isFinite(candle.open) &&
+    Number.isFinite(candle.high) &&
+    Number.isFinite(candle.low) &&
+    Number.isFinite(candle.close)
+  );
 }

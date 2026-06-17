@@ -7,6 +7,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.schemas.candle import Candle
 from app.services.candle_backfill import CandleBackfillStatus
+from app.services.indicator_backfill import IndicatorBackfillStatus
 from conftest import login_test_client
 
 
@@ -136,6 +137,33 @@ def test_candle_backfill_endpoint_starts_runner(monkeypatch) -> None:
 
     client = make_client()
     response = client.post("/api/candles/backfill?symbol=BTCUSDT")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "running"
+    assert calls["symbol"] == "BTCUSDT"
+
+
+def test_indicator_backfill_endpoint_starts_runner(monkeypatch) -> None:
+    calls = {}
+    status = IndicatorBackfillStatus(
+        state="running",
+        symbol="BTCUSDT",
+        intervals=["1m", "5m"],
+        total_inserted=0,
+    )
+
+    class FakeBackfillRunner:
+        async def status(self):
+            return status
+
+        async def start_all(self, *, symbol):
+            calls["symbol"] = symbol
+            return status
+
+    monkeypatch.setattr(routes_candles, "indicator_backfill_runner", FakeBackfillRunner())
+
+    client = make_client()
+    response = client.post("/api/indicators/backfill?symbol=BTCUSDT")
 
     assert response.status_code == 200
     assert response.json()["state"] == "running"

@@ -55,6 +55,31 @@ export type CandleBackfillProgressStatus = {
   finished_at: string | null;
 };
 
+export type IndicatorBackfillStatus = {
+  state: "idle" | "running" | "completed" | "error";
+  task_id: number | null;
+  symbol: string;
+  intervals: CandleInterval[];
+  current_interval: CandleInterval | null;
+  current_start_ms: number | null;
+  progress: IndicatorBackfillProgressStatus[];
+  total_inserted: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  message: string;
+};
+
+export type IndicatorBackfillProgressStatus = {
+  interval: CandleInterval;
+  status: "pending" | "running" | "completed" | "error";
+  next_start_ms: number;
+  inserted_count: number;
+  last_error: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export type HealthStatus = {
   status: "ok" | "degraded";
   time: string;
@@ -409,6 +434,11 @@ export const api = {
   candleBackfillStatus: () => request<CandleBackfillStatus>("/api/candles/backfill"),
   startCandleBackfill: () =>
     request<CandleBackfillStatus>("/api/candles/backfill?symbol=BTCUSDT", {
+      method: "POST",
+    }),
+  indicatorBackfillStatus: () => request<IndicatorBackfillStatus>("/api/indicators/backfill"),
+  startIndicatorBackfill: () =>
+    request<IndicatorBackfillStatus>("/api/indicators/backfill?symbol=BTCUSDT", {
       method: "POST",
     }),
   analyzeAccount: (input: string, activityLimit: number) =>

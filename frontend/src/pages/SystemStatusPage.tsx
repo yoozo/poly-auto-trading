@@ -5,6 +5,8 @@ import {
   api,
   type CandleBackfillProgressStatus,
   type CandleBackfillStatus,
+  type IndicatorBackfillProgressStatus,
+  type IndicatorBackfillStatus,
   type ServiceEventRecord,
   type ServiceHealth
 } from "../api/client";
@@ -34,6 +36,11 @@ export default function SystemStatusPage() {
     queryFn: api.candleBackfillStatus,
     refetchInterval: (query) => (query.state.data?.state === "running" ? 3_000 : 10_000)
   });
+  const indicatorBackfill = useQuery({
+    queryKey: ["indicator-backfill"],
+    queryFn: api.indicatorBackfillStatus,
+    refetchInterval: (query) => (query.state.data?.state === "running" ? 3_000 : 10_000)
+  });
   const startCandleBackfill = useMutation({
     mutationFn: api.startCandleBackfill,
     onSuccess: async (status) => {
@@ -46,6 +53,20 @@ export default function SystemStatusPage() {
     },
     onError: (error) => {
       message.error(error instanceof Error ? error.message : "启动 K 线下载失败");
+    }
+  });
+  const startIndicatorBackfill = useMutation({
+    mutationFn: api.startIndicatorBackfill,
+    onSuccess: async (status) => {
+      message.success(status.state === "running" ? "指标计算任务已启动" : "指标计算任务已恢复");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["indicator-backfill"] }),
+        queryClient.invalidateQueries({ queryKey: ["services"] }),
+        queryClient.invalidateQueries({ queryKey: ["service-events"] })
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof Error ? error.message : "启动指标计算失败");
     }
   });
 
@@ -125,15 +146,39 @@ export default function SystemStatusPage() {
               type="primary"
               icon={<CloudDownloadOutlined />}
               loading={startCandleBackfill.isPending}
-              disabled={candleBackfill.data?.state === "running"}
               onClick={() => startCandleBackfill.mutate()}
             >
-              {candleBackfill.data?.state === "error" ? "继续下载" : "一键下载"}
+              {candleBackfill.data?.state === "idle" || candleBackfill.data?.state === "completed" ? "一键下载" : "继续下载"}
             </Button>
           </Space>
         }
       >
         {renderCandleBackfill(candleBackfill.data)}
+      </Card>
+
+      <Card
+        title="指标数据"
+        extra={
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => indicatorBackfill.refetch()}
+              loading={indicatorBackfill.isFetching}
+            >
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<CloudDownloadOutlined />}
+              loading={startIndicatorBackfill.isPending}
+              onClick={() => startIndicatorBackfill.mutate()}
+            >
+              {indicatorBackfill.data?.state === "idle" || indicatorBackfill.data?.state === "completed" ? "一键计算" : "继续计算"}
+            </Button>
+          </Space>
+        }
+      >
+        {renderIndicatorBackfill(indicatorBackfill.data)}
       </Card>
 
       <Card
@@ -195,6 +240,14 @@ export default function SystemStatusPage() {
 function renderServiceMetadata(record: ServiceHealth) {
   if (record.name === "kline_backfill") {
     const metadata = record.metadata as Partial<CandleBackfillStatus>;
+    return (
+      <Typography.Text>
+        #{metadata.task_id || "-"} / {metadata.symbol || "BTCUSDT"} / {metadata.current_interval || metadata.state || record.state}
+      </Typography.Text>
+    );
+  }
+  if (record.name === "indicator_backfill") {
+    const metadata = record.metadata as Partial<IndicatorBackfillStatus>;
     return (
       <Typography.Text>
         #{metadata.task_id || "-"} / {metadata.symbol || "BTCUSDT"} / {metadata.current_interval || metadata.state || record.state}
@@ -325,6 +378,78 @@ function progressStateColor(state: string) {
   if (state === "completed") return "success";
   if (state === "error") return "error";
   return "default";
+}
+
+function renderIndicatorBackfill(status?: IndicatorBackfillStatus) {
+  if (!status) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无指标计算状态" />;
+  }
+  const progressRows: IndicatorBackfillProgressStatus[] = status.progress;
+  return (
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={6}>
+          <Statistic title="状态" value={backfillStateText(status.state)} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="任务" value={status.task_id ? `#${status.task_id}` : "-"} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="当前周期" value={status.current_interval || "-"} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="已写入" value={status.total_inserted || progressRows.reduce((sum, row) => sum + row.inserted_count, 0)} />
+        </Col>
+      </Row>
+      <Space wrap>
+        <Tag color={backfillStateColor(status.state)}>{backfillStateText(status.state)}</Tag>
+        <Tag>{status.symbol || "BTCUSDT"}</Tag>
+        {status.started_at ? <Tag>开始 {new Date(status.started_at).toLocaleString()}</Tag> : null}
+        {status.finished_at ? <Tag>结束 {new Date(status.finished_at).toLocaleString()}</Tag> : null}
+        {status.current_start_ms !== null ? <Tag>断点 {new Date(status.current_start_ms).toLocaleString()}</Tag> : null}
+        {status.error ? <Tag color="error">{status.error}</Tag> : null}
+      </Space>
+      <Table
+        rowKey="interval"
+        size="small"
+        pagination={false}
+        dataSource={progressRows}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未开始计算" /> }}
+        columns={[
+          {
+            title: "周期",
+            dataIndex: "interval",
+            width: 120,
+            render: (value: string) => <Tag>{value}</Tag>
+          },
+          {
+            title: "状态",
+            dataIndex: "status",
+            width: 120,
+            render: (value: string) => <Tag color={progressStateColor(value)}>{progressStateText(value)}</Tag>
+          },
+          {
+            title: "断点",
+            dataIndex: "next_start_ms",
+            render: (value: number) => (value > 0 ? new Date(value).toLocaleString() : "起点")
+          },
+          {
+            title: "已写入指标",
+            dataIndex: "inserted_count",
+            render: (value: number) => value.toLocaleString()
+          },
+          {
+            title: "错误",
+            dataIndex: "last_error",
+            render: (value: string) => value || <Typography.Text type="secondary">-</Typography.Text>
+          }
+        ]}
+      />
+      <Typography.Text type="secondary">
+        指标会从已下载的 K 线分批计算并保存 RSI、RSI EMA、RSI-EMA diff 和 Bollinger Bands。
+      </Typography.Text>
+    </Space>
+  );
 }
 
 function eventLevelColor(level: string) {
