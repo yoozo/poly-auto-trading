@@ -72,14 +72,46 @@ lsof: ## Show processes listening on API, web, and database ports.
 		lsof -nP -iTCP:$$port -sTCP:LISTEN || true; \
 	done
 
-poly-event: ## Resolve a Polymarket event slug/URL. Usage: make poly-event SLUG=btc-updown-5m-1781443800
-	@test -n "$(POLYMARKET_EVENT_INPUT)" || (echo "Usage: make poly-event <event-slug-or-url>" >&2; exit 2)
+poly-event: ## Resolve a Polymarket event slug/URL. Usage: copy event URL, then run make poly-event
 	@input="$(POLYMARKET_EVENT_INPUT)"; \
-	slug="$${input#https://polymarket.com/event/}"; \
-	slug="$${slug#http://polymarket.com/event/}"; \
+	if [ -z "$$input" ]; then \
+		if command -v pbpaste >/dev/null 2>&1; then \
+			input="$$(pbpaste)"; \
+		elif command -v wl-paste >/dev/null 2>&1; then \
+			input="$$(wl-paste)"; \
+		elif command -v xclip >/dev/null 2>&1; then \
+			input="$$(xclip -selection clipboard -o)"; \
+		fi; \
+	fi; \
+	input="$$(printf '%s' "$$input" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//')"; \
+	test -n "$$input" || (echo "Usage: copy a Polymarket event URL/slug, then run make poly-event" >&2; exit 2); \
+	echo "Polymarket input: $$input" >&2; \
+	slug="$$input"; \
+	slug="$${slug#https://}"; \
+	slug="$${slug#http://}"; \
+	slug="$${slug#www.}"; \
+	slug="$${slug#polymarket.com/}"; \
+	if [[ "$$slug" == event/* ]]; then \
+		slug="$${slug#event/}"; \
+	elif [[ "$$slug" == */event/* ]]; then \
+		slug="$${slug#*/event/}"; \
+	fi; \
 	slug="$${slug%%\?*}"; \
+	slug="$${slug%%\#*}"; \
 	slug="$${slug%%/*}"; \
-	curl -s "https://gamma-api.polymarket.com/events/slug/$$slug" \
+	test -n "$$slug" || (echo "Could not parse Polymarket event slug from clipboard/input." >&2; exit 2); \
+	echo "Polymarket slug: $$slug" >&2; \
+	payload="$$(curl -s "https://gamma-api.polymarket.com/events/slug/$$slug")"; \
+	if ! printf '%s' "$$payload" | jq -e '.markets | type == "array" and length > 0' >/dev/null; then \
+		echo "Polymarket event lookup did not return markets." >&2; \
+		echo "Parsed slug: $$slug" >&2; \
+		echo "Clipboard/input must be a Polymarket event URL or event slug." >&2; \
+		raw_response="$${payload:0:500}"; \
+		test -n "$$raw_response" || raw_response="<empty>"; \
+		printf 'Raw response: %s\n' "$$raw_response" >&2; \
+		exit 5; \
+	fi; \
+	printf '%s' "$$payload" \
 		| jq '.markets[] | {question, conditionId, outcomes: (.outcomes | fromjson), clobTokenIds: (.clobTokenIds | fromjson), negRisk, tickSize: .orderPriceMinTickSize}'
 
 migrate: ## Run Alembic migrations.
