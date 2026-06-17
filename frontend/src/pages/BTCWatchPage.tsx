@@ -1,5 +1,5 @@
 import { DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Dropdown, Empty, Segmented, Switch, Typography } from "antd";
+import { Button, Card, Dropdown, Empty, Segmented, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -204,12 +204,16 @@ export default function BTCWatchPage() {
     const selected = selectedPolymarketId
       ? polymarketMarkets.find((market) => market.id === selectedPolymarketId)
       : null;
-    if (selected && (!autoSwitchPolymarket || selected.window !== "expired")) return;
-    if (selected && selected.window === "expired" && !autoSwitchPolymarket) return;
+    const selectedWindowLabel = selected ? marketWindowLabel(selected, polymarketMarkets) : null;
+    if (selectedWindowLabel === "当前" && !autoSwitchPolymarket) {
+      setAutoSwitchPolymarket(true);
+      return;
+    }
+    if (selected && !autoSwitchPolymarket) return;
     const nextMarket =
-      polymarketMarkets.find((market) => market.window === "current") ??
-      polymarketMarkets.find((market) => market.window === "next") ??
-      polymarketMarkets.find((market) => market.window === "upcoming") ??
+      polymarketMarkets.find((market) => marketWindowLabel(market, polymarketMarkets) === "当前") ??
+      polymarketMarkets.find((market) => marketWindowLabel(market, polymarketMarkets) === "下个") ??
+      polymarketMarkets.find((market) => marketWindowLabel(market, polymarketMarkets) === "未来") ??
       polymarketMarkets[0];
     if (nextMarket && nextMarket.id !== selectedPolymarketId) {
       setSelectedPolymarketId(nextMarket.id);
@@ -397,6 +401,15 @@ export default function BTCWatchPage() {
     setInterval(nextInterval);
   }, []);
 
+  const handlePolymarketMarketSelect = useCallback(
+    (marketId: string, followCurrent = false) => {
+      setSelectedPolymarketId(marketId);
+      // 选中当前窗口代表回到实时跟随；选中历史或未来窗口则固定查看该窗口。
+      setAutoSwitchPolymarket(followCurrent);
+    },
+    []
+  );
+
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((value) => {
       const nextValue = !value;
@@ -488,12 +501,7 @@ export default function BTCWatchPage() {
           markets={polymarketMarkets}
           selectedMarket={selectedPolymarket}
           selectedMarketId={selectedPolymarketId}
-          onSelectedMarketId={(marketId) => {
-            setSelectedPolymarketId(marketId);
-            setAutoSwitchPolymarket(false);
-          }}
-          autoSwitch={autoSwitchPolymarket}
-          onAutoSwitchChange={setAutoSwitchPolymarket}
+          onSelectedMarketId={handlePolymarketMarketSelect}
           error={polymarketError instanceof Error ? polymarketError.message : null}
         />
       )}
@@ -508,8 +516,6 @@ function PolymarketBtcPanel({
   selectedMarket,
   selectedMarketId,
   onSelectedMarketId,
-  autoSwitch,
-  onAutoSwitchChange,
   error,
 }: {
   interval: PolymarketInterval;
@@ -517,9 +523,7 @@ function PolymarketBtcPanel({
   markets: PolymarketUpDownMarket[];
   selectedMarket: PolymarketUpDownMarket | undefined;
   selectedMarketId: string | null;
-  onSelectedMarketId: (marketId: string) => void;
-  autoSwitch: boolean;
-  onAutoSwitchChange: (checked: boolean) => void;
+  onSelectedMarketId: (marketId: string, followCurrent?: boolean) => void;
   error: string | null;
 }) {
   const activeMarket =
@@ -566,15 +570,6 @@ function PolymarketBtcPanel({
                 options={polymarketIntervals}
                 onChange={(value) => onIntervalChange(value as PolymarketInterval)}
               />
-              <span className="polymarket-follow-toggle" title="自动跟随当前市场">
-                <span className="polymarket-follow-toggle-label">跟随当前</span>
-                <Switch
-                  size="small"
-                  checked={autoSwitch}
-                  onChange={onAutoSwitchChange}
-                  aria-label="自动跟随当前市场"
-                />
-              </span>
             </div>
           </div>
           {activeMarket && (
@@ -592,7 +587,7 @@ function PolymarketBtcPanel({
             <button
               type="button"
               className={railModel.latestPastMarket.id === activeMarket?.id ? "polymarket-market-pill active" : "polymarket-market-pill"}
-              onClick={() => onSelectedMarketId(railModel.latestPastMarket!.id)}
+              onClick={() => onSelectedMarketId(railModel.latestPastMarket!.id, false)}
               aria-pressed={railModel.latestPastMarket.id === activeMarket?.id}
             >
               <span className="polymarket-market-pill-time">{formatMarketEndTime(railModel.latestPastMarket)}</span>
@@ -606,7 +601,7 @@ function PolymarketBtcPanel({
                 key={market.id}
                 type="button"
                 className={isActive ? "polymarket-market-pill active" : "polymarket-market-pill"}
-                onClick={() => onSelectedMarketId(market.id)}
+                onClick={() => onSelectedMarketId(market.id, isLive)}
                 aria-pressed={isActive}
               >
                 {isLive && <span className="polymarket-market-pill-live-dot" aria-hidden="true" />}
@@ -619,7 +614,10 @@ function PolymarketBtcPanel({
               menu={{
                 items: moreMenuItems,
                 selectable: false,
-                onClick: ({ key }) => onSelectedMarketId(String(key)),
+                onClick: ({ key }) => {
+                  const market = railModel.moreMarkets.find((item) => item.id === String(key));
+                  onSelectedMarketId(String(key), market ? marketWindowLabel(market, markets) === "当前" : false);
+                },
               }}
               trigger={["click"]}
             >

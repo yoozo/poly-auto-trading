@@ -1387,24 +1387,6 @@ body[data-theme="dark"] {
   color: #0f62fe;
 }
 
-.polymarket-follow-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 2px;
-  color: #475467;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.polymarket-follow-toggle-label {
-  display: inline-flex;
-  align-items: center;
-}
-
 .polymarket-panel-subtitle {
   display: block;
   min-width: 0;
@@ -2532,10 +2514,6 @@ body[data-theme="dark"] .polymarket-panel-title-link .anticon {
 body[data-theme="dark"] .polymarket-panel-title-link:hover,
 body[data-theme="dark"] .polymarket-panel-title-link:hover .anticon {
   color: #60a5fa;
-}
-
-body[data-theme="dark"] .polymarket-follow-toggle {
-  color: var(--text-muted);
 }
 
 .kline-countdown {
