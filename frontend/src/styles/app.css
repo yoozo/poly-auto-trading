@@ -134,41 +134,225 @@ body[data-theme="dark"] {
   line-height: 1.5;
 }
 
-.reports-input-item {
-  flex: 1 1 360px;
+.accounts-management-panel {
+  display: grid;
+  gap: 12px;
 }
 
-.reports-input-item .ant-form-item-control {
-  min-width: min(520px, 100%);
+.accounts-management-card .ant-card-head-wrapper {
+  gap: 12px;
+}
+
+.accounts-management-card .ant-card-head-title {
+  min-width: 0;
+}
+
+.account-title-add-button.ant-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #175cd3;
+}
+
+.account-title-add-button.ant-btn:hover,
+.account-title-add-button.ant-btn:focus-visible {
+  background: #e7f0ff;
+  color: #175cd3;
+}
+
+.account-limit-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.account-add-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
 .reports-task-panel {
   width: 100%;
+  padding: 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
-.account-table-wrap {
+.reports-task-panel-inner {
   width: 100%;
-  max-width: 100%;
-  overflow-x: auto;
 }
 
-.account-note-button {
-  max-width: 190px;
-  padding: 0;
+.account-grid-loading {
+  display: flex;
+  min-height: 132px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #667085;
+}
+
+.account-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 10px;
+}
+
+.account-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17202a;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.account-empty-card {
+  display: grid;
+  grid-column: 1 / -1;
+  min-height: 206px;
+  align-items: center;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.account-card:hover,
+.account-card:focus-visible {
+  border-color: #91caff;
+  background: #f8fbff;
+  box-shadow: 0 6px 18px rgb(15 23 42 / 8%);
+  outline: none;
+}
+
+.account-card-selected {
+  border-color: #1677ff;
+  background: #f0f7ff;
+  box-shadow: inset 0 0 0 1px rgb(22 119 255 / 28%);
+}
+
+.account-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-label-editor {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-label {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  padding: 2px 10px;
   overflow: hidden;
   border: 0;
-  background: transparent;
-  color: #1d4ed8;
-  font: inherit;
-  font-weight: 700;
-  text-align: left;
+  border-radius: 999px;
+  background: #e7f0ff;
+  color: #175cd3;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
 }
 
-.account-note-button:hover {
-  text-decoration: underline;
+.account-label:hover,
+.account-label:focus-visible {
+  background: #dbeafe;
+  outline: none;
+}
+
+.account-label-empty {
+  background: #f2f4f7;
+  color: #667085;
+}
+
+.account-label-empty:hover,
+.account-label-empty:focus-visible {
+  background: #e5eaf2;
+}
+
+.account-selected-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 1px solid #b8c2d3;
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.account-card-selected .account-selected-dot {
+  border-color: #1677ff;
+  background: #1677ff;
+}
+
+.account-card-user {
+  min-width: 0;
+  overflow: hidden;
+  color: #17202a;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.account-card-activity {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  color: #667085;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.account-card-activity strong {
+  color: #17202a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-card-wallet {
+  color: #667085;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-card-wallet.ant-typography {
+  color: #667085;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .reports-page .ant-card {
@@ -609,7 +793,7 @@ body[data-theme="dark"] {
 
 .market-detail-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(132px, 1fr));
   gap: 8px;
 }
 
@@ -649,7 +833,7 @@ body[data-theme="dark"] {
 
 .market-detail-metric .report-metric-value {
   color: #17202a;
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.25;
 }
 
@@ -996,6 +1180,18 @@ body[data-theme="dark"] {
   .report-filter-date,
   .report-filter-date .ant-picker {
     width: 100%;
+  }
+
+  .account-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-add-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .account-card-footer {
+    justify-content: flex-start;
   }
 
   .market-detail-metrics {
@@ -1838,13 +2034,58 @@ body[data-theme="dark"] .market-detail-page .ant-card {
 
 body[data-theme="dark"] .json-preview,
 body[data-theme="dark"] .table-wrap,
+body[data-theme="dark"] .reports-task-panel,
+body[data-theme="dark"] .account-add-panel,
+body[data-theme="dark"] .account-card,
+body[data-theme="dark"] .account-empty-card,
 body[data-theme="dark"] .market-detail-table-wrap,
 body[data-theme="dark"] .matrix-loading,
 body[data-theme="dark"] .matrix-loading-footer,
+body[data-theme="dark"] .account-grid-loading,
 body[data-theme="dark"] .market-detail-loading {
   border-color: var(--panel-border);
   background: var(--table-bg);
   color: var(--text-strong);
+}
+
+body[data-theme="dark"] .account-card:hover,
+body[data-theme="dark"] .account-card:focus-visible {
+  border-color: #3b82f6;
+  background: #172333;
+}
+
+body[data-theme="dark"] .account-card-selected {
+  border-color: #60a5fa;
+  background: #162842;
+}
+
+body[data-theme="dark"] .account-title-add-button.ant-btn {
+  color: #93c5fd;
+}
+
+body[data-theme="dark"] .account-title-add-button.ant-btn:hover,
+body[data-theme="dark"] .account-title-add-button.ant-btn:focus-visible {
+  background: rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
+}
+
+body[data-theme="dark"] .account-label {
+  background: rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
+}
+
+body[data-theme="dark"] .account-label-empty {
+  background: #202b37;
+}
+
+body[data-theme="dark"] .account-selected-dot {
+  border-color: #475569;
+  background: #111827;
+}
+
+body[data-theme="dark"] .account-card-selected .account-selected-dot {
+  border-color: #60a5fa;
+  background: #60a5fa;
 }
 
 body[data-theme="dark"] .report-metric-card,
@@ -1858,6 +2099,9 @@ body[data-theme="dark"] .report-filters {
 }
 
 body[data-theme="dark"] .report-metric-label,
+body[data-theme="dark"] .account-card-wallet,
+body[data-theme="dark"] .account-card-activity,
+body[data-theme="dark"] .account-label-empty,
 body[data-theme="dark"] .matrix-empty,
 body[data-theme="dark"] .market-matrix-table td,
 body[data-theme="dark"] .market-matrix-table th {
@@ -1865,6 +2109,8 @@ body[data-theme="dark"] .market-matrix-table th {
 }
 
 body[data-theme="dark"] .report-metric-value,
+body[data-theme="dark"] .account-card-user,
+body[data-theme="dark"] .account-card-activity strong,
 body[data-theme="dark"] .market-matrix-table th:first-child,
 body[data-theme="dark"] .market-matrix-table td:first-child,
 body[data-theme="dark"] .market-column-title,

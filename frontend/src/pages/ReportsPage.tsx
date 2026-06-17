@@ -4,16 +4,15 @@ import {
   Card,
   Checkbox,
   DatePicker,
-  Form,
+  Empty,
   Input,
-  InputNumber,
   Progress,
   Space,
   Spin,
-  Table,
   Tag,
   Typography,
 } from "antd";
+import { PlusOutlined } from "@ant-design/icons";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
@@ -30,16 +29,12 @@ import {
 
 const ACTIVITY_LIMIT_KEY = "poly-auto.reports.activityLimit";
 const SELECTED_ACCOUNT_KEY = "poly-auto.reports.selectedAccountId";
+const ACTIVITY_LIMIT_OPTIONS = [1000, 5000, 10000, 30000] as const;
 const MARKET_PAGE_SIZE = 20;
 const MARKET_MATRIX_LOAD_THRESHOLD_PX = 96;
 const MARKET_MATRIX_COLUMN_WIDTH = 260;
 const MARKET_MATRIX_OVERSCAN = 3;
 const { RangePicker } = DatePicker;
-
-type AnalyzeForm = {
-  input: string;
-  activityLimit: number;
-};
 
 type MatrixRow = {
   key: string;
@@ -53,10 +48,13 @@ export default function ReportsPage({
 }: {
   onOpenMarketDetail?: (accountId: string, marketId: string) => void;
 }) {
-  const [form] = Form.useForm<AnalyzeForm>();
   const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(() => localStorage.getItem(SELECTED_ACCOUNT_KEY));
+  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [newAccountInput, setNewAccountInput] = useState("");
+  const [activityLimit, setActivityLimit] = useState(readSavedActivityLimit);
   const [searchText, setSearchText] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -100,7 +98,7 @@ export default function ReportsPage({
     },
   });
   const analyzeMutation = useMutation({
-    mutationFn: (values: AnalyzeForm) => api.analyzeAccount(values.input, values.activityLimit),
+    mutationFn: (values: { input: string; activityLimit: number }) => api.analyzeAccount(values.input, values.activityLimit),
     onSuccess: (data) => setTaskId(data.task_id),
   });
   const updateAccountMutation = useMutation({
@@ -119,6 +117,22 @@ export default function ReportsPage({
     void marketsQuery.fetchNextPage();
   }, [marketsQuery.fetchNextPage, marketsQuery.hasNextPage, marketsQuery.isFetchingNextPage]);
 
+  const submitNewAccount = useCallback(() => {
+    const input = newAccountInput.trim();
+    if (!input) return;
+    localStorage.setItem(ACTIVITY_LIMIT_KEY, String(activityLimit));
+    setRefreshingAccountId(null);
+    analyzeMutation.mutate({ input, activityLimit });
+    setNewAccountInput("");
+    setAddAccountOpen(false);
+  }, [activityLimit, analyzeMutation, newAccountInput]);
+
+  function selectActivityLimit(value: number) {
+    const normalizedLimit = normalizedActivityLimit(value);
+    setActivityLimit(normalizedLimit);
+    localStorage.setItem(ACTIVITY_LIMIT_KEY, String(normalizedLimit));
+  }
+
   useEffect(() => {
     if (task?.status === "done") {
       void queryClient.invalidateQueries({ queryKey: ["report-accounts"] });
@@ -128,14 +142,27 @@ export default function ReportsPage({
         void queryClient.invalidateQueries({ queryKey: ["account-markets", task.result.account_id] });
       }
     }
+    if (task?.status === "done" || task?.status === "error") {
+      setRefreshingAccountId(null);
+    }
   }, [queryClient, task?.status]);
 
   useEffect(() => {
-    if (!selectedAccountId && accountsQuery.data?.[0]) {
-      setSelectedAccountId(accountsQuery.data[0].id);
-      localStorage.setItem(SELECTED_ACCOUNT_KEY, accountsQuery.data[0].id);
+    if (task?.status !== "done") return;
+    const completedTaskId = task.id;
+    const timer = window.setTimeout(() => {
+      setTaskId((currentTaskId) => (currentTaskId === completedTaskId ? null : currentTaskId));
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [task?.id, task?.status]);
+
+  useEffect(() => {
+    const sortedAccounts = accountsQuery.data ? sortAccounts(accountsQuery.data) : [];
+    if (!selectedAccountId && sortedAccounts[0]) {
+      setSelectedAccountId(sortedAccounts[0].id);
+      localStorage.setItem(SELECTED_ACCOUNT_KEY, sortedAccounts[0].id);
     } else if (selectedAccountId && accountsQuery.data && !accountsQuery.data.some((account) => account.id === selectedAccountId)) {
-      const nextAccountId = accountsQuery.data[0]?.id ?? null;
+      const nextAccountId = sortedAccounts[0]?.id ?? null;
       if (nextAccountId) {
         setSelectedAccountId(nextAccountId);
         localStorage.setItem(SELECTED_ACCOUNT_KEY, nextAccountId);
@@ -145,67 +172,88 @@ export default function ReportsPage({
 
   return (
     <div className="page-stack reports-page">
-      <Card>
-        <Form
-          form={form}
-          layout="inline"
-          initialValues={{ activityLimit: readSavedActivityLimit() }}
-          onFinish={(values) => {
-            localStorage.setItem(ACTIVITY_LIMIT_KEY, String(values.activityLimit));
-            analyzeMutation.mutate(values);
-          }}
-        >
-          <Form.Item
-            name="input"
-            rules={[{ required: true, message: "请输入 profile、URL 或钱包地址" }]}
-            className="reports-input-item"
-          >
-            <Input placeholder="@profile / profile URL / 0x wallet" allowClear />
-          </Form.Item>
-          <Form.Item
-            name="activityLimit"
-            rules={[{ required: true, message: "请输入下载数量" }]}
-          >
-            <InputNumber step={100} />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={isRunning}>
-              开始分析
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
-
-      {(task || analyzeMutation.error || taskQuery.error) && (
-        <Card>
-          <Space direction="vertical" size={10} className="reports-task-panel">
-            {task && (
-              <>
-                <Space wrap>
-                  <Typography.Text strong>任务 {task.id.slice(0, 8)}</Typography.Text>
-                  <TaskStatusTag status={task.status} />
-                  <Typography.Text type="secondary">{task.message}</Typography.Text>
-                </Space>
-                <Progress percent={task.percent} status={task.status === "error" ? "exception" : undefined} />
-                {task.status === "done" && <TaskResult task={task} />}
-                {task.status === "error" && <Alert type="error" message={task.error || "任务失败"} showIcon />}
-              </>
-            )}
-            {analyzeMutation.error instanceof Error && <Alert type="error" message={analyzeMutation.error.message} showIcon />}
-            {taskQuery.error instanceof Error && <Alert type="error" message={taskQuery.error.message} showIcon />}
+      <Card
+        title={
+          <Space size={6}>
+            <span>本地账号</span>
+            <Button
+              type="text"
+              size="small"
+              className="account-title-add-button"
+              icon={<PlusOutlined />}
+              aria-label="添加账号"
+              title="添加账号"
+              onClick={() => setAddAccountOpen(true)}
+            />
           </Space>
-        </Card>
-      )}
+        }
+        className="accounts-management-card"
+        styles={{ body: { paddingTop: 8 } }}
+        extra={
+          <div className="account-limit-buttons" aria-label="下载数量">
+            <Button.Group size="small">
+              {ACTIVITY_LIMIT_OPTIONS.map((value) => (
+                <Button
+                  key={value}
+                  type={activityLimit === value ? "primary" : "default"}
+                  size="small"
+                  onClick={() => selectActivityLimit(value)}
+                >
+                  {formatActivityLimitOption(value)}
+                </Button>
+              ))}
+            </Button.Group>
+          </div>
+        }
+      >
+        <div className="accounts-management-panel">
+          {addAccountOpen && (
+            <div className="account-add-panel">
+              <Input
+                value={newAccountInput}
+                autoFocus
+                allowClear
+                placeholder="输入 profile / URL / 钱包地址"
+                onChange={(event) => setNewAccountInput(event.target.value)}
+                onPressEnter={submitNewAccount}
+              />
+              <Button type="primary" loading={isRunning && !refreshingAccountId} onClick={submitNewAccount}>
+                添加并分析
+              </Button>
+              <Button
+                onClick={() => {
+                  setNewAccountInput("");
+                  setAddAccountOpen(false);
+                }}
+              >
+                取消
+              </Button>
+            </div>
+          )}
 
-      <Card title="本地账号" styles={{ body: { paddingTop: 8 } }}>
-        <AccountPicker
-          loading={accountsQuery.isLoading}
-          accounts={accountsQuery.data ?? []}
-          selectedAccountId={selectedAccountId}
-          onSelectedAccountId={setSelectedAccountId}
-          onUpdateNote={(accountId, note) => updateAccountMutation.mutate({ accountId, note })}
-          updatingAccountId={updateAccountMutation.variables?.accountId ?? null}
-        />
+          {(task || analyzeMutation.error || taskQuery.error) && (
+            <TaskPanel task={task} analyzeError={analyzeMutation.error} taskError={taskQuery.error} />
+          )}
+
+          <AccountPicker
+            loading={accountsQuery.isLoading}
+            accounts={accountsQuery.data ?? []}
+            selectedAccountId={selectedAccountId}
+            onSelectedAccountId={setSelectedAccountId}
+            onUpdateNote={(accountId, note) => updateAccountMutation.mutate({ accountId, note })}
+            updatingAccountId={updateAccountMutation.variables?.accountId ?? null}
+            onRefreshAccount={(account) => {
+              localStorage.setItem(ACTIVITY_LIMIT_KEY, String(activityLimit));
+              setRefreshingAccountId(account.id);
+              analyzeMutation.mutate({
+                input: account.input || account.normalized_user || account.proxy_wallet,
+                activityLimit,
+              });
+            }}
+            refreshingAccountId={refreshingAccountId}
+            refreshDisabled={isRunning}
+          />
+        </div>
       </Card>
 
       {selectedAccountId && (
@@ -283,6 +331,37 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debouncedValue;
 }
 
+function TaskPanel({
+  task,
+  analyzeError,
+  taskError,
+}: {
+  task: ReportTask | undefined;
+  analyzeError: unknown;
+  taskError: unknown;
+}) {
+  return (
+    <div className="reports-task-panel">
+      <Space direction="vertical" size={10} className="reports-task-panel-inner">
+        {task && (
+          <>
+            <Space wrap>
+              <Typography.Text strong>任务 {task.id.slice(0, 8)}</Typography.Text>
+              <TaskStatusTag status={task.status} />
+              <Typography.Text type="secondary">{task.message}</Typography.Text>
+            </Space>
+            <Progress percent={task.percent} status={task.status === "error" ? "exception" : undefined} />
+            {task.status === "done" && <TaskResult task={task} />}
+            {task.status === "error" && <Alert type="error" message={task.error || "任务失败"} showIcon />}
+          </>
+        )}
+        {analyzeError instanceof Error && <Alert type="error" message={analyzeError.message} showIcon />}
+        {taskError instanceof Error && <Alert type="error" message={taskError.message} showIcon />}
+      </Space>
+    </div>
+  );
+}
+
 function ReportStats({ summary, loading }: { summary: AccountSummary | undefined; loading: boolean }) {
   const recentByDays = new Map((summary?.recent ?? []).map((item) => [item.days, item]));
   return (
@@ -329,6 +408,9 @@ function AccountPicker({
   onSelectedAccountId,
   onUpdateNote,
   updatingAccountId,
+  onRefreshAccount,
+  refreshingAccountId,
+  refreshDisabled,
 }: {
   loading: boolean;
   accounts: ReportAccount[];
@@ -336,112 +418,162 @@ function AccountPicker({
   onSelectedAccountId: (value: string) => void;
   onUpdateNote: (accountId: string, note: string) => void;
   updatingAccountId: string | null;
+  onRefreshAccount: (account: ReportAccount) => void;
+  refreshingAccountId: string | null;
+  refreshDisabled: boolean;
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState("");
+  const sortedAccounts = useMemo(() => sortAccounts(accounts), [accounts]);
+
+  function selectAccount(accountId: string) {
+    localStorage.setItem(SELECTED_ACCOUNT_KEY, accountId);
+    onSelectedAccountId(accountId);
+  }
+
+  function startEditing(account: ReportAccount) {
+    setEditingId(account.id);
+    setEditingNote(account.note || "");
+  }
+
+  function saveNote(accountId: string) {
+    onUpdateNote(accountId, editingNote.trim());
+    setEditingId(null);
+  }
+
+  if (loading) {
+    return (
+      <div className="account-grid-loading" aria-busy="true">
+        <Spin />
+        <Typography.Text type="secondary">正在加载本地账号...</Typography.Text>
+      </div>
+    );
+  }
+
   return (
-    <div className="account-table-wrap">
-      <Table<ReportAccount>
-        rowKey="id"
-        size="small"
-        loading={loading}
-        dataSource={accounts}
-        pagination={{ pageSize: 5, size: "small" }}
-        scroll={{ x: 940 }}
-        rowSelection={{
-          type: "radio",
-          selectedRowKeys: selectedAccountId ? [selectedAccountId] : [],
-          onChange: ([key]) => {
-            const accountId = String(key);
-            localStorage.setItem(SELECTED_ACCOUNT_KEY, accountId);
-            onSelectedAccountId(accountId);
-          },
-        }}
-        onRow={(record) => ({
-          onClick: () => {
-            localStorage.setItem(SELECTED_ACCOUNT_KEY, record.id);
-            onSelectedAccountId(record.id);
-          },
-        })}
-        columns={[
-          {
-            title: "标签",
-            dataIndex: "note",
-            width: 220,
-            render: (value: string, record) => {
-              const isEditing = editingId === record.id;
-              if (isEditing) {
-                return (
-                  <Space.Compact>
-                    <Input
-                      size="small"
-                      value={editingNote}
-                      maxLength={255}
-                      onClick={(event) => event.stopPropagation()}
-                      onChange={(event) => setEditingNote(event.target.value)}
-                      onPressEnter={(event) => {
-                        event.stopPropagation();
-                        onUpdateNote(record.id, editingNote.trim());
-                        setEditingId(null);
-                      }}
-                    />
-                    <Button
-                      size="small"
-                      loading={updatingAccountId === record.id}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onUpdateNote(record.id, editingNote.trim());
-                        setEditingId(null);
-                      }}
-                    >
-                      保存
-                    </Button>
-                  </Space.Compact>
-                );
+    <div className="account-card-grid">
+      {!sortedAccounts.length && (
+        <div className="account-empty-card">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无本地账号，先添加并分析一个账号" />
+        </div>
+      )}
+      {sortedAccounts.map((account) => {
+        const selected = account.id === selectedAccountId;
+        const editing = account.id === editingId;
+        const refreshing = account.id === refreshingAccountId;
+        return (
+          <div
+            key={account.id}
+            role="button"
+            tabIndex={0}
+            className={`account-card ${selected ? "account-card-selected" : ""}`}
+            onClick={() => selectAccount(account.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                selectAccount(account.id);
               }
-              return (
+            }}
+          >
+            <div className="account-card-header">
+              {editing ? (
+                <Space.Compact className="account-label-editor">
+                  <Input
+                    size="small"
+                    value={editingNote}
+                    maxLength={255}
+                    autoFocus
+                    placeholder="账号标签"
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setEditingNote(event.target.value)}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                      if (event.key === "Escape") {
+                        setEditingId(null);
+                      }
+                    }}
+                    onPressEnter={(event) => {
+                      event.stopPropagation();
+                      saveNote(account.id);
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    loading={updatingAccountId === account.id}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      saveNote(account.id);
+                    }}
+                  >
+                    保存
+                  </Button>
+                </Space.Compact>
+              ) : (
                 <button
                   type="button"
-                  className="account-note-button"
+                  className={`account-label ${account.note ? "" : "account-label-empty"}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setEditingId(record.id);
-                    setEditingNote(value || "");
+                    startEditing(account);
                   }}
                 >
-                  {value || "添加标签"}
+                  {account.note || "添加标签"}
                 </button>
-              );
-            },
-          },
-          {
-            title: "用户",
-            dataIndex: "normalized_user",
-            width: 260,
-            render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
-          },
-          {
-            title: "钱包",
-            dataIndex: "proxy_wallet",
-            width: 220,
-            render: (value: string) => (
+              )}
+              <span className="account-selected-dot" aria-hidden="true" />
+            </div>
+
+            <div className="account-card-user">{account.normalized_user || "未命名账号"}</div>
+            <div onClick={(event) => event.stopPropagation()}>
               <Typography.Text
+                className="account-card-wallet"
                 copyable={{
-                  text: value,
+                  text: account.proxy_wallet,
                   tooltips: ["复制完整钱包", "已复制"],
                 }}
               >
-                {shortWallet(value)}
+                {shortWallet(account.proxy_wallet)}
               </Typography.Text>
-            ),
-          },
-          { title: "Activity", dataIndex: "activity_count", width: 110 },
-          { title: "最后下载", dataIndex: "last_downloaded_at", width: 180, render: formatDate },
-          { title: "最新 Activity", dataIndex: "latest_activity_at", width: 180, render: formatDate },
-        ]}
-      />
+            </div>
+
+            <div className="account-card-footer">
+              <span className="account-card-activity">
+                Activity <strong>{account.activity_count.toLocaleString()}</strong>
+              </span>
+              <Button
+                size="small"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRefreshAccount(account);
+                }}
+                loading={refreshing}
+                disabled={refreshDisabled && !refreshing}
+              >
+                更新数据
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function sortAccounts(accounts: ReportAccount[]) {
+  return [...accounts].sort((left, right) => {
+    if (left.favorite !== right.favorite) return left.favorite ? -1 : 1;
+    return accountSortTime(right) - accountSortTime(left);
+  });
+}
+
+function accountSortTime(account: ReportAccount) {
+  return Math.max(timestampMs(account.last_downloaded_at), timestampMs(account.created_at));
+}
+
+function timestampMs(value: string | null) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
 }
 
 function RecentMetricCard({
@@ -581,7 +713,6 @@ function MarketMatrix({
         render: (market) => <ResultCell market={market} />,
         className: (market) => marketResultCellClass(market),
       },
-      { key: "position", label: "持仓状态", render: (market) => <Tag>{displayMarketPositionStatus(market)}</Tag> },
       { key: "redeem_time", label: "Redeem time", render: (market) => formatDate(market.redeem_time) },
       { key: "market_date", label: "市场日期", render: (market) => formatDate(market.market_date) },
       { key: "activity_count", label: "交易数", render: (market) => market.activity_count },
@@ -818,10 +949,6 @@ function marketResultTone(market: MarketPerformance) {
   return "neutral";
 }
 
-function displayMarketPositionStatus(market: MarketPerformance) {
-  return market.redeem_count > 0 ? "无持仓" : market.position_status;
-}
-
 function marketResultCellClass(market: MarketPerformance) {
   // 标签展示官方结果，背景展示本账户在该结果下的实际盈亏，和离线报表保持一致。
   if (isPositive(market.pnl)) return "outcome-profit";
@@ -927,5 +1054,18 @@ function sameNumber(left: number | null, right: number | null) {
 
 function readSavedActivityLimit() {
   const saved = Number(localStorage.getItem(ACTIVITY_LIMIT_KEY));
-  return Number.isFinite(saved) ? saved : 5000;
+  return isActivityLimitOption(saved) ? saved : 5000;
+}
+
+function normalizedActivityLimit(value: unknown) {
+  const limit = Number(value);
+  return isActivityLimitOption(limit) ? limit : readSavedActivityLimit();
+}
+
+function isActivityLimitOption(value: number): value is (typeof ACTIVITY_LIMIT_OPTIONS)[number] {
+  return ACTIVITY_LIMIT_OPTIONS.includes(value as (typeof ACTIVITY_LIMIT_OPTIONS)[number]);
+}
+
+function formatActivityLimitOption(value: number) {
+  return value.toLocaleString();
 }

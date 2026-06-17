@@ -307,6 +307,13 @@ async def list_account_activity_slugs(session: AsyncSession, account_id: str) ->
     return {slug for slug in result.all() if slug}
 
 
+async def get_market_metadata_updated_at(session: AsyncSession, slugs: set[str]) -> datetime | None:
+    if not slugs:
+        return None
+    result = await session.scalar(select(func.max(MarketMetadata.updated_at)).where(MarketMetadata.slug.in_(slugs)))
+    return result
+
+
 async def list_market_metadata(session: AsyncSession, slugs: set[str]) -> dict[str, MarketMetadata]:
     if not slugs:
         return {}

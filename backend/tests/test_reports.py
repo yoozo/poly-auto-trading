@@ -362,6 +362,9 @@ async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> 
     async def fake_update_task(*args, **kwargs):
         calls.setdefault("tasks", []).append(kwargs)
 
+    def fake_clear_report_snapshot_cache(account_id=None):
+        calls["cleared_snapshot_account_id"] = account_id
+
     monkeypatch.setattr(routes_reports, "PolymarketClient", lambda: FakeClient())
     monkeypatch.setattr(routes_reports, "upsert_account", fake_upsert_account)
     monkeypatch.setattr(routes_reports, "delete_account_activities", fake_delete_account_activities)
@@ -370,6 +373,7 @@ async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> 
     monkeypatch.setattr(routes_reports, "ensure_market_metadata_for_slugs", fake_ensure_market_metadata_for_slugs)
     monkeypatch.setattr(routes_reports, "get_account_activity_count", fake_get_account_activity_count)
     monkeypatch.setattr(routes_reports, "update_task", fake_update_task)
+    monkeypatch.setattr(routes_reports, "clear_report_snapshot_cache", fake_clear_report_snapshot_cache)
     monkeypatch.setattr(routes_reports, "logger", SimpleNamespace(exception=lambda *_, **__: None))
 
     await routes_reports.run_account_analysis(
@@ -380,6 +384,7 @@ async def test_run_account_analysis_rebuilds_account_activities(monkeypatch) -> 
     assert calls["iter_params"] == ("0x1111111111111111111111111111111111111111", 5000, None)
     assert calls["deleted_count"] == 3
     assert calls["deleted_account_id"] == "acc-1"
+    assert calls["cleared_snapshot_account_id"] == "acc-1"
 
 
 @pytest.mark.asyncio
@@ -389,6 +394,12 @@ async def test_report_snapshot_coalesces_concurrent_requests(monkeypatch) -> Non
 
     async def fake_get_account_activity_bounds(session, account_id):
         return 10, None, newest
+
+    async def fake_list_account_activity_slugs(session, account_id):
+        return {"btc-up-down"}
+
+    async def fake_get_market_metadata_updated_at(session, slugs):
+        return datetime(2026, 1, 2, tzinfo=timezone.utc)
 
     async def fake_build_report_snapshot(key):
         nonlocal calls
@@ -403,6 +414,8 @@ async def test_report_snapshot_coalesces_concurrent_requests(monkeypatch) -> Non
 
     report_snapshot.clear_report_snapshot_cache()
     monkeypatch.setattr(report_snapshot, "get_account_activity_bounds", fake_get_account_activity_bounds)
+    monkeypatch.setattr(report_snapshot, "list_account_activity_slugs", fake_list_account_activity_slugs)
+    monkeypatch.setattr(report_snapshot, "get_market_metadata_updated_at", fake_get_market_metadata_updated_at)
     monkeypatch.setattr(report_snapshot, "build_report_snapshot", fake_build_report_snapshot)
 
     left, right = await asyncio.gather(
@@ -450,7 +463,7 @@ def test_market_performance_does_not_double_count_redeemed_shares() -> None:
 
     assert market.result == "上涨"
     assert market.position_status == "无持仓"
-    assert market.up_shares == 0
+    assert market.up_shares == 5.35714
     assert market.down_shares == 0
 
 
@@ -465,7 +478,29 @@ def test_market_performance_uses_redeem_amount_when_size_is_missing() -> None:
     assert market.result == "下跌"
     assert market.position_status == "无持仓"
     assert market.up_shares == 0
-    assert market.down_shares == 0
+    assert market.down_shares == 7.27273
+
+
+def test_market_hypothetical_uses_outcome_buy_shares_not_actual_pnl() -> None:
+    activities = [
+        make_activity("buy", "TRADE", "BUY", "Down", "2", "0", "4", slug="btc-down-win"),
+        make_activity("sell", "TRADE", "SELL", "Down", "0", "3", "4", slug="btc-down-win"),
+    ]
+    metadata = SimpleNamespace(
+        slug="btc-down-win",
+        closed=True,
+        outcome="down",
+        raw_outcome="Down",
+        event={"endDate": "2026-01-01T01:00:00Z"},
+        market={"question": "BTC Up or Down", "endDateIso": "2026-01-01T00:30:00Z"},
+    )
+
+    market = build_market_performance(activities, market_metadata={"btc-down-win": metadata})[0]
+
+    assert market.result == "下跌"
+    assert market.pnl == 1
+    assert market.if_down_pnl == 2
+    assert market.if_down_roi == 1
 
 
 def test_market_performance_skips_activity_without_market_identity() -> None:
@@ -572,6 +607,35 @@ def test_market_metadata_overrides_inferred_market_result() -> None:
     assert markets[0].result == "下跌"
     assert markets[0].title == "Bitcoin Up or Down"
     assert markets[0].market_date == datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+
+
+def test_settled_metadata_keeps_actual_recovery_and_hypothetical_buy_shares() -> None:
+    activities = [
+        make_activity("buy", "TRADE", "BUY", "Down", "2", "0", "10", slug="btc-up-win"),
+        make_activity("sell", "TRADE", "SELL", "Down", "0", "3", "10", slug="btc-up-win"),
+    ]
+    metadata = SimpleNamespace(
+        slug="btc-up-win",
+        closed=True,
+        outcome="up",
+        raw_outcome="Up",
+        event={"endDate": "2026-01-01T01:00:00Z"},
+        market={"question": "Bitcoin Up or Down", "endDateIso": "2026-01-01T00:30:00Z"},
+    )
+
+    market = build_market_performance(activities, market_metadata={"btc-up-win": metadata})[0]
+
+    assert market.result == "上涨"
+    assert market.position_status == "无持仓"
+    assert market.cost == 2
+    assert market.recovery == 3
+    assert market.pnl == 1
+    assert market.down_cost == 2
+    assert market.down_shares == 10
+    assert market.if_up_pnl == -2
+    assert market.if_up_roi == -1
+    assert market.if_down_pnl == 8
+    assert market.if_down_roi == 4
 
 
 def test_up_down_title_market_date_is_not_overridden_by_event_metadata() -> None:

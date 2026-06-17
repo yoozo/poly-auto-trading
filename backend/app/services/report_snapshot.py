@@ -10,7 +10,13 @@ from app.db.session import AsyncSessionLocal
 from app.schemas.report import AccountSummary, MarketPerformance
 from app.services.market_metadata import collect_market_slugs
 from app.services.report_analysis import build_account_summary, build_market_performance
-from app.services.report_store import get_account_activity_bounds, list_account_activities, list_market_metadata
+from app.services.report_store import (
+    get_account_activity_bounds,
+    get_market_metadata_updated_at,
+    list_account_activities,
+    list_account_activity_slugs,
+    list_market_metadata,
+)
 
 REPORT_SNAPSHOT_TTL = timedelta(seconds=60)
 
@@ -20,6 +26,7 @@ class ReportSnapshotKey:
     account_id: str
     activity_count: int
     newest_activity_at: datetime | None
+    metadata_updated_at: datetime | None
 
 
 @dataclass
@@ -37,8 +44,15 @@ _SNAPSHOT_LOCK = asyncio.Lock()
 
 async def get_report_snapshot(session: AsyncSession, account_id: str) -> ReportSnapshot:
     count, _, newest = await get_account_activity_bounds(session, account_id)
-    # 快照 key 绑定 activity 数量和最新时间，数据没变化时避免重复聚合整账户报表。
-    key = ReportSnapshotKey(account_id=account_id, activity_count=count, newest_activity_at=newest)
+    slugs = await list_account_activity_slugs(session, account_id)
+    metadata_updated_at = await get_market_metadata_updated_at(session, slugs)
+    # 快照 key 绑定 activity 与 metadata 更新时间，避免市场结果更新后继续复用旧聚合。
+    key = ReportSnapshotKey(
+        account_id=account_id,
+        activity_count=count,
+        newest_activity_at=newest,
+        metadata_updated_at=metadata_updated_at,
+    )
     cached = _SNAPSHOT_CACHE.get(account_id)
     if cached and cached.key == key and not snapshot_expired(cached):
         return cached
@@ -84,6 +98,10 @@ def clear_snapshot_task(account_id: str, completed: asyncio.Task[ReportSnapshot]
         _IN_FLIGHT_SNAPSHOTS.pop(account_id, None)
 
 
-def clear_report_snapshot_cache() -> None:
-    _SNAPSHOT_CACHE.clear()
-    _IN_FLIGHT_SNAPSHOTS.clear()
+def clear_report_snapshot_cache(account_id: str | None = None) -> None:
+    if account_id is None:
+        _SNAPSHOT_CACHE.clear()
+        _IN_FLIGHT_SNAPSHOTS.clear()
+        return
+    _SNAPSHOT_CACHE.pop(account_id, None)
+    _IN_FLIGHT_SNAPSHOTS.pop(account_id, None)

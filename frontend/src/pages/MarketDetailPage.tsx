@@ -153,7 +153,7 @@ function MarketDetailHeader({ detail, onBack }: { detail: ReportMarketDetail; on
             {market.title}
           </Typography.Title>
           <div className="market-detail-subtitle">
-            {formatDate(firstActivity?.timestamp ?? null)} 至 {formatDate(lastActivity?.timestamp ?? null)} · {detail.activities.length} 条 activity
+            {formatLocalDate(firstActivity?.timestamp ?? null)} 至 {formatLocalDate(lastActivity?.timestamp ?? null)} · {detail.activities.length} 条 activity
           </div>
         </div>
       </div>
@@ -166,9 +166,8 @@ function MarketSummary({ detail, replay }: { detail: ReportMarketDetail; replay:
   const summary = replay.summary;
   const pnl = summary.returned - summary.buyCost;
   const roi = safeRatio(pnl, summary.buyCost);
-  const closedOutcome = closedOutcomeKey(market, metadata);
-  const positionStatus = formatCurrentPosition(summary, closedOutcome);
-  const currentShares = currentDisplayShares(summary, closedOutcome);
+  const hasRedeem = summary.redeemCount > 0;
+  const currentShares = hasRedeem ? "0" : currentDisplayShares(summary);
 
   return (
     <>
@@ -177,12 +176,6 @@ function MarketSummary({ detail, replay }: { detail: ReportMarketDetail; replay:
           label="实际结果"
           value={<OutcomePill value={resolveResultLabel(market, metadata)} />}
           tone={toneFor(pnl)}
-          result
-        />
-        <DetailMetric
-          label="持仓状态"
-          value={<OutcomePill value={positionStatus} />}
-          tone="neutral"
           result
         />
         <DetailMetric label="收益" value={formatSignedMoney(pnl)} tone={toneFor(pnl)} />
@@ -244,8 +237,8 @@ function TimelineTable({ rows }: { rows: TimelineRow[] }) {
       title: "时间",
       dataIndex: "timestamp",
       fixed: "left",
-      width: 190,
-      render: (value: string) => formatDate(value),
+      width: 170,
+      render: (value: string) => formatLocalDate(value),
     },
     {
       title: "类型",
@@ -603,7 +596,7 @@ function transactionUrl(value: string) {
   return `https://polygonscan.com/tx/${value}`;
 }
 
-function formatDate(value: string | null) {
+function formatLocalDate(value: string | null) {
   if (!value) return "n/a";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -615,10 +608,9 @@ function formatDate(value: string | null) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-    timeZoneName: "shortOffset",
   }).formatToParts(date);
   const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}:${part("second")} ${part("timeZoneName")}`.trim();
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}:${part("second")}`;
 }
 
 function formatMoney(value: number | null | undefined) {

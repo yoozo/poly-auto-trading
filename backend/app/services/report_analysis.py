@@ -318,11 +318,13 @@ def apply_activity(market: MarketAccumulator, activity: ActivityLike) -> None:
 def serialize_market(market: MarketAccumulator) -> MarketPerformance:
     up = market.outcomes.get("up") or OutcomePosition()
     down = market.outcomes.get("down") or OutcomePosition()
-    remaining_up = current_shares_for(market, "up")
-    remaining_down = current_shares_for(market, "down")
-    if_up_pnl = market.merged + remaining_up - market.cost
-    if_down_pnl = market.merged + remaining_down - market.cost
-    position_status = format_position_status(market)
+    result = inferred_result(market)
+    settled_outcome = result_outcome_key(result)
+    up_shares = display_shares_for_result(market, "up")
+    down_shares = display_shares_for_result(market, "down")
+    if_up_pnl = hypothetical_pnl(market, "up")
+    if_down_pnl = hypothetical_pnl(market, "down")
+    position_status = format_position_status(market, settled_outcome)
 
     return MarketPerformance(
         market_id=market.market_id,
@@ -330,7 +332,7 @@ def serialize_market(market: MarketAccumulator) -> MarketPerformance:
         slug=market.slug,
         condition_id=market.condition_id,
         event_slug=market.event_slug,
-        result=inferred_result(market),
+        result=result,
         position_status=position_status,
         activity_count=market.activity_count,
         redeem_count=market.redeem_count,
@@ -338,10 +340,10 @@ def serialize_market(market: MarketAccumulator) -> MarketPerformance:
         market_date=market.market_date,
         redeem_time=market.redeem_time,
         up_cost=as_float(up.cost),
-        up_shares=as_float(remaining_up),
+        up_shares=as_float(up_shares),
         up_average_cost=ratio(up.cost, up.buy_shares) if up.buy_shares > DUST else None,
         down_cost=as_float(down.cost),
-        down_shares=as_float(remaining_down),
+        down_shares=as_float(down_shares),
         down_average_cost=ratio(down.cost, down.buy_shares) if down.buy_shares > DUST else None,
         cost=as_float(market.cost),
         recovery=as_float(market.recovery),
@@ -530,10 +532,36 @@ def current_shares_for(market: MarketAccumulator, outcome: str) -> Decimal:
     return positive_position(position.current_shares)
 
 
-def format_position_status(market: MarketAccumulator) -> str:
+def display_shares_for_result(
+    market: MarketAccumulator,
+    outcome: str,
+) -> Decimal:
+    position = market.outcomes.get(outcome) or OutcomePosition()
+    return positive_position(position.buy_shares - market.merged_shares)
+
+
+def hypothetical_pnl(
+    market: MarketAccumulator,
+    outcome: str,
+) -> Decimal:
+    position = market.outcomes.get(outcome) or OutcomePosition()
+    return positive_position(position.buy_shares - market.merged_shares) - market.cost
+
+
+def result_outcome_key(result: str) -> str | None:
+    if result in {"上涨", "是"}:
+        return "up"
+    if result in {"下跌", "否"}:
+        return "down"
+    return None
+
+
+def format_position_status(market: MarketAccumulator, settled_outcome: str | None = None) -> str:
     parts: list[str] = []
     labels = {"up": "Up", "down": "Down", "yes": "Yes", "no": "No"}
     for outcome, position in market.outcomes.items():
+        if settled_outcome is not None and outcome != settled_outcome:
+            continue
         shares = current_shares_for(market, outcome)
         if shares >= POSITION_DUST:
             parts.append(f"{labels.get(outcome, outcome)} {as_float(shares):g}")

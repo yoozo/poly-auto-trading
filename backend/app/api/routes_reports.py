@@ -25,7 +25,7 @@ from app.schemas.report import (
 )
 from app.services.polymarket_client import PolymarketClient, PolymarketInputError
 from app.services.market_metadata import ensure_market_metadata_for_slugs
-from app.services.report_snapshot import get_report_snapshot
+from app.services.report_snapshot import clear_report_snapshot_cache, get_report_snapshot
 from app.services.report_store import (
     account_exists,
     create_task,
@@ -247,6 +247,7 @@ async def run_account_analysis(task_id: str, payload: AnalyzeAccountRequest) -> 
                 message="重算市场分析结果",
                 percent=98,
             )
+            clear_report_snapshot_cache(account.id)
             total_count = await get_account_activity_count(session, account.id)
             await update_task(
                 session,
