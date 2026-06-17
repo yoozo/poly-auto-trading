@@ -207,15 +207,11 @@ export default function MarketTechnicalChart({
 
   const chartOptions = useCallback(
     (
-      container: HTMLDivElement,
       showTimeScale: boolean,
       priceScaleMargins = { top: 0.12, bottom: 0.12 },
-      showTimeLabels = showTimeScale,
-      minHeight = 120
+      showTimeLabels = showTimeScale
     ) => ({
       autoSize: true,
-      width: Math.max(320, container.clientWidth),
-      height: Math.max(minHeight, container.clientHeight),
       localization: {
         locale: "zh-CN",
         timeFormatter: (time: Time) => {
@@ -258,9 +254,9 @@ export default function MarketTechnicalChart({
 
     // 主图、RSI、diff 分成三个 chart，方便不同价格轴范围独立控制，但时间轴必须联动。
     const activeTheme = chartThemeRef.current;
-    const mainChart = createChart(mainContainerRef.current, chartOptions(mainContainerRef.current, !showRsiRef.current));
-    const rsiChart = createChart(rsiContainerRef.current, chartOptions(rsiContainerRef.current, false, { top: 0.06, bottom: 0.08 }, false, 1));
-    const diffChart = createChart(diffContainerRef.current, chartOptions(diffContainerRef.current, true, { top: 0.12, bottom: 0.12 }, true, 1));
+    const mainChart = createChart(mainContainerRef.current, chartOptions(!showRsiRef.current));
+    const rsiChart = createChart(rsiContainerRef.current, chartOptions(false, { top: 0.06, bottom: 0.08 }, false));
+    const diffChart = createChart(diffContainerRef.current, chartOptions(true, { top: 0.12, bottom: 0.12 }, true));
     const candleSeries = mainChart.addSeries(CandlestickSeries, {
       upColor: activeTheme.candleUp,
       downColor: activeTheme.candleDown,

@@ -52,6 +52,10 @@ const MONTH_INDEX: Record<string, number> = {
   november: 10,
   december: 11,
 };
+// React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
+const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
+const EMPTY_MARKET_INDICATORS: MarketIndicatorPoint[] = [];
+const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
 
 export default function BTCWatchPage() {
   const queryClient = useQueryClient();
@@ -103,15 +107,15 @@ export default function BTCWatchPage() {
     return () => mediaQuery.removeEventListener("change", syncVisibleCandles);
   }, []);
 
-  const { data: latestCandles = [], error } = useQuery({
+  const { data: latestCandles = EMPTY_MARKET_CANDLES, error } = useQuery({
     queryKey: ["candles", interval],
     queryFn: () => api.candles(interval, 300),
   });
-  const { data: latestIndicators = [] } = useQuery({
+  const { data: latestIndicators = EMPTY_MARKET_INDICATORS } = useQuery({
     queryKey: ["indicators", interval, indicatorLimit],
     queryFn: () => api.indicators(interval, indicatorLimit),
   });
-  const { data: polymarketSnapshot = [], error: polymarketError } = useQuery({
+  const { data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS, error: polymarketError } = useQuery({
     queryKey: ["polymarket-btc-up-down", polymarketInterval],
     queryFn: () => api.polymarketBtcUpDown(polymarketInterval, 12),
     // REST 只负责初始快照和切换 interval；后续盘口/窗口变化由 Polymarket WS 快照推送。
