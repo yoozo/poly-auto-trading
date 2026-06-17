@@ -198,6 +198,44 @@ class Candle(Base, TimestampMixin):
     is_closed: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class KlineBackfillTask(Base, TimestampMixin):
+    __tablename__ = "kline_backfill_tasks"
+    __table_args__ = (
+        Index("ix_kline_backfill_tasks_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    message: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    total_inserted: Mapped[int] = mapped_column(BigInteger, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    task_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class KlineBackfillProgress(Base, TimestampMixin):
+    __tablename__ = "kline_backfill_progress"
+    __table_args__ = (
+        UniqueConstraint("task_id", "interval", name="uq_kline_backfill_progress_task_interval"),
+        Index("ix_kline_backfill_progress_task_status", "task_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("kline_backfill_tasks.id", ondelete="CASCADE")
+    )
+    interval: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    next_start_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    end_ms: Mapped[int] = mapped_column(BigInteger)
+    inserted_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class IndicatorSnapshot(Base):
     __tablename__ = "indicator_snapshots"
     __table_args__ = (

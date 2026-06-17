@@ -6,6 +6,7 @@ from app.api import routes_candles
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.candle import Candle
+from app.services.candle_backfill import CandleBackfillStatus
 from conftest import login_test_client
 
 
@@ -78,6 +79,67 @@ def test_candles_range_mode(monkeypatch) -> None:
     assert calls["fetch"]["limit"] == 1000
     assert calls["upserted"] == fetched
     assert calls["between"]["symbol"] == "BTCUSDT"
+
+
+def test_candles_range_mode_paginates_until_range_is_downloaded(monkeypatch) -> None:
+    calls = {"between": 0, "upserted": []}
+    first_batch = [make_candle(index) for index in range(1000)]
+    second_batch = [make_candle(index) for index in range(1000, 1002)]
+    downloaded = [*first_batch, *second_batch]
+
+    class FakeBinanceClient:
+        async def fetch_klines(self, **kwargs):
+            calls.setdefault("fetches", []).append(kwargs)
+            return first_batch if len(calls["fetches"]) == 1 else second_batch
+
+    async def fake_upsert(session, candles):
+        calls["upserted"].append(candles)
+
+    async def fake_list_between(session, symbol, interval, start, end):
+        calls["between"] += 1
+        return downloaded if calls["between"] > 1 else []
+
+    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
+    monkeypatch.setattr(routes_candles, "upsert_candles", fake_upsert)
+    monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
+
+    client = make_client()
+    response = client.get(
+        "/api/candles?symbol=BTCUSDT&interval=1m&limit=1000&start_ms=1767225600000&end_ms=1767285660000"
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1002
+    assert [call["start_ms"] for call in calls["fetches"]] == [1767225600000, 1767285600000]
+    assert all(call["limit"] == 1000 for call in calls["fetches"])
+    assert [len(batch) for batch in calls["upserted"]] == [1000, 2]
+
+
+def test_candle_backfill_endpoint_starts_runner(monkeypatch) -> None:
+    calls = {}
+    status = CandleBackfillStatus(
+        state="running",
+        symbol="BTCUSDT",
+        intervals=["1m", "5m"],
+        fetched={"1m": 0, "5m": 0},
+    )
+
+    class FakeBackfillRunner:
+        def status(self):
+            return status
+
+        async def start_all(self, *, symbol):
+            calls["symbol"] = symbol
+            return status
+
+    monkeypatch.setattr(routes_candles, "candle_backfill_runner", FakeBackfillRunner())
+
+    client = make_client()
+    response = client.post("/api/candles/backfill?symbol=BTCUSDT")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "running"
+    assert calls["symbol"] == "BTCUSDT"
 
 
 def test_candles_range_mode_uses_database_cache_when_count_matches(monkeypatch) -> None:

@@ -27,6 +27,34 @@ export type IndicatorPoint = {
   };
 };
 
+export type CandleBackfillStatus = {
+  state: "idle" | "running" | "completed" | "error";
+  task_id: number | null;
+  symbol: string;
+  intervals: CandleInterval[];
+  current_interval: CandleInterval | null;
+  current_start_ms: number | null;
+  end_ms: number | null;
+  fetched: Record<string, number>;
+  progress: CandleBackfillProgressStatus[];
+  total_inserted: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  message: string;
+};
+
+export type CandleBackfillProgressStatus = {
+  interval: CandleInterval;
+  status: "pending" | "running" | "completed" | "error";
+  next_start_ms: number;
+  end_ms: number;
+  inserted_count: number;
+  last_error: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export type HealthStatus = {
   status: "ok" | "degraded";
   time: string;
@@ -378,6 +406,11 @@ export const api = {
     request<IndicatorPoint[]>(
       `/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
     ),
+  candleBackfillStatus: () => request<CandleBackfillStatus>("/api/candles/backfill"),
+  startCandleBackfill: () =>
+    request<CandleBackfillStatus>("/api/candles/backfill?symbol=BTCUSDT", {
+      method: "POST",
+    }),
   analyzeAccount: (input: string, activityLimit: number) =>
     request<{ task_id: string; status: ReportTask["status"] }>("/api/reports/accounts/analyze", {
       method: "POST",

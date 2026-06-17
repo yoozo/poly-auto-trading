@@ -1,6 +1,13 @@
-import { Badge, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Typography } from "antd";
-import { useQuery } from "@tanstack/react-query";
-import { api, type ServiceEventRecord, type ServiceHealth } from "../api/client";
+import { CloudDownloadOutlined, ReloadOutlined } from "@ant-design/icons";
+import { Badge, Button, Card, Col, Empty, Row, Space, Statistic, Table, Tag, Typography, message } from "antd";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  api,
+  type CandleBackfillProgressStatus,
+  type CandleBackfillStatus,
+  type ServiceEventRecord,
+  type ServiceHealth
+} from "../api/client";
 
 const stateColor: Record<string, "success" | "processing" | "default" | "error" | "warning"> = {
   running: "success",
@@ -10,6 +17,7 @@ const stateColor: Record<string, "success" | "processing" | "default" | "error" 
 };
 
 export default function SystemStatusPage() {
+  const queryClient = useQueryClient();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 10_000 });
   const services = useQuery({
     queryKey: ["services"],
@@ -20,6 +28,25 @@ export default function SystemStatusPage() {
     queryKey: ["service-events"],
     queryFn: () => api.serviceEvents({ limit: 80 }),
     refetchInterval: 10_000
+  });
+  const candleBackfill = useQuery({
+    queryKey: ["candle-backfill"],
+    queryFn: api.candleBackfillStatus,
+    refetchInterval: (query) => (query.state.data?.state === "running" ? 3_000 : 10_000)
+  });
+  const startCandleBackfill = useMutation({
+    mutationFn: api.startCandleBackfill,
+    onSuccess: async (status) => {
+      message.success(status.state === "running" ? "K 线下载任务已启动" : "K 线下载任务已在运行");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["candle-backfill"] }),
+        queryClient.invalidateQueries({ queryKey: ["services"] }),
+        queryClient.invalidateQueries({ queryKey: ["service-events"] })
+      ]);
+    },
+    onError: (error) => {
+      message.error(error instanceof Error ? error.message : "启动 K 线下载失败");
+    }
   });
 
   return (
@@ -84,6 +111,32 @@ export default function SystemStatusPage() {
       </Card>
 
       <Card
+        title="K 线数据"
+        extra={
+          <Space>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={() => candleBackfill.refetch()}
+              loading={candleBackfill.isFetching}
+            >
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<CloudDownloadOutlined />}
+              loading={startCandleBackfill.isPending}
+              disabled={candleBackfill.data?.state === "running"}
+              onClick={() => startCandleBackfill.mutate()}
+            >
+              {candleBackfill.data?.state === "error" ? "继续下载" : "一键下载"}
+            </Button>
+          </Space>
+        }
+      >
+        {renderCandleBackfill(candleBackfill.data)}
+      </Card>
+
+      <Card
         title="服务事件"
         extra={<Button size="small" onClick={() => events.refetch()} loading={events.isFetching}>重试</Button>}
       >
@@ -140,6 +193,14 @@ export default function SystemStatusPage() {
 }
 
 function renderServiceMetadata(record: ServiceHealth) {
+  if (record.name === "kline_backfill") {
+    const metadata = record.metadata as Partial<CandleBackfillStatus>;
+    return (
+      <Typography.Text>
+        #{metadata.task_id || "-"} / {metadata.symbol || "BTCUSDT"} / {metadata.current_interval || metadata.state || record.state}
+      </Typography.Text>
+    );
+  }
   if (record.name !== "telegram") {
     return <Typography.Text type="secondary">-</Typography.Text>;
   }
@@ -153,6 +214,117 @@ function renderServiceMetadata(record: ServiceHealth) {
       {lastDelivery?.title ? ` / ${lastDelivery.title}: ${lastDelivery.status || "-"}` : ""}
     </Typography.Text>
   );
+}
+
+function renderCandleBackfill(status?: CandleBackfillStatus) {
+  if (!status) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 K 线下载状态" />;
+  }
+  const progressRows: CandleBackfillProgressStatus[] = status.progress.length
+    ? status.progress
+    : Object.entries(status.fetched).map(([interval, count]) => ({
+        interval,
+        status: "pending" as const,
+        next_start_ms: 0,
+        end_ms: status.end_ms ?? 0,
+        inserted_count: count,
+        last_error: "",
+        started_at: null,
+        finished_at: null
+      })) as CandleBackfillProgressStatus[];
+  return (
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={6}>
+          <Statistic title="状态" value={backfillStateText(status.state)} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="任务" value={status.task_id ? `#${status.task_id}` : "-"} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="当前周期" value={status.current_interval || "-"} />
+        </Col>
+        <Col xs={24} md={6}>
+          <Statistic title="已写入" value={status.total_inserted || progressRows.reduce((sum, row) => sum + row.inserted_count, 0)} />
+        </Col>
+      </Row>
+      <Space wrap>
+        <Tag color={backfillStateColor(status.state)}>{backfillStateText(status.state)}</Tag>
+        <Tag>{status.symbol || "BTCUSDT"}</Tag>
+        {status.started_at ? <Tag>开始 {new Date(status.started_at).toLocaleString()}</Tag> : null}
+        {status.finished_at ? <Tag>结束 {new Date(status.finished_at).toLocaleString()}</Tag> : null}
+        {status.current_start_ms !== null ? <Tag>游标 {new Date(status.current_start_ms).toLocaleString()}</Tag> : null}
+        {status.error ? <Tag color="error">{status.error}</Tag> : null}
+      </Space>
+      <Table
+        rowKey="interval"
+        size="small"
+        pagination={false}
+        dataSource={progressRows}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未开始下载" /> }}
+        columns={[
+          {
+            title: "周期",
+            dataIndex: "interval",
+            width: 120,
+            render: (value: string) => <Tag>{value}</Tag>
+          },
+          {
+            title: "状态",
+            dataIndex: "status",
+            width: 120,
+            render: (value: string) => <Tag color={progressStateColor(value)}>{progressStateText(value)}</Tag>
+          },
+          {
+            title: "断点",
+            dataIndex: "next_start_ms",
+            render: (value: number) => (value > 0 ? new Date(value).toLocaleString() : "起点")
+          },
+          {
+            title: "已写入 K 线",
+            dataIndex: "inserted_count",
+            render: (value: number) => value.toLocaleString()
+          },
+          {
+            title: "错误",
+            dataIndex: "last_error",
+            render: (value: string) => value || <Typography.Text type="secondary">-</Typography.Text>
+          }
+        ]}
+      />
+      <Typography.Text type="secondary">
+        任务会按服务端配置的 Binance 周期逐个下载，每轮并发 10 页、每页最多 1000 根；失败或服务重启后会从断点继续。
+      </Typography.Text>
+    </Space>
+  );
+}
+
+function backfillStateText(state: CandleBackfillStatus["state"]) {
+  if (state === "running") return "下载中";
+  if (state === "completed") return "已完成";
+  if (state === "error") return "失败";
+  return "空闲";
+}
+
+function backfillStateColor(state: CandleBackfillStatus["state"]) {
+  if (state === "running") return "processing";
+  if (state === "completed") return "success";
+  if (state === "error") return "error";
+  return "default";
+}
+
+function progressStateText(state: string) {
+  if (state === "running") return "下载中";
+  if (state === "completed") return "已完成";
+  if (state === "error") return "失败";
+  return "等待";
+}
+
+function progressStateColor(state: string) {
+  if (state === "running") return "processing";
+  if (state === "completed") return "success";
+  if (state === "error") return "error";
+  return "default";
 }
 
 function eventLevelColor(level: string) {

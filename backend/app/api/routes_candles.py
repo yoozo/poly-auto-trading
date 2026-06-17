@@ -8,6 +8,12 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.schemas.candle import Candle, IndicatorPoint, Interval
 from app.services.binance_client import BinanceClient
+from app.services.candle_backfill import (
+    BINANCE_KLINE_LIMIT,
+    INTERVAL_MS,
+    CandleBackfillStatus,
+    candle_backfill_runner,
+)
 from app.services.candle_store import list_candles, list_candles_between, upsert_candles
 from app.services.indicators import calculate_indicator_points
 from app.services.market_ws_hub import market_ws_hub
@@ -15,15 +21,16 @@ from app.services.market_ws_hub import market_ws_hub
 router = APIRouter(tags=["candles"])
 
 INDICATOR_WARMUP_BARS = 80
-INTERVAL_MS: dict[Interval, int] = {
-    "1m": 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "30m": 30 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1d": 24 * 60 * 60_000,
-}
+
+
+@router.get("/candles/backfill", response_model=CandleBackfillStatus)
+async def candle_backfill_status() -> CandleBackfillStatus:
+    return await candle_backfill_runner.status()
+
+
+@router.post("/candles/backfill", response_model=CandleBackfillStatus)
+async def start_candle_backfill(symbol: str = settings.binance_symbol) -> CandleBackfillStatus:
+    return await candle_backfill_runner.start_all(symbol=symbol)
 
 
 @router.get("/candles", response_model=list[Candle])
@@ -44,8 +51,16 @@ async def candles(
         start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
         end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
         cached = await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
-        if has_matching_candle_count(cached, start_ms=start_ms, end_ms=end_ms, interval=interval, limit=limit):
+        if has_matching_candle_count(cached, start_ms=start_ms, end_ms=end_ms, interval=interval):
             return cached
+        await backfill_candles_between(
+            session,
+            symbol=symbol,
+            interval=interval,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        return await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
     else:
         cached = await list_candles(session, symbol=symbol, interval=interval, limit=limit)
         # 最新窗口足够新时直接用数据库，避免前端刷新频繁打 Binance REST。
@@ -60,8 +75,6 @@ async def candles(
         end_ms=end_ms,
     )
     await upsert_candles(session, fetched)
-    if start_ms is not None and end_ms is not None:
-        return await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
     return await list_candles(session, symbol=symbol, interval=interval, limit=limit)
 
 
@@ -79,14 +92,47 @@ def has_matching_candle_count(
     start_ms: int,
     end_ms: int,
     interval: Interval,
-    limit: int,
 ) -> bool:
-    return len(candles) >= expected_candle_count(start_ms=start_ms, end_ms=end_ms, interval=interval, limit=limit)
+    return len(candles) >= expected_candle_count(start_ms=start_ms, end_ms=end_ms, interval=interval)
 
 
-def expected_candle_count(*, start_ms: int, end_ms: int, interval: Interval, limit: int) -> int:
+def expected_candle_count(*, start_ms: int, end_ms: int, interval: Interval) -> int:
     interval_ms = INTERVAL_MS[interval]
-    return min(limit, ((end_ms - start_ms) // interval_ms) + 1)
+    return ((end_ms - start_ms) // interval_ms) + 1
+
+
+async def backfill_candles_between(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    interval: Interval,
+    start_ms: int,
+    end_ms: int,
+) -> int:
+    fetched_count = 0
+    interval_ms = INTERVAL_MS[interval]
+    next_start_ms = start_ms
+    client = BinanceClient()
+    while next_start_ms <= end_ms:
+        # Binance 单次最多返回 1000 根 K 线；这里按 open_time 游标分页，边拉边写库。
+        candles = await client.fetch_klines(
+            symbol=symbol,
+            interval=interval,
+            limit=BINANCE_KLINE_LIMIT,
+            start_ms=next_start_ms,
+            end_ms=end_ms,
+        )
+        if not candles:
+            break
+        await upsert_candles(session, candles)
+        fetched_count += len(candles)
+        following_start_ms = int(candles[-1].open_time.timestamp() * 1000) + interval_ms
+        if following_start_ms <= next_start_ms:
+            break
+        next_start_ms = following_start_ms
+        if len(candles) < BINANCE_KLINE_LIMIT:
+            break
+    return fetched_count
 
 
 def utc_now() -> datetime:
@@ -119,16 +165,14 @@ async def indicators(
             start_ms=warmup_start_ms,
             end_ms=end_ms,
             interval=interval,
-            limit=limit,
         ):
-            fetched = await BinanceClient().fetch_klines(
+            await backfill_candles_between(
+                session,
                 symbol=symbol,
                 interval=interval,
-                limit=limit,
                 start_ms=warmup_start_ms,
                 end_ms=end_ms,
             )
-            await upsert_candles(session, fetched)
             candles = await list_candles_between(session, symbol=symbol, interval=interval, start=warmup_start, end=end)
         points = calculate_indicator_points(candles, interval)
         return [point for candle, point in zip(candles, points) if start <= candle.open_time <= end]
