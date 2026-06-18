@@ -485,11 +485,7 @@ class PolymarketClient:
                     limit=limit,
                 ))
             except Exception as exc:
-                logger.warning(
-                    "Polymarket up/down series fetch failed; falling back to events",
-                    extra={"interval": interval, "series_slug": series_slug},
-                    exc_info=exc,
-                )
+                self._log_up_down_series_fallback(interval=interval, series_slug=series_slug, exc=exc)
             async with self._public_client() as client:
                 tag_params = dict(params)
                 tag_params["tag_slug"] = tag_slug
@@ -550,6 +546,7 @@ class PolymarketClient:
     ) -> list[dict[str, Any]]:
         payload = await with_retry(
             lambda: self._fetch_series_events(series_slug=series_slug),
+            retryable=is_retryable_polymarket_sdk_error,
         )
         service_health_store.set(
             "polymarket",
@@ -601,6 +598,19 @@ class PolymarketClient:
         paginator = client.list_events(closed=closed, page_size=limit, **params)
         page = await paginator.first_page()
         return [sdk_event_to_gamma_dict(item) for item in page.items]
+
+    def _log_up_down_series_fallback(self, *, interval: str, series_slug: str, exc: Exception) -> None:
+        metadata = {
+            "interval": interval,
+            "series_slug": series_slug,
+            "error_type": type(exc).__name__,
+            "error": str(exc) or type(exc).__name__,
+        }
+        # Series 是优先路径；网络/限流抖动时 events 查询会继续兜底，避免把可恢复分支刷成告警堆栈。
+        if is_retryable_polymarket_sdk_error(exc):
+            logger.info("Polymarket up/down series fetch failed; falling back to events", extra=metadata)
+            return
+        logger.warning("Polymarket up/down series fetch failed; falling back to events", extra=metadata, exc_info=exc)
 
     async def _fetch_series_events(self, *, series_slug: str) -> list[dict[str, Any]]:
         async with self._public_client() as client:

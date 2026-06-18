@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { CandleInterval } from "../../api/client";
+import { buildCandlestickData, type ChartCandle } from "./candlestickData";
 import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
 import {
   candleTime,
@@ -163,7 +164,7 @@ export default function MarketTechnicalChart({
   const rsiPrimarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const diffPrimarySeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const candlesRef = useRef<MarketCandle[]>([]);
+  const candlesRef = useRef<ChartCandle[]>([]);
   const indicatorsRef = useRef<MarketIndicatorPoint[]>([]);
   const candleByTimeRef = useRef<Map<number, MarketCandle>>(new Map());
   const bollByTimeRef = useRef<Map<number, MarketIndicatorPoint["bollinger"]>>(new Map());
@@ -430,7 +431,17 @@ export default function MarketTechnicalChart({
     if (candles.some((candle) => candle.interval !== interval)) return;
     if (indicators.some((point) => point.interval !== interval)) return;
 
-    const chartCandles = uniqueCandlesByChartTime(candles);
+    const builtCandles = buildCandlestickData(candles, interval);
+    if (builtCandles.rejectedCount > 0) {
+      console.warn("market_chart_rejected_candles", {
+        symbol,
+        interval,
+        rejectedCount: builtCandles.rejectedCount,
+        inputCount: candles.length,
+      });
+    }
+    const chartCandles = builtCandles.candles;
+    const candlestickData = builtCandles.data;
     const previousRange = mainChart.timeScale().getVisibleLogicalRange();
     const previousLength = candlesRef.current.length;
     const previousFirst = previousFirstTimeRef.current;
@@ -453,33 +464,23 @@ export default function MarketTechnicalChart({
     mainCrosshairDataRef.current = chartCandles.map((candle) => ({ time: candleTime(candle), value: candle.close }));
     rebuildMaps();
 
-    candleSeries.setData(
-      chartCandles.map((candle) => ({
-        time: candleTime(candle) as UTCTimestamp,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close
-      }))
-    );
+    if (candlestickData.length <= 0) {
+      enterEmptyChartState();
+      return;
+    }
+    resetMainOverlaySeries();
+    if (!safeSetSeriesData(
+      candleSeries,
+      candlestickData.map((candle) => ({ ...candle, time: candle.time as UTCTimestamp })),
+      "main-candles"
+    )) {
+      enterEmptyChartState();
+      return;
+    }
     renderBollinger();
     renderComparisonLine();
     renderRsi();
     renderDiff();
-
-    if (chartCandles.length <= 0) {
-      // 切换周期时会短暂进入空数据帧；此时不能把 lightweight-charts 残留的旧 range 写回去。
-      initializedRef.current = false;
-      previousFirstTimeRef.current = null;
-      previousLengthRef.current = 0;
-      latestRangeRef.current = null;
-      lastCrosshairTimeRef.current = null;
-      mainChart.clearCrosshairPosition();
-      rsiChart.clearCrosshairPosition();
-      diffChart.clearCrosshairPosition();
-      hideTooltip();
-      return;
-    }
 
     const focusApplied = applyFocusRangeIfNeeded();
 
@@ -561,7 +562,7 @@ export default function MarketTechnicalChart({
       syncingRangeRef.current = true;
       try {
         for (const target of pending.targets) {
-          target.timeScale().setVisibleLogicalRange(pending.range);
+          safeSetVisibleRange(target, pending.range, "sync");
         }
       } finally {
         syncingRangeRef.current = false;
@@ -582,11 +583,48 @@ export default function MarketTechnicalChart({
     mainCrosshairDataRef.current = [];
     rsiCrosshairDataRef.current = [];
     diffCrosshairDataRef.current = [];
-    candleSeriesRef.current?.setData([]);
-    for (const series of Object.values(bollSeriesRef.current)) series?.setData([]);
-    for (const series of Object.values(rsiSeriesRef.current)) series?.setData([]);
-    for (const series of Object.values(diffSeriesRef.current)) series?.setData([]);
     removeComparisonLine();
+    resetMainOverlaySeries();
+  }
+
+  function enterEmptyChartState() {
+    // 空态只清 React 侧索引，不再用 setData([]) 驱动旧 series；interval 切换由卸载 chart 完成。
+    initializedRef.current = false;
+    previousFirstTimeRef.current = null;
+    previousLengthRef.current = 0;
+    latestRangeRef.current = null;
+    lastCrosshairTimeRef.current = null;
+    clearChartDataState();
+    mainChartRef.current?.clearCrosshairPosition();
+    rsiChartRef.current?.clearCrosshairPosition();
+    diffChartRef.current?.clearCrosshairPosition();
+    hideTooltip();
+  }
+
+  function safeSetSeriesData(series: { setData: (data: any[]) => void } | null | undefined, data: any[], context: string) {
+    if (!series) return false;
+    try {
+      series.setData(data);
+      return true;
+    } catch (error) {
+      console.warn("market_chart_set_data_failed", { symbol, interval: intervalRef.current, context, error });
+      return false;
+    }
+  }
+
+  function resetMainOverlaySeries() {
+    const chart = mainChartRef.current;
+    if (!chart) return;
+    for (const series of Object.values(bollSeriesRef.current)) {
+      if (!series) continue;
+      try {
+        chart.removeSeries(series);
+      } catch (error) {
+        console.warn("market_chart_remove_overlay_failed", { symbol, interval: intervalRef.current, error });
+      }
+    }
+    // 主图 setData 前移除 overlay，避免 line series 的旧时间点污染 candlestick 逻辑索引。
+    bollSeriesRef.current = {};
   }
 
   function applyFocusRangeIfNeeded() {
@@ -836,15 +874,17 @@ export default function MarketTechnicalChart({
         if (nearest) valuesByTime.set(nearest.time, value);
       }
       if (valuesByTime.size === 0) {
-        series.setData([]);
+        safeSetSeriesData(series, [], `bollinger-${line.key}`);
         continue;
       }
-      series.setData(
+      safeSetSeriesData(
+        series,
         candlesRef.current.flatMap((candle) => {
           const time = candleTime(candle) as UTCTimestamp;
           const value = valuesByTime.get(time);
           return Number.isFinite(value) ? [{ time, value }] : [];
-        })
+        }),
+        `bollinger-${line.key}`
       );
     }
   }
@@ -894,11 +934,11 @@ export default function MarketTechnicalChart({
       series.applyOptions({ color: line.color, visible: showRsi });
       const lineData = projectedIndicatorLineData(line.key);
       if (lineData.length === 0) {
-        series.setData([]);
+        safeSetSeriesData(series, [], `rsi-${line.key}`);
         if (line.key === "rsi") rsiCrosshairDataRef.current = [];
         continue;
       }
-      series.setData(fullTimelineLineData(lineData));
+      safeSetSeriesData(series, fullTimelineLineData(lineData), `rsi-${line.key}`);
       if (line.key === "rsi") rsiCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
     }
     renderRsiReferenceLines(chart, showRsi);
@@ -933,11 +973,11 @@ export default function MarketTechnicalChart({
       series.applyOptions({ color: line.color, visible: showRsi });
       const lineData = projectedIndicatorLineData(line.key);
       if (lineData.length === 0) {
-        series.setData([]);
+        safeSetSeriesData(series, [], `diff-${line.key}`);
         diffCrosshairDataRef.current = [];
         continue;
       }
-      series.setData(fullTimelineLineData(lineData));
+      safeSetSeriesData(series, fullTimelineLineData(lineData), `diff-${line.key}`);
       diffCrosshairDataRef.current = fullTimelineCrosshairData(lineData);
     }
     renderDiffReferenceLines(chart, showRsi);
@@ -993,14 +1033,18 @@ export default function MarketTechnicalChart({
       }
       series.applyOptions({ color: refLine.color, visible: shouldRender });
       if (!first || !last) {
-        series.setData([]);
+        safeSetSeriesData(series, [], `rsi-${refLine.key}`);
       } else if (candleTime(first) === candleTime(last)) {
-        series.setData([{ time: candleTime(first) as UTCTimestamp, value: refLine.value }]);
+        safeSetSeriesData(series, [{ time: candleTime(first) as UTCTimestamp, value: refLine.value }], `rsi-${refLine.key}`);
       } else {
-        series.setData([
-          { time: candleTime(first) as UTCTimestamp, value: refLine.value },
-          { time: candleTime(last) as UTCTimestamp, value: refLine.value }
-        ]);
+        safeSetSeriesData(
+          series,
+          [
+            { time: candleTime(first) as UTCTimestamp, value: refLine.value },
+            { time: candleTime(last) as UTCTimestamp, value: refLine.value }
+          ],
+          `rsi-${refLine.key}`
+        );
       }
     }
   }
@@ -1029,14 +1073,18 @@ export default function MarketTechnicalChart({
       }
       series.applyOptions({ color: refLine.color, visible: shouldRender });
       if (!first || !last) {
-        series.setData([]);
+        safeSetSeriesData(series, [], `diff-${refLine.key}`);
       } else if (candleTime(first) === candleTime(last)) {
-        series.setData([{ time: candleTime(first) as UTCTimestamp, value: refLine.value }]);
+        safeSetSeriesData(series, [{ time: candleTime(first) as UTCTimestamp, value: refLine.value }], `diff-${refLine.key}`);
       } else {
-        series.setData([
-          { time: candleTime(first) as UTCTimestamp, value: refLine.value },
-          { time: candleTime(last) as UTCTimestamp, value: refLine.value }
-        ]);
+        safeSetSeriesData(
+          series,
+          [
+            { time: candleTime(first) as UTCTimestamp, value: refLine.value },
+            { time: candleTime(last) as UTCTimestamp, value: refLine.value }
+          ],
+          `diff-${refLine.key}`
+        );
       }
     }
   }
@@ -1232,9 +1280,18 @@ export default function MarketTechnicalChart({
 
   function setVisibleRange(range: LogicalRange) {
     latestRangeRef.current = range;
-    mainChartRef.current?.timeScale().setVisibleLogicalRange(range);
-    rsiChartRef.current?.timeScale().setVisibleLogicalRange(range);
-    diffChartRef.current?.timeScale().setVisibleLogicalRange(range);
+    safeSetVisibleRange(mainChartRef.current, range, "main");
+    safeSetVisibleRange(rsiChartRef.current, range, "rsi");
+    safeSetVisibleRange(diffChartRef.current, range, "diff");
+  }
+
+  function safeSetVisibleRange(chart: IChartApi | null, range: LogicalRange, context: string) {
+    if (!chart || candlesRef.current.length <= 0) return;
+    try {
+      chart.timeScale().setVisibleLogicalRange(range);
+    } catch (error) {
+      console.warn("market_chart_set_range_failed", { symbol, interval: intervalRef.current, context, range, error });
+    }
   }
 
   function updateCountdown() {
@@ -1344,33 +1401,6 @@ function formatDiffHtml(value: number | null | undefined) {
 function readChartThemeMode(): ChartThemeMode {
   if (typeof document === "undefined") return "light";
   return document.body.dataset.theme === "dark" ? "dark" : "light";
-}
-
-function uniqueCandlesByChartTime(candles: MarketCandle[]) {
-  const byTime = new Map<string, MarketCandle>();
-  for (const candle of candles) {
-    const normalizedCandle = normalizeChartCandle(candle);
-    if (!normalizedCandle) continue;
-    byTime.set(`${normalizedCandle.symbol}:${normalizedCandle.interval}:${candleTime(normalizedCandle)}`, normalizedCandle);
-  }
-  return Array.from(byTime.values()).sort((left, right) => candleTime(left) - candleTime(right));
-}
-
-function normalizeChartCandle(candle: MarketCandle) {
-  const time = candleTime(candle);
-  const open = finiteCandleValue(candle.open);
-  const high = finiteCandleValue(candle.high);
-  const low = finiteCandleValue(candle.low);
-  const close = finiteCandleValue(candle.close);
-  // lightweight-charts 对 OHLC 中的 null/NaN 很敏感，运行时会影响后续时间轴定位。
-  if (!Number.isFinite(time) || open === null || high === null || low === null || close === null) return null;
-  return { ...candle, open, high, low, close };
-}
-
-function finiteCandleValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return null;
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) ? numericValue : null;
 }
 
 function formatLineValue(value: number | null | undefined) {

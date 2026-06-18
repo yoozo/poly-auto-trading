@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from datetime import datetime
+from decimal import Decimal
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -11,11 +11,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Candle as CandleModel
 from app.schemas.candle import Candle, Interval
 
+logger = logging.getLogger(__name__)
+
+
+def _validate_candle(candle: Candle) -> Candle:
+    try:
+        return Candle.model_validate(candle.model_dump())
+    except Exception as exc:
+        logger.warning(
+            "Rejecting invalid candle",
+            extra={
+                "symbol": getattr(candle, "symbol", None),
+                "interval": getattr(candle, "interval", None),
+                "open_time": getattr(candle, "open_time", None),
+            },
+            exc_info=exc,
+        )
+        raise ValueError("Invalid candle") from exc
+
+
+def _model_to_candle(model: CandleModel) -> Candle:
+    # 历史库里如果已有异常 K 线，接口出口也必须重新走 schema 校验。
+    return Candle(
+        symbol=model.symbol,
+        interval=model.interval,  # type: ignore[arg-type]
+        open_time=model.open_time,
+        close_time=model.close_time,
+        open=float(model.open),
+        high=float(model.high),
+        low=float(model.low),
+        close=float(model.close),
+        volume=float(model.volume),
+        is_closed=model.is_closed,
+    )
+
 
 async def upsert_candles(session: AsyncSession, candles: list[Candle]) -> None:
     if not candles:
         return
 
+    validated_candles = [_validate_candle(candle) for candle in candles]
     rows = [
         {
             "symbol": candle.symbol.upper(),
@@ -29,7 +64,7 @@ async def upsert_candles(session: AsyncSession, candles: list[Candle]) -> None:
             "volume": Decimal(str(candle.volume)),
             "is_closed": candle.is_closed,
         }
-        for candle in candles
+        for candle in validated_candles
     ]
     statement = insert(CandleModel).values(rows)
     await session.execute(
@@ -63,21 +98,7 @@ async def list_candles(
     )
     result = await session.scalars(statement)
     models = list(reversed(result.all()))
-    return [
-        Candle(
-            symbol=model.symbol,
-            interval=model.interval,  # type: ignore[arg-type]
-            open_time=model.open_time,
-            close_time=model.close_time,
-            open=float(model.open),
-            high=float(model.high),
-            low=float(model.low),
-            close=float(model.close),
-            volume=float(model.volume),
-            is_closed=model.is_closed,
-        )
-        for model in models
-    ]
+    return [_model_to_candle(model) for model in models]
 
 
 async def list_candles_between(
@@ -98,21 +119,7 @@ async def list_candles_between(
         .order_by(CandleModel.open_time.asc())
     )
     result = await session.scalars(statement)
-    return [
-        Candle(
-            symbol=model.symbol,
-            interval=model.interval,  # type: ignore[arg-type]
-            open_time=model.open_time,
-            close_time=model.close_time,
-            open=float(model.open),
-            high=float(model.high),
-            low=float(model.low),
-            close=float(model.close),
-            volume=float(model.volume),
-            is_closed=model.is_closed,
-        )
-        for model in result.all()
-    ]
+    return [_model_to_candle(model) for model in result.all()]
 
 
 async def list_candles_from(
@@ -133,21 +140,7 @@ async def list_candles_from(
         .limit(limit)
     )
     result = await session.scalars(statement)
-    return [
-        Candle(
-            symbol=model.symbol,
-            interval=model.interval,  # type: ignore[arg-type]
-            open_time=model.open_time,
-            close_time=model.close_time,
-            open=float(model.open),
-            high=float(model.high),
-            low=float(model.low),
-            close=float(model.close),
-            volume=float(model.volume),
-            is_closed=model.is_closed,
-        )
-        for model in result.all()
-    ]
+    return [_model_to_candle(model) for model in result.all()]
 
 
 async def get_latest_candle(
@@ -164,15 +157,4 @@ async def get_latest_candle(
     model = await session.scalar(statement)
     if model is None:
         return None
-    return Candle(
-        symbol=model.symbol,
-        interval=model.interval,  # type: ignore[arg-type]
-        open_time=model.open_time,
-        close_time=model.close_time,
-        open=float(model.open),
-        high=float(model.high),
-        low=float(model.low),
-        close=float(model.close),
-        volume=float(model.volume),
-        is_closed=model.is_closed,
-    )
+    return _model_to_candle(model)

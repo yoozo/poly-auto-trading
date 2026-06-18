@@ -141,8 +141,14 @@ def parse_numeric_float_mapping(value: str | None) -> dict[float, float]:
     for item in value.split(","):
         if not item.strip():
             continue
-        raw_key, raw_number = item.split(":", 1)
-        result[float(raw_key.strip())] = float(raw_number.strip())
+        parts = item.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid mapping item '{item}'")
+        raw_key, raw_number = parts
+        try:
+            result[float(raw_key.strip())] = float(raw_number.strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid mapping item '{item}'") from exc
     return result
 
 

@@ -1,9 +1,11 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpcore
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from polymarket import TransportError
 
 from app.main import create_app
 from conftest import login_test_client
@@ -316,6 +318,35 @@ async def test_series_fetch_hydrates_missing_event_markets(monkeypatch) -> None:
 
     assert [quote.token_id for quote in market.outcome_quotes] == ["up-token", "down-token"]
     assert str(market.liquidity) == "1000"
+
+
+@pytest.mark.asyncio
+async def test_up_down_events_logs_retryable_series_fallback_without_warning_traceback(monkeypatch, caplog) -> None:
+    async def fake_fetch_up_down_series_events(self, **kwargs):
+        raise TransportError("Request failed")
+
+    async def fake_fetch_event_page_with_sdk(self, client, **params):
+        return [make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")]
+
+    monkeypatch.setattr(PolymarketClient, "fetch_up_down_series_events", fake_fetch_up_down_series_events)
+    monkeypatch.setattr(PolymarketClient, "_fetch_event_page_with_sdk", fake_fetch_event_page_with_sdk)
+
+    with caplog.at_level(logging.INFO, logger="app.services.polymarket_client"):
+        events = await PolymarketClient(gamma_base_url="https://example.invalid").fetch_up_down_events(
+            interval="5m",
+            now=datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc),
+            limit=2,
+        )
+
+    fallback_records = [
+        record
+        for record in caplog.records
+        if record.message == "Polymarket up/down series fetch failed; falling back to events"
+    ]
+    assert [event["slug"] for event in events] == ["btc-updown-5m-1"]
+    assert fallback_records
+    assert all(record.levelno == logging.INFO for record in fallback_records)
+    assert all(record.exc_info is None for record in fallback_records)
 
 
 def test_sdk_profile_and_activity_adapters_keep_legacy_keys() -> None:

@@ -12,6 +12,7 @@ import {
   type PolymarketWsMessage,
 } from "../api/client";
 import BtcWatchChart from "../components/market-chart/BtcWatchChart";
+import { buildCandlestickData } from "../components/market-chart/candlestickData";
 import type {
   ChartComparisonLine,
   MarketCandle,
@@ -70,6 +71,8 @@ export default function BTCWatchPage() {
   const [indicatorPoints, setIndicatorPoints] = useState<MarketIndicatorPoint[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSwitchingInterval, setIsSwitchingInterval] = useState(false);
+  const [chartDataReady, setChartDataReady] = useState(false);
+  const [chartEpoch, setChartEpoch] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [initialVisibleCandles, setInitialVisibleCandles] = useState(() =>
     typeof window !== "undefined" && window.matchMedia(WIDE_LAYOUT_QUERY).matches
@@ -164,6 +167,14 @@ export default function BTCWatchPage() {
   useEffect(() => {
     if (error) setIsSwitchingInterval(false);
   }, [error]);
+
+  useEffect(() => {
+    if (chartDataReady) return;
+    if (buildCandlestickData(activeCandles, interval).data.length > 0) {
+      // 图表只在当前周期至少有一批合法 K 线后挂载，避免旧 series 接收空帧。
+      setChartDataReady(true);
+    }
+  }, [activeCandles, chartDataReady, interval]);
 
   useEffect(() => {
     localStorage.setItem(BOLL_KEY, showBollinger ? "1" : "0");
@@ -451,6 +462,8 @@ export default function BTCWatchPage() {
       queryClient.removeQueries({ queryKey: ["indicators", nextInterval], exact: false });
       setCandles([]);
       setIndicatorPoints([]);
+      setChartDataReady(false);
+      setChartEpoch((epoch) => epoch + 1);
       setIsLoadingMore(false);
       setIsSwitchingInterval(true);
       setInterval(nextInterval);
@@ -480,84 +493,103 @@ export default function BTCWatchPage() {
     });
   }, []);
 
+  const chartToolbar = (
+    <div className="watch-toolbar-inner">
+      <div className="watch-toolbar-controls">
+        <Typography.Text strong>BTCUSDT</Typography.Text>
+        <Segmented
+          size="small"
+          options={intervals}
+          value={interval}
+          onChange={(value) => switchCandleInterval(value as CandleInterval)}
+        />
+        <Button
+          className={showBollinger ? "watch-indicator-button active" : "watch-indicator-button"}
+          size="small"
+          aria-pressed={showBollinger}
+          onClick={() => setShowBollinger((value) => !value)}
+        >
+          BOLL
+        </Button>
+        <Button
+          className={showRsi ? "watch-indicator-button active" : "watch-indicator-button"}
+          size="small"
+          aria-pressed={showRsi}
+          onClick={() => setShowRsi((value) => !value)}
+        >
+          RSI
+        </Button>
+      </div>
+      <div className="watch-toolbar-status">
+        {latest && (
+          <Typography.Text className={`watch-market-diff watch-market-diff-${marketDiffTone}`}>
+            <span className="watch-market-diff-interval">{marketDiffInterval}</span>
+            <span className="watch-market-diff-value">
+              {marketPriceDiff === null ? (
+                "--"
+              ) : (
+                <>
+                  <span className="watch-market-diff-arrow">{marketPriceDiff >= 0 ? "▲" : "▼"}</span>
+                  <span>${formatMarketPriceDiff(marketPriceDiff)}</span>
+                </>
+              )}
+            </span>
+          </Typography.Text>
+        )}
+        {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
+        {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
+      </div>
+      <Button
+        className="watch-fullscreen-button"
+        size="small"
+        icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+        onClick={toggleFullscreen}
+        aria-label={isFullscreen ? "退出全屏" : "全屏"}
+        title={isFullscreen ? "退出全屏" : "全屏"}
+      />
+    </div>
+  );
+
   return (
     <div className={isFullscreen ? "watch-page watch-page-fullscreen" : "watch-page"}>
       <Card className="watch-chart-card btc-watch-card" styles={{ body: { padding: 0 } }}>
-        <BtcWatchChart
-          key={`BTCUSDT-${interval}`}
-          symbol="BTCUSDT"
-          interval={interval}
-          candles={activeCandles}
-          indicators={activeIndicators}
-          showBollinger={showBollinger}
-          showRsi={showRsi}
-          onLoadMore={loadMore}
-          isLoadingMore={isLoadingMore}
-          isInitializing={isSwitchingInterval}
-          latestStreamStatus={streamStatus}
-          fitAnchorVersion={fitAnchorVersion}
-          initialVisibleCandles={initialVisibleCandles}
-          comparisonLine={comparisonLine}
-          focusTimeMs={chartFocusTimeMs}
-          focusKey={chartFocusKey}
-          countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
-          toolbar={
-            <div className="watch-toolbar-inner">
-              <div className="watch-toolbar-controls">
-                <Typography.Text strong>BTCUSDT</Typography.Text>
-                <Segmented
-                  size="small"
-                  options={intervals}
-                  value={interval}
-                  onChange={(value) => switchCandleInterval(value as CandleInterval)}
-                />
-                <Button
-                  className={showBollinger ? "watch-indicator-button active" : "watch-indicator-button"}
-                  size="small"
-                  aria-pressed={showBollinger}
-                  onClick={() => setShowBollinger((value) => !value)}
-                >
-                  BOLL
-                </Button>
-                <Button
-                  className={showRsi ? "watch-indicator-button active" : "watch-indicator-button"}
-                  size="small"
-                  aria-pressed={showRsi}
-                  onClick={() => setShowRsi((value) => !value)}
-                >
-                  RSI
-                </Button>
+        {chartDataReady ? (
+          <BtcWatchChart
+            key={`BTCUSDT-${interval}-${chartEpoch}`}
+            symbol="BTCUSDT"
+            interval={interval}
+            candles={activeCandles}
+            indicators={activeIndicators}
+            showBollinger={showBollinger}
+            showRsi={showRsi}
+            onLoadMore={loadMore}
+            isLoadingMore={isLoadingMore}
+            isInitializing={isSwitchingInterval}
+            latestStreamStatus={streamStatus}
+            fitAnchorVersion={fitAnchorVersion}
+            initialVisibleCandles={initialVisibleCandles}
+            comparisonLine={comparisonLine}
+            focusTimeMs={chartFocusTimeMs}
+            focusKey={chartFocusKey}
+            countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
+            toolbar={chartToolbar}
+          />
+        ) : (
+          <div className={["btc-watch-chart", showRsi ? "" : "btc-watch-chart-single", "btc-watch-chart-initializing"].filter(Boolean).join(" ")}>
+            {chartToolbar && <div className="btc-chart-toolbar">{chartToolbar}</div>}
+            <section className="btc-chart-panel btc-main-panel">
+              <div className="btc-chart-canvas btc-main-chart">
+                <div className="chart-loading-overlay">加载 K 线...</div>
               </div>
-              <div className="watch-toolbar-status">
-                {latest && (
-                  <Typography.Text className={`watch-market-diff watch-market-diff-${marketDiffTone}`}>
-                    <span className="watch-market-diff-interval">{marketDiffInterval}</span>
-                    <span className="watch-market-diff-value">
-                      {marketPriceDiff === null ? (
-                        "--"
-                      ) : (
-                        <>
-                          <span className="watch-market-diff-arrow">{marketPriceDiff >= 0 ? "▲" : "▼"}</span>
-                          <span>${formatMarketPriceDiff(marketPriceDiff)}</span>
-                        </>
-                      )}
-                    </span>
-                  </Typography.Text>
-                )}
-                {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
-                {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
-              </div>
-              <Button
-                className="watch-fullscreen-button"
-                size="small"
-                icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-                onClick={toggleFullscreen}
-                aria-label={isFullscreen ? "退出全屏" : "全屏"}
-                title={isFullscreen ? "退出全屏" : "全屏"}
-              />
-            </div>
-          }
-        />
+            </section>
+            <section className="btc-chart-panel btc-rsi-panel" hidden={!showRsi}>
+              <div className="btc-chart-canvas btc-rsi-chart" />
+            </section>
+            <section className="btc-chart-panel btc-diff-panel" hidden={!showRsi}>
+              <div className="btc-chart-canvas btc-diff-chart" />
+            </section>
+          </div>
+        )}
       </Card>
       {!isFullscreen && (
         <PolymarketBtcPanel

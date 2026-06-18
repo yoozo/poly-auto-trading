@@ -87,19 +87,27 @@ class BinanceClient:
 
     @staticmethod
     def _parse_kline(symbol: str, interval: Interval, row: list[Any]) -> Candle:
-        close_time = _from_ms(row[6])
-        return Candle(
-            symbol=symbol,
-            interval=interval,
-            open_time=_from_ms(row[0]),
-            close_time=close_time,
-            open=float(row[1]),
-            high=float(row[2]),
-            low=float(row[3]),
-            close=float(row[4]),
-            volume=float(row[5]),
-            is_closed=close_time <= datetime.now(timezone.utc),
-        )
+        try:
+            close_time = _from_ms(row[6])
+            return Candle(
+                symbol=symbol,
+                interval=interval,
+                open_time=_from_ms(row[0]),
+                close_time=close_time,
+                open=float(row[1]),
+                high=float(row[2]),
+                low=float(row[3]),
+                close=float(row[4]),
+                volume=float(row[5]),
+                is_closed=close_time <= datetime.now(timezone.utc),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Rejecting invalid Binance kline",
+                extra={"symbol": symbol, "interval": interval, "row": row},
+                exc_info=exc,
+            )
+            raise ValueError("Invalid Binance kline") from exc
 
 
 def _from_ms(value: int) -> datetime:
