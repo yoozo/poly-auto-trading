@@ -1222,8 +1222,9 @@ export default function MarketTechnicalChart({
       from: from as Logical,
       to: to as Logical
     };
-    setFocusedVisibleRangeWithSettle(range);
     lastCrosshairTimeRef.current = nearest.time;
+    setFocusedVisibleRangeWithSettle(range);
+    restoreCrosshairPosition();
     return true;
   }
 
@@ -1248,6 +1249,7 @@ export default function MarketTechnicalChart({
       Math.max(Math.abs(actualRange.from - expectedRange.from), Math.abs(actualRange.to - expectedRange.to));
     if (!actualRange || drift === null || !Number.isFinite(drift) || drift <= 1) return;
     setVisibleRange(expectedRange);
+    restoreCrosshairPosition();
   }
 
   function shouldReanchorAfterBootstrap(previousLength: number, nextLength: number, addedBefore: number) {
