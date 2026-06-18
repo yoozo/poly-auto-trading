@@ -1,5 +1,5 @@
-import { DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Dropdown, Empty, Segmented, Typography } from "antd";
+import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
+import { Button, Card, Dropdown, Empty, Modal, Segmented, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,7 +19,7 @@ import type {
   MarketIndicatorPoint,
   StreamStatus,
 } from "../components/market-chart/types";
-import { mergeCandles } from "../components/market-chart/utils";
+import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 
 const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h"];
 const polymarketIntervals: PolymarketInterval[] = ["5m", "15m", "1h", "4h"];
@@ -87,6 +87,11 @@ export default function BTCWatchPage() {
   const [selectedPolymarketId, setSelectedPolymarketId] = useState<string | null>(null);
   const [autoSwitchPolymarket, setAutoSwitchPolymarket] = useState(true);
   const [polymarketFocusNonce, setPolymarketFocusNonce] = useState(0);
+  const [timeJumpInput, setTimeJumpInput] = useState(() => formatDateTimeLocalInput(new Date()));
+  const [timeJumpFocus, setTimeJumpFocus] = useState<{ timeMs: number; nonce: number } | null>(null);
+  const [timeJumpModalOpen, setTimeJumpModalOpen] = useState(false);
+  const [isJumpingTime, setIsJumpingTime] = useState(false);
+  const [timeJumpError, setTimeJumpError] = useState<string | null>(null);
   const [polymarketMarkets, setPolymarketMarkets] = useState<PolymarketUpDownMarket[]>([]);
   const [comparisonLine, setComparisonLine] = useState<ChartComparisonLine | null>(null);
   const comparisonRequestKeyRef = useRef<string | null>(null);
@@ -96,6 +101,7 @@ export default function BTCWatchPage() {
   const activeIntervalRef = useRef<CandleInterval>(interval);
   const intervalActivatedAtRef = useRef(Date.now());
   const candleSnapshotReadyRef = useRef(false);
+  const historicalJumpViewRef = useRef(false);
   const pendingLiveCandlesRef = useRef<MarketCandle[]>([]);
   const pendingLiveIndicatorsRef = useRef<MarketIndicatorPoint[]>([]);
   // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
@@ -145,10 +151,12 @@ export default function BTCWatchPage() {
     polymarketMarkets.find((market) => market.window === "next") ??
     polymarketMarkets[0];
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
-  const chartFocusTimeMs = selectedPolymarket && selectedPolymarketWindow ? selectedPolymarketWindow.startMs : null;
+  const polymarketChartFocusTimeMs = selectedPolymarket && selectedPolymarketWindow ? selectedPolymarketWindow.startMs : null;
+  const chartFocusTimeMs = timeJumpFocus?.timeMs ?? polymarketChartFocusTimeMs;
   // focusKey 表示“用户要求图表重新定位”的版本；自动跟随新 market 只换选中态，不重置 K 线视野。
-  const chartFocusKey =
-    chartFocusTimeMs !== null && selectedPolymarket
+  const chartFocusKey = timeJumpFocus
+    ? `time-jump:${timeJumpFocus.nonce}`
+    : polymarketChartFocusTimeMs !== null && selectedPolymarket
       ? `polymarket-focus:${polymarketFocusNonce}`
       : null;
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
@@ -330,6 +338,7 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
+    if (historicalJumpViewRef.current) return;
     // 切回曾经看过的周期时 React Query 会先吐旧缓存；定位只允许使用本次切换后完成的快照。
     if (latestCandlesUpdatedAt < intervalActivatedAtRef.current) {
       return;
@@ -354,6 +363,7 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
+    if (historicalJumpViewRef.current) return;
     if (latestIndicatorsUpdatedAt < intervalActivatedAtRef.current) return;
     setIndicatorPoints((current) => {
       if (requestEpoch !== dataEpochRef.current) return current;
@@ -383,6 +393,7 @@ export default function BTCWatchPage() {
         setStreamStatus("connected");
         const message = parseMarketMessage(event.data);
         if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
+        if (historicalJumpViewRef.current) return;
         const candle = message.candle;
         const indicator = message.indicator;
         if (!candleSnapshotReadyRef.current) {
@@ -456,6 +467,7 @@ export default function BTCWatchPage() {
       activeIntervalRef.current = nextInterval;
       intervalActivatedAtRef.current = Date.now();
       dataEpochRef.current += 1;
+      historicalJumpViewRef.current = false;
       candleSnapshotReadyRef.current = false;
       pendingLiveCandlesRef.current = [];
       pendingLiveIndicatorsRef.current = [];
@@ -475,6 +487,8 @@ export default function BTCWatchPage() {
 
   const handlePolymarketIntervalChange = useCallback((nextInterval: PolymarketInterval) => {
     // 用户切换 Polymarket 粒度时，即使目标是“当前”窗口，也要把 K 线锚到该窗口起点。
+    historicalJumpViewRef.current = false;
+    setTimeJumpFocus(null);
     setPolymarketFocusNonce((value) => value + 1);
     setPolymarketInterval(nextInterval);
     switchCandleInterval(nextInterval);
@@ -482,6 +496,8 @@ export default function BTCWatchPage() {
 
   const handlePolymarketMarketSelect = useCallback(
     (marketId: string, followCurrent = false) => {
+      setTimeJumpFocus(null);
+      historicalJumpViewRef.current = false;
       setPolymarketFocusNonce((value) => value + 1);
       setSelectedPolymarketId(marketId);
       // 选中当前窗口代表回到实时跟随；选中历史或未来窗口则固定查看该窗口。
@@ -489,6 +505,75 @@ export default function BTCWatchPage() {
     },
     []
   );
+
+  const candleIntervalOptions = useMemo(
+    () =>
+      intervals.map((item) => {
+        const canSwitchMarket = polymarketIntervals.includes(item as PolymarketInterval);
+        const isMarketInterval = canSwitchMarket && item === polymarketInterval;
+        return {
+          value: item,
+          label: (
+            <span
+              className={isMarketInterval ? "watch-interval-option market-selected" : "watch-interval-option"}
+              title={canSwitchMarket ? "点不同周期切 K 线；点当前周期选择 market" : "单击切换 K 线"}
+              onClick={() => {
+                if (canSwitchMarket && item === interval) handlePolymarketIntervalChange(item as PolymarketInterval);
+              }}
+            >
+              {item}
+            </span>
+          ),
+        };
+      }),
+    [handlePolymarketIntervalChange, interval, polymarketInterval]
+  );
+
+  const handleTimeJump = useCallback(async () => {
+    const targetMs = parseDateTimeLocalInput(timeJumpInput);
+    if (targetMs === null) {
+      setTimeJumpError("请选择有效时间");
+      return;
+    }
+    const requestEpoch = dataEpochRef.current;
+    const jumpInterval = activeIntervalRef.current;
+    const barMs = intervalMs(jumpInterval);
+    const visibleBars = Math.max(initialVisibleCandles, 80);
+    const startMs = Math.max(0, targetMs - Math.round(visibleBars * 0.45) * barMs);
+    const endMs = targetMs + Math.round(visibleBars * 0.65) * barMs;
+    const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
+
+    setIsJumpingTime(true);
+    setTimeJumpError(null);
+    try {
+      // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近的 candle/indicator，再交给图表 focus。
+      const [jumpCandles, jumpIndicators] = await Promise.all([
+        api.candlesRange(jumpInterval, startMs, endMs, limit),
+        api.indicatorsRange(jumpInterval, startMs, endMs, limit),
+      ]);
+      if (requestEpoch !== dataEpochRef.current || jumpInterval !== activeIntervalRef.current) return;
+      if (jumpCandles.length <= 0) {
+        setTimeJumpError("该时间附近暂无 K 线");
+        return;
+      }
+      // 跳转到历史时间时只展示目标附近的连续窗口，避免和实时窗口跨天拼接成断裂曲线。
+      historicalJumpViewRef.current = true;
+      setCandles((current) => mergeCandles(current.filter((candle) => candle.interval !== jumpInterval), jumpCandles));
+      setIndicatorPoints((current) =>
+        mergeIndicators(
+          current.filter((point) => point.interval !== jumpInterval),
+          jumpIndicators as MarketIndicatorPoint[]
+        )
+      );
+      setChartDataReady(true);
+      setTimeJumpFocus({ timeMs: targetMs, nonce: Date.now() });
+      setTimeJumpModalOpen(false);
+    } catch (error) {
+      setTimeJumpError(error instanceof Error ? error.message : "跳转失败");
+    } finally {
+      setIsJumpingTime(false);
+    }
+  }, [initialVisibleCandles, timeJumpInput]);
 
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((value) => {
@@ -504,7 +589,7 @@ export default function BTCWatchPage() {
         <Typography.Text strong>BTCUSDT</Typography.Text>
         <Segmented
           size="small"
-          options={intervals}
+          options={candleIntervalOptions}
           value={interval}
           onChange={(value) => switchCandleInterval(value as CandleInterval)}
         />
@@ -555,6 +640,17 @@ export default function BTCWatchPage() {
     </div>
   );
 
+  const timeJumpControl = (
+    <Button
+      className="chart-time-jump-trigger"
+      size="small"
+      icon={<ClockCircleOutlined />}
+      onClick={() => setTimeJumpModalOpen(true)}
+      aria-label="跳转到指定时间"
+      title="跳转到指定时间"
+    />
+  );
+
   return (
     <div className={isFullscreen ? "watch-page watch-page-fullscreen" : "watch-page"}>
       <Card className="watch-chart-card btc-watch-card" styles={{ body: { padding: 0 } }}>
@@ -576,8 +672,10 @@ export default function BTCWatchPage() {
             comparisonLine={comparisonLine}
             focusTimeMs={chartFocusTimeMs}
             focusKey={chartFocusKey}
+            focusPlacement={timeJumpFocus ? "center" : "anchor"}
             countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
             toolbar={chartToolbar}
+            timeAxisLeftControl={timeJumpControl}
           />
         ) : (
           <div className={["btc-watch-chart", showRsi ? "" : "btc-watch-chart-single", "btc-watch-chart-initializing"].filter(Boolean).join(" ")}>
@@ -599,7 +697,6 @@ export default function BTCWatchPage() {
       {!isFullscreen && (
         <PolymarketBtcPanel
           interval={polymarketInterval}
-          onIntervalChange={handlePolymarketIntervalChange}
           markets={polymarketMarkets}
           selectedMarket={selectedPolymarket}
           selectedMarketId={selectedPolymarketId}
@@ -607,13 +704,44 @@ export default function BTCWatchPage() {
           error={polymarketError instanceof Error ? polymarketError.message : null}
         />
       )}
+      <Modal
+        title="跳转到时间"
+        open={timeJumpModalOpen}
+        okText="确定"
+        cancelText="取消"
+        confirmLoading={isJumpingTime}
+        onOk={() => void handleTimeJump()}
+        onCancel={() => {
+          if (!isJumpingTime) setTimeJumpModalOpen(false);
+        }}
+      >
+        <form
+          className="chart-time-jump-modal"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleTimeJump();
+          }}
+        >
+          <input
+            className="chart-time-jump-input"
+            type="datetime-local"
+            value={timeJumpInput}
+            onChange={(event) => {
+              setTimeJumpInput(event.target.value);
+              setTimeJumpError(null);
+            }}
+            aria-label="跳转时间"
+            autoFocus
+          />
+          {timeJumpError && <Typography.Text type="danger">{timeJumpError}</Typography.Text>}
+        </form>
+      </Modal>
     </div>
   );
 }
 
 function PolymarketBtcPanel({
   interval,
-  onIntervalChange,
   markets,
   selectedMarket,
   selectedMarketId,
@@ -621,7 +749,6 @@ function PolymarketBtcPanel({
   error,
 }: {
   interval: PolymarketInterval;
-  onIntervalChange: (interval: PolymarketInterval) => void;
   markets: PolymarketUpDownMarket[];
   selectedMarket: PolymarketUpDownMarket | undefined;
   selectedMarketId: string | null;
@@ -665,14 +792,6 @@ function PolymarketBtcPanel({
             ) : (
               <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
             )}
-            <div className="polymarket-title-controls">
-              <Segmented
-                size="small"
-                value={interval}
-                options={polymarketIntervals}
-                onChange={(value) => onIntervalChange(value as PolymarketInterval)}
-              />
-            </div>
           </div>
           {activeMarket && (
             <Typography.Text type="secondary" className="polymarket-panel-subtitle">
@@ -900,6 +1019,21 @@ function formatMarketPriceDiff(value: number) {
     minimumFractionDigits: 0,
     maximumFractionDigits,
   });
+}
+
+function formatDateTimeLocalInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function parseDateTimeLocalInput(value: string) {
+  if (!value.trim()) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatMarketTime(market: PolymarketUpDownMarket) {

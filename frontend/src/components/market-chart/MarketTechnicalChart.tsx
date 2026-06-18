@@ -51,8 +51,10 @@ export type MarketTechnicalChartProps = {
   comparisonLine?: ChartComparisonLine | null;
   focusTimeMs?: number | null;
   focusKey?: string | null;
+  focusPlacement?: "anchor" | "center";
   countdownTargetMs?: number | null;
   toolbar?: ReactNode;
+  timeAxisLeftControl?: ReactNode;
 };
 
 type BollKey = "middle" | "upper" | "lower";
@@ -141,8 +143,10 @@ export default function MarketTechnicalChart({
   comparisonLine = null,
   focusTimeMs = null,
   focusKey = null,
+  focusPlacement = "anchor",
   countdownTargetMs = null,
-  toolbar
+  toolbar,
+  timeAxisLeftControl
 }: MarketTechnicalChartProps) {
   const [themeMode, setThemeMode] = useState<ChartThemeMode>(() => readChartThemeMode());
   const chartTheme = CHART_THEMES[themeMode];
@@ -517,7 +521,7 @@ export default function MarketTechnicalChart({
     previousLengthRef.current = chartCandles.length;
     scheduleLatestVisibleRangeGuard();
     restoreCrosshairPosition();
-  }, [candles, indicators, showBollinger, showRsi, interval, initialVisibleCandles, focusTimeMs, focusKey]);
+  }, [candles, indicators, showBollinger, showRsi, interval, initialVisibleCandles, focusTimeMs, focusKey, focusPlacement]);
 
   useLayoutEffect(() => {
     const mainChart = mainChartRef.current;
@@ -1201,8 +1205,8 @@ export default function MarketTechnicalChart({
 
     // Polymarket 窗口切换只在 focusKey 变化时重锚一次，后续 WS 实时刷新不覆盖用户拖动。
     const visibleBars = Math.min(candlesRef.current.length, initialVisibleCandles);
-    const rightPadding = anchorRightPaddingBars(visibleBars);
-    const anchorOffset = Math.max(4, Math.round(visibleBars * 0.35));
+    const rightPadding = focusPlacement === "center" ? 0 : anchorRightPaddingBars(visibleBars);
+    const anchorOffset = focusPlacement === "center" ? Math.round(visibleBars / 2) : Math.max(4, Math.round(visibleBars * 0.35));
     let from = targetIndex - anchorOffset - 0.5;
     let to = from + visibleBars + rightPadding;
     const maxTo = candlesRef.current.length + rightPadding;
@@ -1409,6 +1413,7 @@ export default function MarketTechnicalChart({
       <section className="btc-chart-panel btc-diff-panel" hidden={!showRsi}>
         <div className="btc-chart-canvas btc-diff-chart" ref={diffContainerRef} />
       </section>
+      {timeAxisLeftControl && <div className="chart-time-axis-left-control">{timeAxisLeftControl}</div>}
     </div>
   );
 }
