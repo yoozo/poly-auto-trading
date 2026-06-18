@@ -35,7 +35,13 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
-        ws: true
+        ws: true,
+        configure(proxy) {
+          proxy.on("error", (error: NodeJS.ErrnoException) => {
+            if (error.code === "EPIPE" || error.code === "ECONNRESET") return;
+            console.warn("[vite proxy] upstream error", error);
+          });
+        }
       }
     }
   }
