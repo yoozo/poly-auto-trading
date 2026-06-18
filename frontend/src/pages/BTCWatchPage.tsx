@@ -86,6 +86,7 @@ export default function BTCWatchPage() {
   });
   const [selectedPolymarketId, setSelectedPolymarketId] = useState<string | null>(null);
   const [autoSwitchPolymarket, setAutoSwitchPolymarket] = useState(true);
+  const [polymarketFocusNonce, setPolymarketFocusNonce] = useState(0);
   const [polymarketMarkets, setPolymarketMarkets] = useState<PolymarketUpDownMarket[]>([]);
   const [comparisonLine, setComparisonLine] = useState<ChartComparisonLine | null>(null);
   const comparisonRequestKeyRef = useRef<string | null>(null);
@@ -147,13 +148,10 @@ export default function BTCWatchPage() {
   const selectedPolymarketWindowLabel = selectedPolymarket
     ? marketWindowLabel(selectedPolymarket, polymarketMarkets)
     : null;
-  const chartFocusTimeMs =
-    !autoSwitchPolymarket && selectedPolymarket && selectedPolymarketWindow && selectedPolymarketWindowLabel !== "当前"
-      ? selectedPolymarketWindow.startMs
-      : null;
+  const chartFocusTimeMs = selectedPolymarket && selectedPolymarketWindow ? selectedPolymarketWindow.startMs : null;
   const chartFocusKey =
     chartFocusTimeMs !== null && selectedPolymarket
-      ? `polymarket:${selectedPolymarket.id}:${chartFocusTimeMs}`
+      ? `polymarket:${selectedPolymarket.id}:${chartFocusTimeMs}:${polymarketFocusNonce}`
       : null;
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
   const marketDiffTone =
@@ -172,9 +170,22 @@ export default function BTCWatchPage() {
     if (chartDataReady) return;
     if (buildCandlestickData(activeCandles, interval).data.length > 0) {
       // 图表只在当前周期至少有一批合法 K 线后挂载，避免旧 series 接收空帧。
+      watchDebug("chart.ready", { interval, activeCandles: activeCandles.length });
       setChartDataReady(true);
     }
   }, [activeCandles, chartDataReady, interval]);
+
+  useEffect(() => {
+    watchDebug("chart.focus_props", {
+      interval,
+      selectedMarketId: selectedPolymarket?.id ?? null,
+      selectedLabel: selectedPolymarketWindowLabel,
+      autoSwitchPolymarket,
+      polymarketFocusNonce,
+      focusTime: chartFocusTimeMs ? new Date(chartFocusTimeMs).toLocaleString("zh-CN", { hour12: false }) : null,
+      focusKey: chartFocusKey,
+    });
+  }, [autoSwitchPolymarket, chartFocusKey, chartFocusTimeMs, interval, polymarketFocusNonce, selectedPolymarket?.id, selectedPolymarketWindowLabel]);
 
   useEffect(() => {
     localStorage.setItem(BOLL_KEY, showBollinger ? "1" : "0");
@@ -335,12 +346,27 @@ export default function BTCWatchPage() {
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
     // 切回曾经看过的周期时 React Query 会先吐旧缓存；定位只允许使用本次切换后完成的快照。
-    if (latestCandlesUpdatedAt < intervalActivatedAtRef.current) return;
+    if (latestCandlesUpdatedAt < intervalActivatedAtRef.current) {
+      watchDebug("candles.snapshot_stale_ignored", {
+        interval,
+        latestCandlesUpdatedAt,
+        intervalActivatedAt: intervalActivatedAtRef.current,
+        count: latestCandles.length,
+      });
+      return;
+    }
     candleSnapshotReadyRef.current = true;
     const pendingLiveCandles = pendingLiveCandlesRef.current;
     const pendingLiveIndicators = pendingLiveIndicatorsRef.current;
     pendingLiveCandlesRef.current = [];
     pendingLiveIndicatorsRef.current = [];
+    watchDebug("candles.snapshot_accept", {
+      interval,
+      requestEpoch,
+      count: latestCandles.length,
+      pendingLiveCandles: pendingLiveCandles.length,
+      pendingLiveIndicators: pendingLiveIndicators.length,
+    });
     setCandles((current) => {
       if (requestEpoch !== dataEpochRef.current) return current;
       return mergeCandles(current, [...latestCandles, ...pendingLiveCandles]);
@@ -391,9 +417,19 @@ export default function BTCWatchPage() {
           // 切换周期后的第一帧必须由 REST 快照决定窗口宽度；WS 单根 K 线先缓冲，避免先锚到错误位置再跳回。
           if (candle) pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
           if (indicator) pendingLiveIndicatorsRef.current = mergeIndicators(pendingLiveIndicatorsRef.current, [indicator]);
+          if (candle || indicator) {
+            watchDebug("ws.buffer_before_snapshot", {
+              interval: streamInterval,
+              candleTime: candle?.open_time ?? null,
+              hasIndicator: Boolean(indicator),
+              pendingLiveCandles: pendingLiveCandlesRef.current.length,
+              pendingLiveIndicators: pendingLiveIndicatorsRef.current.length,
+            });
+          }
           return;
         }
         if (candle) {
+          watchDebug("ws.candle", { interval: streamInterval, openTime: candle.open_time, close: candle.close });
           setCandles((current) => mergeCandles(current, [candle]));
         }
         if (indicator) {
@@ -428,17 +464,30 @@ export default function BTCWatchPage() {
   const loadMore = useCallback(
     async (startMs: number, endMs: number) => {
       setIsLoadingMore(true);
+      watchDebug("load_more.start", {
+        interval,
+        start: new Date(startMs).toLocaleString("zh-CN", { hour12: false }),
+        end: new Date(endMs).toLocaleString("zh-CN", { hour12: false }),
+      });
       try {
         // 历史翻页必须同步补 candle 和 indicator，否则图表时间轴会有价格但缺少指标层。
         const requestEpoch = dataEpochRef.current;
         const older = await api.candlesRange(interval, startMs, endMs);
-        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) return;
+        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) {
+          watchDebug("load_more.candles_stale_ignored", { interval, requestEpoch, activeEpoch: dataEpochRef.current, count: older.length });
+          return;
+        }
+        watchDebug("load_more.candles_accept", { interval, requestEpoch, count: older.length, first: older[0]?.open_time ?? null, last: older.at(-1)?.open_time ?? null });
         setCandles((current) => mergeCandles(current, older));
         const olderIndicators = await queryClient.fetchQuery({
           queryKey: ["indicators-range", interval, startMs, endMs],
           queryFn: () => api.indicatorsRange(interval, startMs, endMs),
         });
-        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) return;
+        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) {
+          watchDebug("load_more.indicators_stale_ignored", { interval, requestEpoch, activeEpoch: dataEpochRef.current, count: olderIndicators.length });
+          return;
+        }
+        watchDebug("load_more.indicators_accept", { interval, requestEpoch, count: olderIndicators.length });
         setIndicatorPoints((current) => mergeIndicators(current, olderIndicators as MarketIndicatorPoint[]));
       } finally {
         setIsLoadingMore(false);
@@ -451,6 +500,7 @@ export default function BTCWatchPage() {
     (nextInterval: CandleInterval) => {
       if (nextInterval === activeIntervalRef.current) return;
       // 必须在 setState 前同步推进 epoch；否则切回旧周期时，React Query 的旧缓存可能先参与图表重锚。
+      watchDebug("interval.switch", { from: activeIntervalRef.current, to: nextInterval, nextEpoch: dataEpochRef.current + 1 });
       activeIntervalRef.current = nextInterval;
       intervalActivatedAtRef.current = Date.now();
       dataEpochRef.current += 1;
@@ -472,12 +522,15 @@ export default function BTCWatchPage() {
   );
 
   const handlePolymarketIntervalChange = useCallback((nextInterval: PolymarketInterval) => {
+    // 用户切换 Polymarket 粒度时，即使目标是“当前”窗口，也要把 K 线锚到该窗口起点。
+    setPolymarketFocusNonce((value) => value + 1);
     setPolymarketInterval(nextInterval);
     switchCandleInterval(nextInterval);
   }, [switchCandleInterval]);
 
   const handlePolymarketMarketSelect = useCallback(
     (marketId: string, followCurrent = false) => {
+      setPolymarketFocusNonce((value) => value + 1);
       setSelectedPolymarketId(marketId);
       // 选中当前窗口代表回到实时跟随；选中历史或未来窗口则固定查看该窗口。
       setAutoSwitchPolymarket(followCurrent);
@@ -1085,4 +1138,19 @@ function parseMarketTimeMs(value: string | null): number | null {
   }
   const parsed = new Date(trimmed).getTime();
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function watchDebug(event: string, payload: Record<string, unknown>) {
+  if (typeof window === "undefined") return;
+  if (window.localStorage.getItem("poly-auto.chartDebug") === "0") return;
+  const entry = { at: new Date().toLocaleTimeString("zh-CN", { hour12: false }), ...payload };
+  console.info(`[watch-debug] ${event} ${safeJson(entry)}`, entry);
+}
+
+function safeJson(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "[unserializable]";
+  }
 }
