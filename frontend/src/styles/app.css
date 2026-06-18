@@ -1884,6 +1884,23 @@ body[data-theme="dark"] {
   min-height: 120px;
 }
 
+.btc-watch-chart-initializing .btc-chart-canvas > *:not(.chart-loading-overlay) {
+  opacity: 0;
+}
+
+.chart-loading-overlay {
+  position: absolute;
+  z-index: 24;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .btc-main-chart {
   min-height: 0;
 }
@@ -1923,6 +1940,11 @@ a#tv-attr-logo {
 body[data-theme="dark"] .btc-watch-chart {
   background: #080b10;
   color: #d7e0ea;
+}
+
+body[data-theme="dark"] .chart-loading-overlay {
+  background: #080b10;
+  color: #94a3b8;
 }
 
 body[data-theme="dark"] .btc-chart-panel {

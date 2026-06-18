@@ -69,6 +69,7 @@ export default function BTCWatchPage() {
   const [candles, setCandles] = useState<MarketCandle[]>([]);
   const [indicatorPoints, setIndicatorPoints] = useState<MarketIndicatorPoint[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isSwitchingInterval, setIsSwitchingInterval] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [initialVisibleCandles, setInitialVisibleCandles] = useState(() =>
     typeof window !== "undefined" && window.matchMedia(WIDE_LAYOUT_QUERY).matches
@@ -89,6 +90,10 @@ export default function BTCWatchPage() {
   const comparisonLineCacheRef = useRef<Map<string, ChartComparisonLine>>(new Map());
   const dataEpochRef = useRef(0);
   const activeIntervalRef = useRef<CandleInterval>(interval);
+  const intervalActivatedAtRef = useRef(Date.now());
+  const candleSnapshotReadyRef = useRef(false);
+  const pendingLiveCandlesRef = useRef<MarketCandle[]>([]);
+  const pendingLiveIndicatorsRef = useRef<MarketIndicatorPoint[]>([]);
   // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
   const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
 
@@ -107,11 +112,11 @@ export default function BTCWatchPage() {
     return () => mediaQuery.removeEventListener("change", syncVisibleCandles);
   }, []);
 
-  const { data: latestCandles = EMPTY_MARKET_CANDLES, error } = useQuery({
+  const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
     queryKey: ["candles", interval],
     queryFn: () => api.candles(interval, 300),
   });
-  const { data: latestIndicators = EMPTY_MARKET_INDICATORS } = useQuery({
+  const { data: latestIndicators = EMPTY_MARKET_INDICATORS, dataUpdatedAt: latestIndicatorsUpdatedAt } = useQuery({
     queryKey: ["indicators", interval, indicatorLimit],
     queryFn: () => api.indicators(interval, indicatorLimit),
   });
@@ -136,6 +141,17 @@ export default function BTCWatchPage() {
     polymarketMarkets.find((market) => market.window === "next") ??
     polymarketMarkets[0];
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
+  const selectedPolymarketWindowLabel = selectedPolymarket
+    ? marketWindowLabel(selectedPolymarket, polymarketMarkets)
+    : null;
+  const chartFocusTimeMs =
+    !autoSwitchPolymarket && selectedPolymarket && selectedPolymarketWindow && selectedPolymarketWindowLabel !== "当前"
+      ? selectedPolymarketWindow.startMs
+      : null;
+  const chartFocusKey =
+    chartFocusTimeMs !== null && selectedPolymarket
+      ? `polymarket:${selectedPolymarket.id}:${chartFocusTimeMs}`
+      : null;
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
@@ -143,12 +159,11 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
-    activeIntervalRef.current = interval;
-    dataEpochRef.current += 1;
-    setCandles([]);
-    setIndicatorPoints([]);
-    setIsLoadingMore(false);
   }, [interval]);
+
+  useEffect(() => {
+    if (error) setIsSwitchingInterval(false);
+  }, [error]);
 
   useEffect(() => {
     localStorage.setItem(BOLL_KEY, showBollinger ? "1" : "0");
@@ -308,19 +323,34 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
+    // 切回曾经看过的周期时 React Query 会先吐旧缓存；定位只允许使用本次切换后完成的快照。
+    if (latestCandlesUpdatedAt < intervalActivatedAtRef.current) return;
+    candleSnapshotReadyRef.current = true;
+    const pendingLiveCandles = pendingLiveCandlesRef.current;
+    const pendingLiveIndicators = pendingLiveIndicatorsRef.current;
+    pendingLiveCandlesRef.current = [];
+    pendingLiveIndicatorsRef.current = [];
     setCandles((current) => {
       if (requestEpoch !== dataEpochRef.current) return current;
-      return mergeCandles(current, latestCandles);
+      return mergeCandles(current, [...latestCandles, ...pendingLiveCandles]);
     });
-  }, [latestCandles]);
+    setIsSwitchingInterval(false);
+    if (pendingLiveIndicators.length > 0) {
+      setIndicatorPoints((current) => {
+        if (requestEpoch !== dataEpochRef.current) return current;
+        return mergeIndicators(current, pendingLiveIndicators);
+      });
+    }
+  }, [latestCandles, latestCandlesUpdatedAt]);
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;
+    if (latestIndicatorsUpdatedAt < intervalActivatedAtRef.current) return;
     setIndicatorPoints((current) => {
       if (requestEpoch !== dataEpochRef.current) return current;
       return mergeIndicators(current, latestIndicators as MarketIndicatorPoint[]);
     });
-  }, [latestIndicators]);
+  }, [latestIndicators, latestIndicatorsUpdatedAt]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -346,6 +376,12 @@ export default function BTCWatchPage() {
         if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
         const candle = message.candle;
         const indicator = message.indicator;
+        if (!candleSnapshotReadyRef.current) {
+          // 切换周期后的第一帧必须由 REST 快照决定窗口宽度；WS 单根 K 线先缓冲，避免先锚到错误位置再跳回。
+          if (candle) pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
+          if (indicator) pendingLiveIndicatorsRef.current = mergeIndicators(pendingLiveIndicatorsRef.current, [indicator]);
+          return;
+        }
         if (candle) {
           setCandles((current) => mergeCandles(current, [candle]));
         }
@@ -400,10 +436,32 @@ export default function BTCWatchPage() {
     [interval, queryClient]
   );
 
+  const switchCandleInterval = useCallback(
+    (nextInterval: CandleInterval) => {
+      if (nextInterval === activeIntervalRef.current) return;
+      // 必须在 setState 前同步推进 epoch；否则切回旧周期时，React Query 的旧缓存可能先参与图表重锚。
+      activeIntervalRef.current = nextInterval;
+      intervalActivatedAtRef.current = Date.now();
+      dataEpochRef.current += 1;
+      candleSnapshotReadyRef.current = false;
+      pendingLiveCandlesRef.current = [];
+      pendingLiveIndicatorsRef.current = [];
+      // 切换目标周期时丢弃旧快照，强制首屏定位只基于本次切换后的 REST/WS 数据。
+      queryClient.removeQueries({ queryKey: ["candles", nextInterval], exact: true });
+      queryClient.removeQueries({ queryKey: ["indicators", nextInterval], exact: false });
+      setCandles([]);
+      setIndicatorPoints([]);
+      setIsLoadingMore(false);
+      setIsSwitchingInterval(true);
+      setInterval(nextInterval);
+    },
+    [queryClient]
+  );
+
   const handlePolymarketIntervalChange = useCallback((nextInterval: PolymarketInterval) => {
     setPolymarketInterval(nextInterval);
-    setInterval(nextInterval);
-  }, []);
+    switchCandleInterval(nextInterval);
+  }, [switchCandleInterval]);
 
   const handlePolymarketMarketSelect = useCallback(
     (marketId: string, followCurrent = false) => {
@@ -435,10 +493,13 @@ export default function BTCWatchPage() {
           showRsi={showRsi}
           onLoadMore={loadMore}
           isLoadingMore={isLoadingMore}
+          isInitializing={isSwitchingInterval}
           latestStreamStatus={streamStatus}
           fitAnchorVersion={fitAnchorVersion}
           initialVisibleCandles={initialVisibleCandles}
           comparisonLine={comparisonLine}
+          focusTimeMs={chartFocusTimeMs}
+          focusKey={chartFocusKey}
           countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
           toolbar={
             <div className="watch-toolbar-inner">
@@ -448,7 +509,7 @@ export default function BTCWatchPage() {
                   size="small"
                   options={intervals}
                   value={interval}
-                  onChange={(value) => setInterval(value as CandleInterval)}
+                  onChange={(value) => switchCandleInterval(value as CandleInterval)}
                 />
                 <Button
                   className={showBollinger ? "watch-indicator-button active" : "watch-indicator-button"}

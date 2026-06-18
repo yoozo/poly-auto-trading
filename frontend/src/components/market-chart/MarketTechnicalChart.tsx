@@ -14,7 +14,7 @@ import {
   type Time,
   type UTCTimestamp
 } from "lightweight-charts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { CandleInterval } from "../../api/client";
 import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
@@ -41,12 +41,15 @@ export type MarketTechnicalChartProps = {
   showRsi: boolean;
   onLoadMore?: (startMs: number, endMs: number) => Promise<void>;
   isLoadingMore?: boolean;
+  isInitializing?: boolean;
   statusText?: string;
   indicatorStatusText?: string;
   loadingText?: string;
   fitAnchorVersion?: number;
   initialVisibleCandles?: number;
   comparisonLine?: ChartComparisonLine | null;
+  focusTimeMs?: number | null;
+  focusKey?: string | null;
   countdownTargetMs?: number | null;
   toolbar?: ReactNode;
 };
@@ -128,12 +131,15 @@ export default function MarketTechnicalChart({
   showRsi,
   onLoadMore,
   isLoadingMore = false,
+  isInitializing = false,
   statusText,
   indicatorStatusText,
   loadingText = "加载历史中...",
   fitAnchorVersion = 0,
   initialVisibleCandles = INITIAL_VISIBLE_CANDLES,
   comparisonLine = null,
+  focusTimeMs = null,
+  focusKey = null,
   countdownTargetMs = null,
   toolbar
 }: MarketTechnicalChartProps) {
@@ -181,7 +187,10 @@ export default function MarketTechnicalChart({
   const previousFirstTimeRef = useRef<number | null>(null);
   const previousLengthRef = useRef(0);
   const latestRangeRef = useRef<LogicalRange | null>(null);
+  const lastFocusKeyRef = useRef<string | null>(null);
   const resizeFrameRef = useRef<number>(0);
+  const rangeSettleFrameRef = useRef<number>(0);
+  const initialRangeGuardUntilRef = useRef(Date.now() + 4000);
   const lastMainWidthRef = useRef(0);
   const rsiScaleInitializedRef = useRef(false);
   const diffScaleInitializedRef = useRef(false);
@@ -201,7 +210,7 @@ export default function MarketTechnicalChart({
       : showRsi
         ? "RSI 样本不足"
         : "";
-  const headerStatus = [isLoadingMore ? loadingText : statusText, indicatorStatusText ?? computedIndicatorStatus]
+  const headerStatus = [isInitializing ? loadingText : isLoadingMore ? loadingText : statusText, indicatorStatusText ?? computedIndicatorStatus]
     .filter(Boolean)
     .join(" · ");
 
@@ -249,7 +258,7 @@ export default function MarketTechnicalChart({
     []
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!chartRootRef.current || !mainContainerRef.current || !rsiContainerRef.current || !diffContainerRef.current) return;
 
     // 主图、RSI、diff 分成三个 chart，方便不同价格轴范围独立控制，但时间轴必须联动。
@@ -273,6 +282,7 @@ export default function MarketTechnicalChart({
     candleSeriesRef.current = candleSeries;
 
     mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (shouldIgnoreVisibleRangeChange()) return;
       const normalizedRange = normalizeVisibleRange(range);
       if (normalizedRange && range !== normalizedRange) {
         setVisibleRange(normalizedRange);
@@ -283,6 +293,7 @@ export default function MarketTechnicalChart({
       maybeLoadMore(normalizedRange);
     });
     rsiChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (shouldIgnoreVisibleRangeChange()) return;
       const normalizedRange = normalizeVisibleRange(range);
       if (normalizedRange && range !== normalizedRange) {
         setVisibleRange(normalizedRange);
@@ -292,6 +303,7 @@ export default function MarketTechnicalChart({
       syncTimeRange([mainChart, diffChart], normalizedRange);
     });
     diffChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (shouldIgnoreVisibleRangeChange()) return;
       const normalizedRange = normalizeVisibleRange(range);
       if (normalizedRange && range !== normalizedRange) {
         setVisibleRange(normalizedRange);
@@ -325,7 +337,6 @@ export default function MarketTechnicalChart({
       if (!mainRect) return;
       const width = Math.round(mainRect.width);
       handleMainWidthChange(width);
-      resizeCharts();
     });
     resizeObserver.observe(chartRootRef.current);
 
@@ -335,6 +346,7 @@ export default function MarketTechnicalChart({
       unbindDiffDom();
       if (rangeSyncFrameRef.current) window.cancelAnimationFrame(rangeSyncFrameRef.current);
       if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current);
+      if (rangeSettleFrameRef.current) window.cancelAnimationFrame(rangeSettleFrameRef.current);
       if (programmaticCrosshairFrameRef.current) window.cancelAnimationFrame(programmaticCrosshairFrameRef.current);
       resizeObserver.disconnect();
       mainChart.remove();
@@ -353,7 +365,7 @@ export default function MarketTechnicalChart({
     };
   }, [chartOptions]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     chartThemeRef.current = chartTheme;
     applyChartTheme(chartTheme);
   }, [chartTheme]);
@@ -372,7 +384,7 @@ export default function MarketTechnicalChart({
     onLoadMoreRef.current = onLoadMore;
   }, [interval, countdownTargetMs, showRsi, isLoadingMore, onLoadMore]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     pendingRangeRef.current = null;
     if (rangeSyncFrameRef.current) {
       window.cancelAnimationFrame(rangeSyncFrameRef.current);
@@ -382,15 +394,22 @@ export default function MarketTechnicalChart({
       window.cancelAnimationFrame(resizeFrameRef.current);
       resizeFrameRef.current = 0;
     }
+    if (rangeSettleFrameRef.current) {
+      window.cancelAnimationFrame(rangeSettleFrameRef.current);
+      rangeSettleFrameRef.current = 0;
+    }
     initializedRef.current = false;
+    initialRangeGuardUntilRef.current = Date.now() + 4000;
     loadMoreQueuedRef.current = false;
     previousFirstTimeRef.current = null;
     previousLengthRef.current = 0;
     latestRangeRef.current = null;
+    lastFocusKeyRef.current = null;
     lastMainWidthRef.current = 0;
     lastCrosshairTimeRef.current = null;
     rsiScaleInitializedRef.current = false;
     diffScaleInitializedRef.current = false;
+    clearChartDataState();
     mainChartRef.current?.clearCrosshairPosition();
     rsiChartRef.current?.clearCrosshairPosition();
     diffChartRef.current?.clearCrosshairPosition();
@@ -402,7 +421,7 @@ export default function MarketTechnicalChart({
     rebuildMaps();
   }, [indicators]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mainChart = mainChartRef.current;
     const rsiChart = rsiChartRef.current;
     const diffChart = diffChartRef.current;
@@ -448,33 +467,52 @@ export default function MarketTechnicalChart({
     renderRsi();
     renderDiff();
 
-    if (!initializedRef.current && chartCandles.length > 0) {
+    if (chartCandles.length <= 0) {
+      // 切换周期时会短暂进入空数据帧；此时不能把 lightweight-charts 残留的旧 range 写回去。
+      initializedRef.current = false;
+      previousFirstTimeRef.current = null;
+      previousLengthRef.current = 0;
+      latestRangeRef.current = null;
+      lastCrosshairTimeRef.current = null;
+      mainChart.clearCrosshairPosition();
+      rsiChart.clearCrosshairPosition();
+      diffChart.clearCrosshairPosition();
+      hideTooltip();
+      return;
+    }
+
+    const focusApplied = applyFocusRangeIfNeeded();
+
+    if (!focusApplied && !initializedRef.current && chartCandles.length > 0) {
       initializedRef.current = true;
-      setInitialVisibleRange();
-    } else if (shouldReanchorAfterBootstrap(previousLength, chartCandles.length, addedBefore)) {
-      setInitialVisibleRange();
-    } else if (addedBefore > 0 && previousRange) {
+      setInitialVisibleRangeWithSettle();
+    } else if (focusApplied) {
+      initializedRef.current = true;
+    } else if (!focusApplied && shouldReanchorAfterBootstrap(previousLength, chartCandles.length, addedBefore)) {
+      setInitialVisibleRangeWithSettle();
+    } else if (!focusApplied && addedBefore > 0 && previousRange) {
       // 向左加载历史时保持用户当前视野不跳动，只按新增数量平移逻辑区间。
       setVisibleRange({
         from: (previousRange.from + addedBefore) as Logical,
         to: (previousRange.to + addedBefore) as Logical
       });
-    } else if (appendedAfter > 0 && wasAtRight && previousRange && !draggingRef.current) {
+    } else if (!focusApplied && appendedAfter > 0 && wasAtRight && previousRange && !draggingRef.current) {
       const width = previousRange.to - previousRange.from;
       setVisibleRange({
         from: (chartCandles.length + anchorRightPaddingBars(width) - width) as Logical,
         to: (chartCandles.length + anchorRightPaddingBars(width)) as Logical
       });
-    } else if (previousRange) {
+    } else if (!focusApplied && previousRange) {
       setVisibleRange(previousRange);
     }
 
     previousFirstTimeRef.current = nextFirst;
     previousLengthRef.current = chartCandles.length;
+    scheduleLatestVisibleRangeGuard();
     restoreCrosshairPosition();
-  }, [candles, indicators, showBollinger, showRsi, interval, initialVisibleCandles]);
+  }, [candles, indicators, showBollinger, showRsi, interval, initialVisibleCandles, focusTimeMs, focusKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const mainChart = mainChartRef.current;
     const rsiChart = rsiChartRef.current;
     const diffChart = diffChartRef.current;
@@ -487,7 +525,6 @@ export default function MarketTechnicalChart({
       diffScaleInitializedRef.current = false;
     }
     window.requestAnimationFrame(() => {
-      resizeCharts();
       renderRsi();
       renderDiff();
       if (latestRangeRef.current) setVisibleRange(latestRangeRef.current);
@@ -501,7 +538,7 @@ export default function MarketTechnicalChart({
     return () => window.clearInterval(timer);
   }, [countdownTargetMs, latestCandle]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (fitAnchorVersion > 0 && candlesRef.current.length > 0) {
       window.requestAnimationFrame(() => setInitialVisibleRange());
     }
@@ -532,6 +569,39 @@ export default function MarketTechnicalChart({
     });
   }
 
+  function shouldIgnoreVisibleRangeChange() {
+    return candlesRef.current.length <= 0;
+  }
+
+  function clearChartDataState() {
+    candlesRef.current = [];
+    indicatorsRef.current = [];
+    candleByTimeRef.current = new Map();
+    bollByTimeRef.current = new Map();
+    indicatorByTimeRef.current = new Map();
+    mainCrosshairDataRef.current = [];
+    rsiCrosshairDataRef.current = [];
+    diffCrosshairDataRef.current = [];
+    candleSeriesRef.current?.setData([]);
+    for (const series of Object.values(bollSeriesRef.current)) series?.setData([]);
+    for (const series of Object.values(rsiSeriesRef.current)) series?.setData([]);
+    for (const series of Object.values(diffSeriesRef.current)) series?.setData([]);
+    removeComparisonLine();
+  }
+
+  function applyFocusRangeIfNeeded() {
+    if (!focusKey || focusTimeMs === null || !Number.isFinite(focusTimeMs)) {
+      if (lastFocusKeyRef.current === null) return false;
+      lastFocusKeyRef.current = null;
+      setInitialVisibleRange();
+      return true;
+    }
+    if (lastFocusKeyRef.current === focusKey) return false;
+    if (!setFocusedVisibleRange(focusTimeMs)) return false;
+    lastFocusKeyRef.current = focusKey;
+    return true;
+  }
+
   function applyChartTheme(theme: TechnicalChartTheme) {
     const chartVisualOptions = {
       layout: {
@@ -559,12 +629,13 @@ export default function MarketTechnicalChart({
     });
     if (rsiChartRef.current) renderRsiReferenceLines(rsiChartRef.current, showRsiRef.current);
     if (diffChartRef.current) renderDiffReferenceLines(diffChartRef.current, showRsiRef.current);
-    restoreCrosshairPosition();
+    if (candlesRef.current.length > 0) restoreCrosshairPosition();
   }
 
   function bindChartDom(element: HTMLDivElement) {
     const onPointerDown = () => {
       draggingRef.current = true;
+      initialRangeGuardUntilRef.current = 0;
       lastCrosshairTimeRef.current = null;
       hideTooltip();
     };
@@ -669,12 +740,16 @@ export default function MarketTechnicalChart({
   ) {
     if (!targetSeries) return;
     const nearest = nearestTimeValue(targetData, time);
-    if (!nearest || !Number.isFinite(nearest.value)) {
+    if (!nearest || !Number.isFinite(nearest.time) || !Number.isFinite(nearest.value)) {
       targetChart.clearCrosshairPosition();
       return;
     }
     markProgrammaticCrosshair();
-    targetChart.setCrosshairPosition(nearest.value, time as UTCTimestamp, targetSeries);
+    try {
+      targetChart.setCrosshairPosition(nearest.value, nearest.time as UTCTimestamp, targetSeries);
+    } catch {
+      targetChart.clearCrosshairPosition();
+    }
   }
 
   function markProgrammaticCrosshair() {
@@ -765,10 +840,10 @@ export default function MarketTechnicalChart({
         continue;
       }
       series.setData(
-        candlesRef.current.map((candle) => {
+        candlesRef.current.flatMap((candle) => {
           const time = candleTime(candle) as UTCTimestamp;
           const value = valuesByTime.get(time);
-          return Number.isFinite(value) ? { time, value } : { time };
+          return Number.isFinite(value) ? [{ time, value }] : [];
         })
       );
     }
@@ -810,7 +885,7 @@ export default function MarketTechnicalChart({
           priceLineVisible: false,
           visible: showRsi,
           priceScaleId: "right",
-          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) },
+          priceFormat: { type: "custom", formatter: formatLineValue },
           autoscaleInfoProvider: () => ({ priceRange: RSI_MAX_RANGE })
         });
         rsiSeriesRef.current[line.key] = series;
@@ -850,7 +925,7 @@ export default function MarketTechnicalChart({
           lastValueVisible: false,
           priceLineVisible: false,
           visible: showRsi,
-          priceFormat: { type: "custom", formatter: (value: number) => value.toFixed(2) }
+          priceFormat: { type: "custom", formatter: formatLineValue }
         });
         diffSeriesRef.current[line.key] = series;
         diffPrimarySeriesRef.current = series;
@@ -988,6 +1063,7 @@ export default function MarketTechnicalChart({
     return candlesRef.current.map((candle) => {
       const time = candleTime(candle) as UTCTimestamp;
       const value = valuesByTime.get(time);
+      // RSI/diff 是独立 chart，必须用完整 K 线时间轴的 whitespace 点维持 logical index 对齐。
       return Number.isFinite(value) ? { time, value } : { time };
     });
   }
@@ -1006,12 +1082,77 @@ export default function MarketTechnicalChart({
   }
 
   function setInitialVisibleRange() {
+    setVisibleRange(initialVisibleRange());
+  }
+
+  function setInitialVisibleRangeWithSettle() {
+    setInitialVisibleRange();
+    if (rangeSettleFrameRef.current) window.cancelAnimationFrame(rangeSettleFrameRef.current);
+    // autoSize 首次测量可能在 setData 后连续调整时间轴；连续两帧确认右侧锚点，避免冷启动显示全量历史。
+    rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
+      if (candlesRef.current.length > 0 && !draggingRef.current && lastFocusKeyRef.current === null) {
+        setInitialVisibleRange();
+      }
+      rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
+        rangeSettleFrameRef.current = 0;
+        if (candlesRef.current.length > 0 && !draggingRef.current && lastFocusKeyRef.current === null) {
+          setInitialVisibleRange();
+        }
+      });
+    });
+  }
+
+  function scheduleLatestVisibleRangeGuard() {
+    if (Date.now() > initialRangeGuardUntilRef.current) return;
+    if (rangeSettleFrameRef.current) window.cancelAnimationFrame(rangeSettleFrameRef.current);
+    rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
+      if (candlesRef.current.length > 0 && latestRangeLooksTooWide() && lastFocusKeyRef.current === null && !draggingRef.current) {
+        setInitialVisibleRange();
+      }
+      rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
+        rangeSettleFrameRef.current = 0;
+        if (candlesRef.current.length > 0 && latestRangeLooksTooWide() && lastFocusKeyRef.current === null && !draggingRef.current) {
+          setInitialVisibleRange();
+        }
+      });
+    });
+  }
+
+  function latestRangeLooksTooWide() {
+    const range = mainChartRef.current?.timeScale().getVisibleLogicalRange() ?? latestRangeRef.current;
+    if (!range || candlesRef.current.length <= 0) return false;
+    const visibleBars = range.to - range.from;
+    return Number.isFinite(visibleBars) && visibleBars > initialVisibleCandles * 1.6;
+  }
+
+  function setFocusedVisibleRange(targetMs: number) {
+    const targetTime = Math.floor(targetMs / 1000);
+    const nearest = nearestTimeValue(mainCrosshairDataRef.current, targetTime);
+    if (!nearest) return false;
+    const maxDistanceSeconds = Math.max(60, Math.ceil((intervalMs(intervalRef.current) / 1000) * 2));
+    if (Math.abs(nearest.time - targetTime) > maxDistanceSeconds) return false;
+    const targetIndex = candlesRef.current.findIndex((candle) => candleTime(candle) === nearest.time);
+    if (targetIndex < 0) return false;
+
+    // Polymarket 窗口切换只在 focusKey 变化时重锚一次，后续 WS 实时刷新不覆盖用户拖动。
     const visibleBars = Math.min(candlesRef.current.length, initialVisibleCandles);
     const rightPadding = anchorRightPaddingBars(visibleBars);
+    const anchorOffset = Math.max(4, Math.round(visibleBars * 0.35));
+    let from = targetIndex - anchorOffset - 0.5;
+    let to = from + visibleBars + rightPadding;
+    const maxTo = candlesRef.current.length + rightPadding;
+    if (to > maxTo) {
+      to = maxTo;
+      from = to - visibleBars - rightPadding;
+    }
+    from = Math.max(-0.5, from);
+
     setVisibleRange({
-      from: (candlesRef.current.length - visibleBars - 0.5) as Logical,
-      to: (candlesRef.current.length + rightPadding) as Logical
+      from: from as Logical,
+      to: to as Logical
     });
+    lastCrosshairTimeRef.current = nearest.time;
+    return true;
   }
 
   function shouldReanchorAfterBootstrap(previousLength: number, nextLength: number, addedBefore: number) {
@@ -1058,7 +1199,15 @@ export default function MarketTechnicalChart({
     if (!range || syncingRangeRef.current || candlesRef.current.length <= 0) return range;
     const minVisibleBars = minimumVisibleBars();
     const currentBars = range.to - range.from;
-    if (!Number.isFinite(currentBars) || currentBars >= minVisibleBars) return range;
+    if (!Number.isFinite(currentBars)) return range;
+    if (
+      Date.now() <= initialRangeGuardUntilRef.current &&
+      lastFocusKeyRef.current === null &&
+      currentBars > initialVisibleCandles * 1.6
+    ) {
+      return initialVisibleRange();
+    }
+    if (currentBars >= minVisibleBars) return range;
 
     const center = (range.from + range.to) / 2;
     const half = minVisibleBars / 2;
@@ -1072,26 +1221,20 @@ export default function MarketTechnicalChart({
     return Math.min(candlesRef.current.length, MIN_VISIBLE_CANDLES);
   }
 
+  function initialVisibleRange() {
+    const visibleBars = Math.min(candlesRef.current.length, initialVisibleCandles);
+    const rightPadding = anchorRightPaddingBars(visibleBars);
+    return {
+      from: (candlesRef.current.length - visibleBars - 0.5) as Logical,
+      to: (candlesRef.current.length + rightPadding) as Logical
+    };
+  }
+
   function setVisibleRange(range: LogicalRange) {
     latestRangeRef.current = range;
     mainChartRef.current?.timeScale().setVisibleLogicalRange(range);
     rsiChartRef.current?.timeScale().setVisibleLogicalRange(range);
     diffChartRef.current?.timeScale().setVisibleLogicalRange(range);
-  }
-
-  function resizeCharts() {
-    const main = mainContainerRef.current;
-    const rsi = rsiContainerRef.current;
-    const diff = diffContainerRef.current;
-    if (main && mainChartRef.current) {
-      mainChartRef.current.resize(Math.max(320, main.clientWidth), Math.max(120, main.clientHeight), true);
-    }
-    if (rsi && rsiChartRef.current && showRsiRef.current) {
-      rsiChartRef.current.resize(Math.max(320, rsi.clientWidth), Math.max(1, rsi.clientHeight), true);
-    }
-    if (diff && diffChartRef.current && showRsiRef.current) {
-      diffChartRef.current.resize(Math.max(320, diff.clientWidth), Math.max(1, diff.clientHeight), true);
-    }
   }
 
   function updateCountdown() {
@@ -1130,7 +1273,16 @@ export default function MarketTechnicalChart({
   }
 
   return (
-    <div ref={chartRootRef} className={showRsi ? "btc-watch-chart" : "btc-watch-chart btc-watch-chart-single"}>
+    <div
+      ref={chartRootRef}
+      className={[
+        "btc-watch-chart",
+        showRsi ? "" : "btc-watch-chart-single",
+        isInitializing ? "btc-watch-chart-initializing" : ""
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       {toolbar && <div className="btc-chart-toolbar">{toolbar}</div>}
       <section className="btc-chart-panel btc-main-panel">
         <div className="btc-chart-title">
@@ -1150,6 +1302,7 @@ export default function MarketTechnicalChart({
         <div className="btc-chart-canvas btc-main-chart" ref={mainContainerRef}>
           <div className="kline-countdown" ref={countdownRef} hidden />
           <div className="chart-tooltip" ref={tooltipRef} hidden />
+          {isInitializing && <div className="chart-loading-overlay">加载 K 线...</div>}
         </div>
       </section>
       <section className="btc-chart-panel btc-rsi-panel" hidden={!showRsi}>
@@ -1196,19 +1349,30 @@ function readChartThemeMode(): ChartThemeMode {
 function uniqueCandlesByChartTime(candles: MarketCandle[]) {
   const byTime = new Map<string, MarketCandle>();
   for (const candle of candles) {
-    // lightweight-charts 不接受空 OHLC，图表边界兜底过滤上游异常数据。
-    if (!isValidChartCandle(candle)) continue;
-    byTime.set(`${candle.symbol}:${candle.interval}:${candleTime(candle)}`, candle);
+    const normalizedCandle = normalizeChartCandle(candle);
+    if (!normalizedCandle) continue;
+    byTime.set(`${normalizedCandle.symbol}:${normalizedCandle.interval}:${candleTime(normalizedCandle)}`, normalizedCandle);
   }
   return Array.from(byTime.values()).sort((left, right) => candleTime(left) - candleTime(right));
 }
 
-function isValidChartCandle(candle: MarketCandle) {
-  return (
-    Number.isFinite(candleTime(candle)) &&
-    Number.isFinite(candle.open) &&
-    Number.isFinite(candle.high) &&
-    Number.isFinite(candle.low) &&
-    Number.isFinite(candle.close)
-  );
+function normalizeChartCandle(candle: MarketCandle) {
+  const time = candleTime(candle);
+  const open = finiteCandleValue(candle.open);
+  const high = finiteCandleValue(candle.high);
+  const low = finiteCandleValue(candle.low);
+  const close = finiteCandleValue(candle.close);
+  // lightweight-charts 对 OHLC 中的 null/NaN 很敏感，运行时会影响后续时间轴定位。
+  if (!Number.isFinite(time) || open === null || high === null || low === null || close === null) return null;
+  return { ...candle, open, high, low, close };
+}
+
+function finiteCandleValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function formatLineValue(value: number | null | undefined) {
+  return Number.isFinite(value) ? Number(value).toFixed(2) : "";
 }
