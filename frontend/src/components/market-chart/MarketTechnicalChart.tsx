@@ -5,6 +5,7 @@ import {
   CrosshairMode,
   LineSeries,
   LineStyle,
+  type AutoscaleInfo,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
@@ -162,6 +163,7 @@ export default function MarketTechnicalChart({
   const diffChartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const comparisonPriceLineRef = useRef<IPriceLine | null>(null);
+  const comparisonLineRef = useRef<ChartComparisonLine | null>(comparisonLine);
   const bollSeriesRef = useRef<Partial<Record<BollKey, ISeriesApi<"Line">>>>({});
   const rsiSeriesRef = useRef<Partial<Record<RsiSeriesKey, ISeriesApi<"Line">>>>({});
   const diffSeriesRef = useRef<Partial<Record<DiffSeriesKey, ISeriesApi<"Line">>>>({});
@@ -210,6 +212,7 @@ export default function MarketTechnicalChart({
 
   const latestCandle = candles.at(-1);
   const latestIndicator = indicators.at(-1);
+  comparisonLineRef.current = comparisonLine;
   const computedIndicatorStatus =
     latestIndicator?.rsi !== null && latestIndicator?.rsi !== undefined
       ? `RSI14 ${formatFixed(latestIndicator.rsi)} · EMA14 ${formatFixed(latestIndicator.rsi_ema)} · RSI-EMA ${formatSigned(latestIndicator.rsi_ema_diff)}`
@@ -279,7 +282,8 @@ export default function MarketTechnicalChart({
       borderDownColor: activeTheme.candleDown,
       wickUpColor: activeTheme.candleUp,
       wickDownColor: activeTheme.candleDown,
-      priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      autoscaleInfoProvider: comparisonAutoscaleInfoProvider
     });
 
     mainChartRef.current = mainChart;
@@ -401,7 +405,7 @@ export default function MarketTechnicalChart({
       window.cancelAnimationFrame(resizeFrameRef.current);
       resizeFrameRef.current = 0;
     }
-      if (rangeSettleFrameRef.current) {
+    if (rangeSettleFrameRef.current) {
       window.cancelAnimationFrame(rangeSettleFrameRef.current);
       rangeSettleFrameRef.current = 0;
     }
@@ -558,6 +562,7 @@ export default function MarketTechnicalChart({
   }, [fitAnchorVersion, initialVisibleCandles]);
 
   useEffect(() => {
+    comparisonLineRef.current = comparisonLine;
     renderComparisonLine();
     return () => removeComparisonLine();
   }, [comparisonLine]);
@@ -915,6 +920,7 @@ export default function MarketTechnicalChart({
       axisLabelVisible: true,
       title: comparisonLine.title,
     });
+    candleSeries.applyOptions({ autoscaleInfoProvider: comparisonAutoscaleInfoProvider });
   }
 
   function removeComparisonLine() {
@@ -922,6 +928,26 @@ export default function MarketTechnicalChart({
     if (!candleSeries || !comparisonPriceLineRef.current) return;
     candleSeries.removePriceLine(comparisonPriceLineRef.current);
     comparisonPriceLineRef.current = null;
+  }
+
+  function comparisonAutoscaleInfoProvider(baseImplementation: () => AutoscaleInfo | null) {
+    return autoscaleInfoWithComparisonLine(baseImplementation());
+  }
+
+  function autoscaleInfoWithComparisonLine(baseInfo: AutoscaleInfo | null): AutoscaleInfo | null {
+    const line = comparisonLineRef.current;
+    if (!baseInfo || !baseInfo.priceRange || !line || !Number.isFinite(line.price)) return baseInfo;
+    const minValue = Math.min(baseInfo.priceRange.minValue, line.price);
+    const maxValue = Math.max(baseInfo.priceRange.maxValue, line.price);
+    if (minValue === baseInfo.priceRange.minValue && maxValue === baseInfo.priceRange.maxValue) return baseInfo;
+    // target 线是市场结算基准价；即使当前视野暂未重锚，也要纳入主图价格轴，避免线被缩放到视野外。
+    return {
+      ...baseInfo,
+      priceRange: {
+        minValue,
+        maxValue,
+      },
+    };
   }
 
   function renderRsi() {
@@ -1199,9 +1225,8 @@ export default function MarketTechnicalChart({
     const targetTime = Math.floor(Math.floor(targetMs / currentIntervalMs) * currentIntervalMs / 1000);
     const nearest = nearestTimeValue(mainCrosshairDataRef.current, targetTime);
     if (!nearest) return false;
-    const maxDistanceSeconds = Math.max(60, Math.ceil((currentIntervalMs / 1000) * 2));
-    const distanceSeconds = Math.abs(nearest.time - targetTime);
-    if (distanceSeconds > maxDistanceSeconds) return false;
+    // 不能用相邻 K 线兜底，否则 4h market 切 1m 时会锚到 16:01/15:59 这类错误位置。
+    if (nearest.time !== targetTime) return false;
     const targetIndex = candlesRef.current.findIndex((candle) => candleTime(candle) === nearest.time);
     if (targetIndex < 0) return false;
 

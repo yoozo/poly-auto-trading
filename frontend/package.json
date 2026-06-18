@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "verify:btc-watch": "node scripts/verify-btc-watch-market-rules.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.0",
@@ -28,4 +29,3 @@
     "typescript": "^5.5.0"
   }
 }
-
