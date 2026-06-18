@@ -146,9 +146,10 @@ export default function BTCWatchPage() {
     polymarketMarkets[0];
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
   const chartFocusTimeMs = selectedPolymarket && selectedPolymarketWindow ? selectedPolymarketWindow.startMs : null;
+  // focusKey 表示“用户要求图表重新定位”的版本；自动跟随新 market 只换选中态，不重置 K 线视野。
   const chartFocusKey =
     chartFocusTimeMs !== null && selectedPolymarket
-      ? `polymarket:${selectedPolymarket.id}:${chartFocusTimeMs}:${polymarketFocusNonce}`
+      ? `polymarket-focus:${polymarketFocusNonce}`
       : null;
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
   const marketDiffTone =
