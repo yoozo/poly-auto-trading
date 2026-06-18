@@ -463,21 +463,6 @@ export default function MarketTechnicalChart({
         ? chartCandles.filter((candle) => candleTime(candle) > previousLast).length
         : 0;
     const wasAtRight = isNearRightEdge(previousRange, previousLengthRef.current);
-    chartDebug("data.apply", {
-      symbol,
-      interval,
-      inputCount: candles.length,
-      candleCount: chartCandles.length,
-      rejectedCount: builtCandles.rejectedCount,
-      first: nextFirst ? formatTooltipTime(nextFirst) : null,
-      last: nextLast ? formatTooltipTime(nextLast) : null,
-      previousLength,
-      addedBefore,
-      appendedAfter,
-      previousRange,
-      focusKey,
-      focusTime: focusTimeMs ? new Date(focusTimeMs).toLocaleString("zh-CN", { hour12: false }) : null,
-    });
 
     // 后端可能同时返回历史和实时数据，前端按图表时间去重后再重建所有派生索引。
     candlesRef.current = chartCandles;
@@ -652,23 +637,14 @@ export default function MarketTechnicalChart({
 
   function applyFocusRangeIfNeeded() {
     if (!focusKey || focusTimeMs === null || !Number.isFinite(focusTimeMs)) {
-      chartDebug("focus.disabled", { symbol, interval: intervalRef.current, focusKey, focusTimeMs, lastFocusKey: lastFocusKeyRef.current });
       if (lastFocusKeyRef.current === null) return false;
       lastFocusKeyRef.current = null;
-      chartDebug("focus.clear", { symbol, interval: intervalRef.current });
       setInitialVisibleRange();
       return true;
     }
-    if (lastFocusKeyRef.current === focusKey) {
-      chartDebug("focus.skip_same_key", { symbol, interval: intervalRef.current, focusKey });
-      return false;
-    }
-    if (!setFocusedVisibleRange(focusTimeMs)) {
-      chartDebug("focus.not_applied", { symbol, interval: intervalRef.current, focusKey, focusTimeMs });
-      return false;
-    }
+    if (lastFocusKeyRef.current === focusKey) return false;
+    if (!setFocusedVisibleRange(focusTimeMs)) return false;
     lastFocusKeyRef.current = focusKey;
-    chartDebug("focus.applied", { symbol, interval: intervalRef.current, focusKey, focusTimeMs });
     return true;
   }
 
@@ -858,14 +834,6 @@ export default function MarketTechnicalChart({
     const endMs = new Date(first.open_time).getTime() - intervalMs(currentInterval);
     const startMs = Math.max(0, endMs - initialLookbackMs(currentInterval));
     loadMoreQueuedRef.current = true;
-    chartDebug("load_more.schedule", {
-      symbol,
-      interval: currentInterval,
-      range,
-      first: formatTooltipTime(candleTime(first)),
-      start: new Date(startMs).toLocaleString("zh-CN", { hour12: false }),
-      end: new Date(endMs).toLocaleString("zh-CN", { hour12: false }),
-    });
     // 拖动过程中 range 变化很密集，稍微延迟并串行化历史加载，避免重复打 API。
     window.setTimeout(() => {
       void loadMore(startMs, endMs).finally(() => {
@@ -1170,17 +1138,8 @@ export default function MarketTechnicalChart({
   }
 
   function setInitialVisibleRange() {
-    if (hasActiveFocusRange()) {
-      chartDebug("range.initial_skip_focus", {
-        symbol,
-        interval: intervalRef.current,
-        focusKey,
-        lastFocusKey: lastFocusKeyRef.current,
-      });
-      return;
-    }
+    if (hasActiveFocusRange()) return;
     const range = initialVisibleRange();
-    chartDebug("range.initial", { symbol, interval: intervalRef.current, range, candleCount: candlesRef.current.length });
     setVisibleRange(range);
   }
 
@@ -1208,23 +1167,11 @@ export default function MarketTechnicalChart({
     if (rangeSettleFrameRef.current) window.cancelAnimationFrame(rangeSettleFrameRef.current);
     rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
       if (candlesRef.current.length > 0 && latestRangeLooksTooWide() && lastFocusKeyRef.current === null && !draggingRef.current) {
-        chartDebug("range.guard_clamp", {
-          symbol,
-          interval: intervalRef.current,
-          range: mainChartRef.current?.timeScale().getVisibleLogicalRange() ?? latestRangeRef.current,
-          candleCount: candlesRef.current.length,
-        });
         setInitialVisibleRange();
       }
       rangeSettleFrameRef.current = window.requestAnimationFrame(() => {
         rangeSettleFrameRef.current = 0;
         if (candlesRef.current.length > 0 && latestRangeLooksTooWide() && lastFocusKeyRef.current === null && !draggingRef.current) {
-          chartDebug("range.guard_clamp_second_frame", {
-            symbol,
-            interval: intervalRef.current,
-            range: mainChartRef.current?.timeScale().getVisibleLogicalRange() ?? latestRangeRef.current,
-            candleCount: candlesRef.current.length,
-          });
           setInitialVisibleRange();
         }
       });
@@ -1245,28 +1192,12 @@ export default function MarketTechnicalChart({
   function setFocusedVisibleRange(targetMs: number) {
     const targetTime = Math.floor(targetMs / 1000);
     const nearest = nearestTimeValue(mainCrosshairDataRef.current, targetTime);
-    if (!nearest) {
-      chartDebug("focus.no_nearest", { symbol, interval: intervalRef.current, targetMs, candleCount: candlesRef.current.length });
-      return false;
-    }
+    if (!nearest) return false;
     const maxDistanceSeconds = Math.max(60, Math.ceil((intervalMs(intervalRef.current) / 1000) * 2));
     const distanceSeconds = Math.abs(nearest.time - targetTime);
-    if (distanceSeconds > maxDistanceSeconds) {
-      chartDebug("focus.too_far", {
-        symbol,
-        interval: intervalRef.current,
-        target: formatTooltipTime(targetTime),
-        nearest: formatTooltipTime(nearest.time),
-        distanceSeconds,
-        maxDistanceSeconds,
-      });
-      return false;
-    }
+    if (distanceSeconds > maxDistanceSeconds) return false;
     const targetIndex = candlesRef.current.findIndex((candle) => candleTime(candle) === nearest.time);
-    if (targetIndex < 0) {
-      chartDebug("focus.index_missing", { symbol, interval: intervalRef.current, nearest: formatTooltipTime(nearest.time) });
-      return false;
-    }
+    if (targetIndex < 0) return false;
 
     // Polymarket 窗口切换只在 focusKey 变化时重锚一次，后续 WS 实时刷新不覆盖用户拖动。
     const visibleBars = Math.min(candlesRef.current.length, initialVisibleCandles);
@@ -1285,15 +1216,6 @@ export default function MarketTechnicalChart({
       from: from as Logical,
       to: to as Logical
     };
-    chartDebug("focus.range", {
-      symbol,
-      interval: intervalRef.current,
-      target: formatTooltipTime(targetTime),
-      nearest: formatTooltipTime(nearest.time),
-      targetIndex,
-      range,
-      candleCount: candlesRef.current.length,
-    });
     setFocusedVisibleRangeWithSettle(range);
     lastCrosshairTimeRef.current = nearest.time;
     return true;
@@ -1304,37 +1226,21 @@ export default function MarketTechnicalChart({
     if (focusSettleFrameRef.current) window.cancelAnimationFrame(focusSettleFrameRef.current);
     // lightweight-charts 在 setData/autoSize 同一帧可能重算 timeScale；锚点 range 设置后再确认两帧。
     focusSettleFrameRef.current = window.requestAnimationFrame(() => {
-      verifyFocusedVisibleRange(range, "first_frame");
+      verifyFocusedVisibleRange(range);
       focusSettleFrameRef.current = window.requestAnimationFrame(() => {
         focusSettleFrameRef.current = 0;
-        verifyFocusedVisibleRange(range, "second_frame");
+        verifyFocusedVisibleRange(range);
       });
     });
   }
 
-  function verifyFocusedVisibleRange(expectedRange: LogicalRange, phase: string) {
+  function verifyFocusedVisibleRange(expectedRange: LogicalRange) {
     if (draggingRef.current || candlesRef.current.length <= 0) return;
     const actualRange = mainChartRef.current?.timeScale().getVisibleLogicalRange() ?? null;
     const drift: number | null =
       actualRange &&
       Math.max(Math.abs(actualRange.from - expectedRange.from), Math.abs(actualRange.to - expectedRange.to));
-    chartDebug("focus.range_verify", {
-      symbol,
-      interval: intervalRef.current,
-      phase,
-      expectedRange,
-      actualRange,
-      drift,
-    });
     if (!actualRange || drift === null || !Number.isFinite(drift) || drift <= 1) return;
-    chartDebug("focus.range_reapply", {
-      symbol,
-      interval: intervalRef.current,
-      phase,
-      expectedRange,
-      actualRange,
-      drift,
-    });
     setVisibleRange(expectedRange);
   }
 
@@ -1540,19 +1446,4 @@ function readChartThemeMode(): ChartThemeMode {
 
 function formatLineValue(value: number | null | undefined) {
   return Number.isFinite(value) ? Number(value).toFixed(2) : "";
-}
-
-function chartDebug(event: string, payload: Record<string, unknown>) {
-  if (typeof window === "undefined") return;
-  if (window.localStorage.getItem("poly-auto.chartDebug") === "0") return;
-  const entry = { at: new Date().toLocaleTimeString("zh-CN", { hour12: false }), ...payload };
-  console.info(`[chart-debug] ${event} ${safeJson(entry)}`, entry);
-}
-
-function safeJson(value: unknown) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable]";
-  }
 }
