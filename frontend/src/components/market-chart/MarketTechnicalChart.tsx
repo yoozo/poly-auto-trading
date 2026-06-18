@@ -1194,10 +1194,12 @@ export default function MarketTechnicalChart({
   }
 
   function setFocusedVisibleRange(targetMs: number) {
-    const targetTime = Math.floor(targetMs / 1000);
+    const currentIntervalMs = intervalMs(intervalRef.current);
+    // Polymarket/API 时间可能带秒或毫秒；K 线锚点必须落到包含该时间的 open_time，1m 图上尤其明显。
+    const targetTime = Math.floor(Math.floor(targetMs / currentIntervalMs) * currentIntervalMs / 1000);
     const nearest = nearestTimeValue(mainCrosshairDataRef.current, targetTime);
     if (!nearest) return false;
-    const maxDistanceSeconds = Math.max(60, Math.ceil((intervalMs(intervalRef.current) / 1000) * 2));
+    const maxDistanceSeconds = Math.max(60, Math.ceil((currentIntervalMs / 1000) * 2));
     const distanceSeconds = Math.abs(nearest.time - targetTime);
     if (distanceSeconds > maxDistanceSeconds) return false;
     const targetIndex = candlesRef.current.findIndex((candle) => candleTime(candle) === nearest.time);

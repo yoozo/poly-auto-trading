@@ -276,12 +276,13 @@ export default function BTCWatchPage() {
         cancelled = true;
       };
     }
-    const visibleBaselineCandle = nearestBaselineCandle(activeCandles, comparisonStartMs);
+    const baselineStartMs = candleOpenAnchorMs(comparisonStartMs, "1m");
+    const visibleBaselineCandle = nearestBaselineCandle(activeCandles, baselineStartMs);
     if (visibleBaselineCandle && Number.isFinite(visibleBaselineCandle.open)) {
       setComparisonLine(
         marketComparisonLine({
           marketId,
-          startMs: comparisonStartMs,
+          startMs: baselineStartMs,
           price: visibleBaselineCandle.open,
           interval: selectedPolymarket?.interval ?? "N/A",
         })
@@ -300,19 +301,19 @@ export default function BTCWatchPage() {
       try {
         const rows = await api.candlesRange(
           "1m",
-          Math.max(0, comparisonStartMs),
-          comparisonStartMs + 5 * ONE_MINUTE_MS,
+          Math.max(0, baselineStartMs),
+          baselineStartMs + 5 * ONE_MINUTE_MS,
           6
         );
         if (cancelled || activeComparisonKeyRef.current !== comparisonKey) return;
-        const targetCandle = nearestBaselineCandle(rows, comparisonStartMs);
+        const targetCandle = nearestBaselineCandle(rows, baselineStartMs);
         if (!targetCandle || !Number.isFinite(targetCandle.open)) {
           if (!visibleBaselineCandle) setComparisonLine(null);
           return;
         }
         const nextLine = marketComparisonLine({
           marketId,
-          startMs: comparisonStartMs,
+          startMs: baselineStartMs,
           price: targetCandle.open,
           interval: selectedPolymarket?.interval ?? "N/A",
         });
@@ -964,9 +965,15 @@ function mergeIndicators(existing: MarketIndicatorPoint[], incoming: MarketIndic
 function nearestBaselineCandle(rows: MarketCandle[], startMs: number) {
   const candidates = rows
     .map((row) => ({ row, openMs: new Date(row.open_time).getTime() }))
-    .filter(({ openMs }) => Number.isFinite(openMs) && openMs >= startMs)
+    .filter(({ openMs }) => Number.isFinite(openMs))
     .sort((left, right) => Math.abs(left.openMs - startMs) - Math.abs(right.openMs - startMs));
   return candidates[0]?.row ?? null;
+}
+
+function candleOpenAnchorMs(timeMs: number, interval: CandleInterval) {
+  const stepMs = intervalMs(interval);
+  if (!Number.isFinite(timeMs) || !Number.isFinite(stepMs) || stepMs <= 0) return timeMs;
+  return Math.floor(timeMs / stepMs) * stepMs;
 }
 
 function marketComparisonLine({
