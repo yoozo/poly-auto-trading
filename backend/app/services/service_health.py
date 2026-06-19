@@ -26,6 +26,7 @@ class ServiceHealthStore:
             "binance_ws": ServiceHealth(name="binance_ws", state="idle", last_update=now),
             "polymarket": ServiceHealth(name="polymarket", state="idle", last_update=now),
             "polymarket_ws": ServiceHealth(name="polymarket_ws", state="idle", last_update=now),
+            "polymarket_user_ws": ServiceHealth(name="polymarket_user_ws", state="idle", last_update=now),
             "telegram": ServiceHealth(name="telegram", state="idle", last_update=now),
         }
 

@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 from polymarket import (
     PRODUCTION,
     AsyncPublicClient,
@@ -22,8 +23,10 @@ from polymarket import (
 from polymarket._internal.actions import data as polymarket_data_actions
 from polymarket._internal.pagination import encode_offset_cursor
 from py_clob_client_v2 import BookParams, ClobClient
+from py_clob_client_v2.clob_types import ApiCreds, OpenOrderParams
 
 from app.core.config import settings
+from app.schemas.polymarket import PolymarketAccountOrder, PolymarketAccountPosition, PolymarketAccountTrade
 from app.services.external_http import is_retryable_http_error, with_retry
 from app.services.service_health import service_health_store
 
@@ -223,6 +226,47 @@ class PolymarketClient:
         async for batch in self.iter_activity_batches(wallet, activity_limit):
             activities.extend(batch)
         return activities[:activity_limit]
+
+    async def fetch_positions(self, wallet: str, size_threshold: float = 0) -> list[PolymarketAccountPosition]:
+        if not is_wallet(wallet):
+            raise PolymarketInputError("POLYMARKET_POSITION_WALLET 不是有效钱包地址")
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await with_retry(
+                    lambda: client.get(
+                        f"{self._data_base_url}/positions",
+                        params={"user": wallet.lower(), "sizeThreshold": size_threshold},
+                    ),
+                    retryable=is_retryable_http_error,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            service_health_store.set("polymarket", "running", metadata={"endpoint": "positions"})
+            if not isinstance(payload, list):
+                raise RuntimeError("Unexpected Polymarket positions response")
+            return [normalize_account_position(row) for row in payload if isinstance(row, dict)]
+        except Exception as exc:
+            service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "positions"})
+            logger.warning("Polymarket positions fetch failed", extra={"wallet": wallet.lower()}, exc_info=exc)
+            raise
+
+    async def fetch_open_orders(
+        self,
+        *,
+        market: str | None = None,
+        asset_id: str | None = None,
+    ) -> list[PolymarketAccountOrder]:
+        try:
+            payload = await with_retry(
+                lambda: asyncio.to_thread(self._fetch_open_orders_with_clob_sdk, market=market, asset_id=asset_id),
+                retryable=is_retryable_polymarket_sdk_error,
+            )
+            service_health_store.set("polymarket", "running", metadata={"endpoint": "open_orders"})
+            return [normalize_account_order(row) for row in payload if isinstance(row, dict)]
+        except Exception as exc:
+            service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "open_orders"})
+            logger.warning("Polymarket open orders fetch failed", extra={"market": market, "asset_id": asset_id}, exc_info=exc)
+            raise
 
     async def iter_activity_batches(
         self,
@@ -676,6 +720,17 @@ class PolymarketClient:
         books = client.get_order_books([BookParams(token_id=token_id) for token_id in token_ids])
         return [sdk_order_book_to_clob_dict(book) for book in books]
 
+    def _fetch_open_orders_with_clob_sdk(
+        self,
+        *,
+        market: str | None,
+        asset_id: str | None,
+    ) -> list[dict[str, Any]]:
+        creds = clob_api_creds()
+        client = ClobClient(host=self._clob_base_url, chain_id=self._environment.chain_id, creds=creds)
+        params = OpenOrderParams(market=market, asset_id=asset_id)
+        return [sdk_model_to_dict(order) if not isinstance(order, dict) else order for order in client.get_open_orders(params)]
+
 
 def normalize_polymarket_input(raw_input: str) -> str:
     value = raw_input.strip()
@@ -869,6 +924,86 @@ def sdk_order_book_to_clob_dict(book: Any) -> dict[str, Any]:
         if parsed is not None:
             normalized["timestamp"] = str(int(parsed.timestamp() * 1000))
     return normalized
+
+
+def clob_api_creds() -> ApiCreds:
+    if not (
+        settings.polymarket_clob_api_key
+        and settings.polymarket_clob_secret
+        and settings.polymarket_clob_passphrase
+    ):
+        raise PolymarketInputError("Polymarket CLOB API credentials are not configured")
+    return ApiCreds(
+        api_key=settings.polymarket_clob_api_key,
+        api_secret=settings.polymarket_clob_secret,
+        api_passphrase=settings.polymarket_clob_passphrase,
+    )
+
+
+def normalize_account_position(row: dict[str, Any]) -> PolymarketAccountPosition:
+    return PolymarketAccountPosition(
+        condition_id=string_or_none(row.get("conditionId") or row.get("condition_id")),
+        asset=string_or_none(row.get("asset") or row.get("assetId") or row.get("asset_id")),
+        title=string_or_none(row.get("title")),
+        slug=string_or_none(row.get("slug")),
+        event_slug=string_or_none(row.get("eventSlug") or row.get("event_slug")),
+        outcome=string_or_none(row.get("outcome")),
+        size=float_or_none(row.get("size")),
+        avg_price=float_or_none(row.get("avgPrice") or row.get("avg_price")),
+        cur_price=float_or_none(row.get("curPrice") or row.get("cur_price")),
+        current_value=float_or_none(row.get("currentValue") or row.get("current_value")),
+        cash_pnl=float_or_none(row.get("cashPnl") or row.get("cash_pnl")),
+        percent_pnl=float_or_none(row.get("percentPnl") or row.get("percent_pnl")),
+        redeemable=bool(row.get("redeemable")),
+        mergeable=bool(row.get("mergeable")),
+        end_date=optional_timestamp(row.get("endDate") or row.get("end_date")),
+        raw=row,
+    )
+
+
+def normalize_account_order(row: dict[str, Any]) -> PolymarketAccountOrder:
+    original_size = float_or_none(row.get("original_size") or row.get("originalSize") or row.get("size"))
+    size_matched = float_or_none(row.get("size_matched") or row.get("sizeMatched") or row.get("matched_size"))
+    remaining_size = float_or_none(
+        row.get("remaining_size")
+        or row.get("remainingSize")
+        or (
+            max(original_size - size_matched, 0)
+            if original_size is not None and size_matched is not None
+            else None
+        )
+    )
+    return PolymarketAccountOrder(
+        id=string_or_none(row.get("id") or row.get("order_id") or row.get("orderId")) or row_identity(row),
+        market=string_or_none(row.get("market") or row.get("conditionId") or row.get("condition_id")),
+        asset_id=string_or_none(row.get("asset_id") or row.get("assetId") or row.get("token_id")),
+        side=string_or_none(row.get("side")),
+        price=float_or_none(row.get("price")),
+        original_size=original_size,
+        size_matched=size_matched,
+        remaining_size=remaining_size,
+        order_type=string_or_none(row.get("order_type") or row.get("orderType") or row.get("type")),
+        status=string_or_none(row.get("status")) or string_or_none(row.get("state")),
+        outcome=string_or_none(row.get("outcome")),
+        created_at=optional_timestamp(row.get("created_at") or row.get("createdAt")),
+        updated_at=optional_timestamp(row.get("updated_at") or row.get("updatedAt")),
+        raw=row,
+    )
+
+
+def normalize_account_trade(row: dict[str, Any]) -> PolymarketAccountTrade:
+    return PolymarketAccountTrade(
+        id=string_or_none(row.get("id") or row.get("trade_id") or row.get("tradeId")) or row_identity(row),
+        market=string_or_none(row.get("market") or row.get("conditionId") or row.get("condition_id")),
+        asset_id=string_or_none(row.get("asset_id") or row.get("assetId") or row.get("token_id")),
+        side=string_or_none(row.get("side")),
+        price=float_or_none(row.get("price")),
+        size=float_or_none(row.get("size")),
+        outcome=string_or_none(row.get("outcome")),
+        timestamp=optional_timestamp(row.get("timestamp") or row.get("created_at") or row.get("createdAt")),
+        order_id=string_or_none(row.get("order_id") or row.get("orderId") or row.get("order")),
+        raw=row,
+    )
 
 
 def sdk_series_to_gamma_events(series: Any, *, series_slug: str) -> list[dict[str, Any]]:
@@ -1458,6 +1593,11 @@ def decimal_or_none(value: Any) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def float_or_none(value: Any) -> float | None:
+    decimal = decimal_or_none(value)
+    return float(decimal) if decimal is not None else None
 
 
 def string_or_none(value: Any) -> str | None:

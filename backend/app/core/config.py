@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     polymarket_clob_base_url: str = "https://clob.polymarket.com"
     polymarket_ws_enabled: bool = True
     polymarket_ws_market_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    polymarket_user_ws_enabled: bool = True
+    polymarket_ws_user_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+    polymarket_position_wallet: str = ""
+    polymarket_clob_api_key: str = ""
+    polymarket_clob_secret: str = ""
+    polymarket_clob_passphrase: str = ""
+    polymarket_clob_address: str = ""
+    polymarket_account_refresh_seconds: int = 30
     polymarket_market_refresh_seconds: int = 60
     polymarket_market_boundary_refresh_window_seconds: int = 3
     polymarket_market_empty_retry_seconds: int = 5

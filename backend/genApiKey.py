@@ -51,7 +51,10 @@ def get_client(apiCreds: ApiCreds):
 
 
 apiCreds = gen_api_key()
-client = get_client(apiCreds)
+print("apiCreds:", apiCreds)
+
+
+# client = get_client(apiCreds)
 
 
 # collateral = client.get_balance_allowance(
@@ -77,6 +80,6 @@ client = get_client(apiCreds)
 # orderId = "0x4e2432be1e06fd18fc5e582bc38e3a6e6abc47d2a8dcf91da2185526ff8034a0"
 # print(client.cancel_order(OrderPayload(orderID=orderId)))
 
-orders = client.get_open_orders()
-print("open orders count:", len(orders))
-print(orders)
+# orders = client.get_open_orders()
+# print("open orders count:", len(orders))
+# print(orders)

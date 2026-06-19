@@ -72,6 +72,16 @@ class PolymarketUpDownStore:
             ]
         return sorted(set(ids))
 
+    async def condition_ids(self) -> list[str]:
+        async with self._lock:
+            ids = [
+                market.condition_id
+                for markets in self._markets_by_interval.values()
+                for market in markets
+                if market.condition_id
+            ]
+        return sorted(set(ids))
+
     async def market_count(self) -> int:
         async with self._lock:
             return sum(len(markets) for markets in self._markets_by_interval.values())

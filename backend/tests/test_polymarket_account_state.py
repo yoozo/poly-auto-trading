@@ -1,0 +1,244 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.config import settings
+from app.main import create_app
+from app.schemas.polymarket import PolymarketAccountOrder, PolymarketAccountPosition
+from app.services import polymarket_account_monitor
+from app.services.polymarket_account_monitor import (
+    PolymarketAccountMonitor,
+    clob_credentials_configured,
+    user_subscription_payload,
+)
+from app.services.polymarket_account_store import PolymarketAccountStore
+from app.services.polymarket_client import normalize_account_order, normalize_account_position
+from conftest import login_test_client
+
+
+def test_normalizes_position_and_order_rows() -> None:
+    position = normalize_account_position(
+        {
+            "conditionId": "0xabc",
+            "asset": "up-token",
+            "title": "BTC Up or Down",
+            "outcome": "Up",
+            "size": "10.5",
+            "avgPrice": "0.48",
+            "curPrice": "0.56",
+            "currentValue": "5.88",
+            "cashPnl": "0.84",
+            "percentPnl": "0.1667",
+            "redeemable": True,
+            "mergeable": False,
+            "endDate": "2026-06-19T12:00:00Z",
+        }
+    )
+    order = normalize_account_order(
+        {
+            "id": "order-1",
+            "market": "0xabc",
+            "asset_id": "up-token",
+            "side": "BUY",
+            "price": "0.52",
+            "original_size": "20",
+            "size_matched": "5",
+            "order_type": "GTC",
+            "status": "LIVE",
+        }
+    )
+
+    assert position.condition_id == "0xabc"
+    assert position.size == 10.5
+    assert position.redeemable is True
+    assert order.remaining_size == 15
+    assert order.status == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_store_filters_snapshot_by_condition_id() -> None:
+    store = PolymarketAccountStore()
+    await store.replace_positions(
+        [
+            make_position("0xabc", "up-token"),
+            make_position("0xdef", "down-token"),
+        ]
+    )
+    await store.replace_orders(
+        [
+            make_order("order-1", "0xabc", "up-token"),
+            make_order("order-2", "0xdef", "down-token"),
+        ]
+    )
+
+    snapshot = await store.snapshot("0xabc")
+
+    assert [position.asset for position in snapshot.positions] == ["up-token"]
+    assert [order.id for order in snapshot.orders] == ["order-1"]
+
+
+@pytest.mark.asyncio
+async def test_order_event_updates_store_and_trade_event_refreshes_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+    broadcasts: list[str | None] = []
+    monitor = PolymarketAccountMonitor()
+
+    async def fake_refresh_account_snapshot() -> None:
+        await store.replace_positions([make_position("0xabc", "up-token")])
+
+    async def fake_broadcast_snapshot(condition_id: str | None) -> None:
+        broadcasts.append(condition_id)
+
+    async def fake_condition_ids() -> list[str]:
+        return ["0xabc"]
+
+    monkeypatch.setattr(polymarket_account_monitor, "polymarket_account_store", store)
+    monkeypatch.setattr(monitor, "refresh_account_snapshot", fake_refresh_account_snapshot)
+    monkeypatch.setattr(monitor, "broadcast_snapshot", fake_broadcast_snapshot)
+    monkeypatch.setattr(polymarket_account_monitor.polymarket_up_down_store, "condition_ids", fake_condition_ids)
+
+    await monitor.handle_raw_message(
+        '{"event_type":"order","id":"order-1","market":"0xabc","asset_id":"up-token",'
+        '"side":"BUY","price":"0.52","original_size":"20","size_matched":"0","status":"LIVE"}'
+    )
+    await monitor.handle_raw_message(
+        '{"event_type":"trade","id":"trade-1","market":"0xabc","asset_id":"up-token",'
+        '"side":"BUY","price":"0.52","size":"5","order_id":"order-1"}'
+    )
+
+    snapshot = await store.snapshot("0xabc")
+    assert [order.id for order in snapshot.orders] == ["order-1"]
+    assert [position.asset for position in snapshot.positions] == ["up-token"]
+    assert [trade.id for trade in snapshot.recent_trades] == ["trade-1"]
+    assert None in broadcasts
+    assert "0xabc" in broadcasts
+
+
+@pytest.mark.asyncio
+async def test_user_ws_ignores_non_json_frames(monkeypatch: pytest.MonkeyPatch) -> None:
+    monitor = PolymarketAccountMonitor()
+    broadcasts: list[str | None] = []
+
+    async def fake_broadcast_snapshot(condition_id: str | None) -> None:
+        broadcasts.append(condition_id)
+
+    monkeypatch.setattr(monitor, "broadcast_snapshot", fake_broadcast_snapshot)
+
+    await monitor.handle_raw_message("")
+    await monitor.handle_raw_message("PONG")
+    await monitor.handle_raw_message("connected")
+
+    assert broadcasts == []
+
+
+@pytest.mark.asyncio
+async def test_start_marks_user_ws_config_missing_without_clob_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+    states: list[tuple[str, str | None]] = []
+    monitor = PolymarketAccountMonitor()
+
+    async def fake_snapshot_loop() -> None:
+        return None
+
+    async def fake_subscription_watch_loop() -> None:
+        return None
+
+    async def fake_set_ws_state(state: str, error: str | None = None) -> None:
+        states.append((state, error))
+        await store.set_ws_state(state, error)
+
+    monkeypatch.setattr(settings, "polymarket_user_ws_enabled", True)
+    monkeypatch.setattr(settings, "polymarket_clob_api_key", "")
+    monkeypatch.setattr(settings, "polymarket_clob_secret", "")
+    monkeypatch.setattr(settings, "polymarket_clob_passphrase", "")
+    monkeypatch.setattr(monitor, "snapshot_loop", fake_snapshot_loop)
+    monkeypatch.setattr(monitor, "subscription_watch_loop", fake_subscription_watch_loop)
+    monkeypatch.setattr(monitor, "set_ws_state", fake_set_ws_state)
+
+    await monitor.start()
+    await monitor.stop()
+
+    assert states[0][0] == "config_missing"
+    assert "credentials" in (states[0][1] or "")
+
+
+def test_user_subscription_payload_uses_condition_ids_and_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "polymarket_clob_api_key", "key")
+    monkeypatch.setattr(settings, "polymarket_clob_secret", "secret")
+    monkeypatch.setattr(settings, "polymarket_clob_passphrase", "pass")
+
+    payload = user_subscription_payload(["0xdef", "0xabc", "0xabc"], operation="subscribe")
+
+    assert payload["type"] == "user"
+    assert payload["operation"] == "subscribe"
+    assert payload["markets"] == ["0xabc", "0xdef"]
+    assert payload["auth"] == {"apiKey": "key", "secret": "secret", "passphrase": "pass"}
+    assert clob_credentials_configured() is True
+
+
+def test_account_state_endpoint_returns_filtered_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+
+    async def fake_snapshot(condition_id: str | None = None):
+        await store.replace_positions([make_position("0xabc", "up-token")])
+        await store.replace_orders([make_order("order-1", "0xabc", "up-token")])
+        return await store.snapshot(condition_id)
+
+    monkeypatch.setattr(polymarket_account_monitor.polymarket_account_store, "snapshot", fake_snapshot)
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket.polymarket_account_store, "snapshot", fake_snapshot)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+    response = client.get("/api/polymarket/account-state/0xabc")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["condition_id"] == "0xabc"
+    assert body["positions"][0]["asset"] == "up-token"
+    assert body["orders"][0]["id"] == "order-1"
+
+
+def make_position(condition_id: str, asset: str) -> PolymarketAccountPosition:
+    return PolymarketAccountPosition(
+        condition_id=condition_id,
+        asset=asset,
+        title="BTC Up or Down",
+        slug="btc-updown",
+        event_slug="btc-updown-event",
+        outcome="Up",
+        size=10,
+        avg_price=0.48,
+        cur_price=0.56,
+        current_value=5.6,
+        cash_pnl=0.8,
+        percent_pnl=0.16,
+        redeemable=False,
+        mergeable=False,
+        end_date=datetime(2026, 6, 19, tzinfo=timezone.utc),
+        raw={},
+    )
+
+
+def make_order(order_id: str, condition_id: str, asset: str) -> PolymarketAccountOrder:
+    return PolymarketAccountOrder(
+        id=order_id,
+        market=condition_id,
+        asset_id=asset,
+        side="BUY",
+        price=0.52,
+        original_size=20,
+        size_matched=0,
+        remaining_size=20,
+        order_type="GTC",
+        status="LIVE",
+        outcome="Up",
+        created_at=None,
+        updated_at=None,
+        raw={},
+    )

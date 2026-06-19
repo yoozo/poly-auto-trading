@@ -337,6 +337,74 @@ export type PolymarketWsMessage = {
   markets: PolymarketUpDownMarket[];
 };
 
+export type PolymarketAccountPosition = {
+  condition_id: string | null;
+  asset: string | null;
+  title: string | null;
+  slug: string | null;
+  event_slug: string | null;
+  outcome: string | null;
+  size: number | null;
+  avg_price: number | null;
+  cur_price: number | null;
+  current_value: number | null;
+  cash_pnl: number | null;
+  percent_pnl: number | null;
+  redeemable: boolean;
+  mergeable: boolean;
+  end_date: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type PolymarketAccountOrder = {
+  id: string;
+  market: string | null;
+  asset_id: string | null;
+  side: string | null;
+  price: number | null;
+  original_size: number | null;
+  size_matched: number | null;
+  remaining_size: number | null;
+  order_type: string | null;
+  status: string | null;
+  outcome: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type PolymarketAccountTrade = {
+  id: string;
+  market: string | null;
+  asset_id: string | null;
+  side: string | null;
+  price: number | null;
+  size: number | null;
+  outcome: string | null;
+  timestamp: string | null;
+  order_id: string | null;
+  raw: Record<string, unknown>;
+};
+
+export type PolymarketAccountState = {
+  wallet: string | null;
+  condition_id: string | null;
+  positions: PolymarketAccountPosition[];
+  orders: PolymarketAccountOrder[];
+  recent_trades: PolymarketAccountTrade[];
+  ws_state: string;
+  last_positions_refresh_at: string | null;
+  last_orders_refresh_at: string | null;
+  last_trade_at: string | null;
+  error: string | null;
+};
+
+export type PolymarketAccountStateWsMessage = {
+  type: "polymarket.account_state.snapshot";
+  condition_id: string | null;
+  state: PolymarketAccountState;
+};
+
 export type AuthSession = {
   authenticated: boolean;
   configured: boolean;
@@ -482,11 +550,22 @@ export const api = {
     request<PolymarketUpDownMarket[]>(
       `/api/polymarket/btc-up-down?interval=${interval}&limit=${limit}&include_recent_closed=true`
     ),
+  polymarketAccountState: (conditionId?: string | null) =>
+    request<PolymarketAccountState>(
+      conditionId ? `/api/polymarket/account-state/${encodeURIComponent(conditionId)}` : "/api/polymarket/account-state"
+    ),
   polymarketBtcUpDownWsUrl: (interval: PolymarketInterval) => {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/polymarket/btc-up-down", base);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("interval", interval);
+    return url.toString();
+  },
+  polymarketAccountStateWsUrl: (conditionId?: string | null) => {
+    const base = API_BASE_URL || window.location.origin;
+    const url = new URL("/api/ws/polymarket/account-state", base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (conditionId) url.searchParams.set("condition_id", conditionId);
     return url.toString();
   },
   marketWsUrl: (interval: CandleInterval) => {
