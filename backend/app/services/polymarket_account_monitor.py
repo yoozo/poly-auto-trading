@@ -86,19 +86,36 @@ class PolymarketAccountMonitor:
 
     async def refresh_account_snapshot(self) -> None:
         wallet = settings.polymarket_position_wallet.strip().lower()
+        fetches = []
         if wallet:
-            positions = await self._client.fetch_positions(wallet=wallet, size_threshold=0)
-            await polymarket_account_store.replace_positions(positions)
+            fetches.append(("positions", self._client.fetch_positions(wallet=wallet, size_threshold=0)))
         if clob_credentials_configured():
-            try:
-                balance = await self._client.fetch_balance_allowance()
-                orders = await self._client.fetch_open_orders()
-            except Exception as exc:
-                await polymarket_account_store.set_error(f"Polymarket account fetch failed: {exc}")
-                return
-            await polymarket_account_store.replace_balance(balance)
-            await polymarket_account_store.replace_orders(orders)
+            fetches.extend(
+                [
+                    ("balance", self._client.fetch_balance_allowance()),
+                    ("orders", self._client.fetch_open_orders()),
+                ]
+            )
+        if not fetches:
             await polymarket_account_store.set_error(None)
+            return
+
+        # 仓位、余额、挂单来自不同接口，互不依赖；并发拉取可以避免慢接口拖住其他账户状态。
+        results = await asyncio.gather(*(fetch for _, fetch in fetches), return_exceptions=True)
+        errors: list[str] = []
+        for (name, _), result in zip(fetches, results, strict=True):
+            if isinstance(result, Exception):
+                errors.append(f"{name}: {type(result).__name__}")
+                continue
+            if name == "positions":
+                await polymarket_account_store.replace_positions(result)
+            elif name == "balance":
+                await polymarket_account_store.replace_balance(result)
+            elif name == "orders":
+                await polymarket_account_store.replace_orders(result)
+        await polymarket_account_store.set_error(
+            f"Polymarket account fetch partially failed: {'; '.join(errors)}" if errors else None
+        )
 
     async def ws_loop(self) -> None:
         backoff = 1.0

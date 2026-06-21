@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -133,6 +134,56 @@ async def test_order_event_updates_store_and_trade_event_refreshes_snapshots(mon
     assert [trade.id for trade in snapshot.recent_trades] == ["trade-1"]
     assert None in broadcasts
     assert "0xabc" in broadcasts
+
+
+@pytest.mark.asyncio
+async def test_refresh_account_snapshot_fetches_independent_sources_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PolymarketAccountStore()
+    monitor = PolymarketAccountMonitor()
+    started: set[str] = set()
+    release = asyncio.Event()
+
+    class FakeClient:
+        async def fetch_positions(self, *, wallet: str, size_threshold: int):
+            started.add("positions")
+            await wait_until_all_started()
+            release.set()
+            return [make_position("0xabc", "up-token")]
+
+        async def fetch_balance_allowance(self):
+            started.add("balance")
+            await wait_until_all_started()
+            raise RuntimeError("slow balance")
+
+        async def fetch_open_orders(self):
+            started.add("orders")
+            await wait_until_all_started()
+            return [make_order("order-1", "0xabc", "up-token")]
+
+    async def wait_until_all_started() -> None:
+        for _ in range(20):
+            if started == {"positions", "balance", "orders"}:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError(f"not all fetches started: {started}")
+
+    monitor._client = FakeClient()  # type: ignore[assignment]
+    monkeypatch.setattr(polymarket_account_monitor, "polymarket_account_store", store)
+    monkeypatch.setattr(settings, "polymarket_position_wallet", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setattr(settings, "polymarket_clob_api_key", "key")
+    monkeypatch.setattr(settings, "polymarket_clob_secret", "secret")
+    monkeypatch.setattr(settings, "polymarket_clob_passphrase", "pass")
+    monkeypatch.setattr(settings, "polymarket_clob_address", "0x0000000000000000000000000000000000000001")
+
+    await monitor.refresh_account_snapshot()
+    snapshot = await store.snapshot("0xabc")
+
+    assert [position.asset for position in snapshot.positions] == ["up-token"]
+    assert [order.id for order in snapshot.orders] == ["order-1"]
+    assert snapshot.error == "Polymarket account fetch partially failed: balance: RuntimeError"
+    assert "secret" not in snapshot.error
 
 
 @pytest.mark.asyncio
