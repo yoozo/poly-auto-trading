@@ -11,6 +11,7 @@ from app.api.routes_polymarket import router as polymarket_router
 from app.api.routes_reports import router as reports_router
 from app.api.routes_signals import router as signals_router
 from app.api.routes_status import router as status_router
+from app.api.routes_system_tasks import router as system_tasks_router
 from app.core.auth import AUTH_EXEMPT_PATHS, auth_is_configured, request_is_authenticated
 from app.core.config import settings
 from app.core.lifecycle import lifespan
@@ -51,6 +52,7 @@ def create_app(enable_lifespan: bool = True) -> FastAPI:
     app.include_router(auth_router, prefix="/api")
     app.include_router(health_router, prefix="/api")
     app.include_router(status_router, prefix="/api")
+    app.include_router(system_tasks_router, prefix="/api")
     app.include_router(candles_router, prefix="/api")
     app.include_router(signals_router, prefix="/api")
     app.include_router(polymarket_router, prefix="/api")

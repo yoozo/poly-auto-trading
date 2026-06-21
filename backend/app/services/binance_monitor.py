@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 import websockets
@@ -12,30 +11,18 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.schemas.candle import Candle, Interval
 from app.schemas.market_signal import MarketDataEvent
+from app.services.candle_backfill import candle_sync_service
 from app.services.binance_client import BinanceClient
-from app.services.candle_store import get_latest_candle, list_candles, upsert_candles
+from app.services.candle_store import list_candles
 from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
 
-BINANCE_KLINE_LIMIT = 1000
-INTERVAL_MS: dict[Interval, int] = {
-    "1m": 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "30m": 30 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1d": 24 * 60 * 60_000,
-}
-
-
 class BinanceMonitor:
-    """Binance 数据源接入层：只负责补历史、连 WS、解析 K 线，不直接计算信号。"""
+    """Binance 数据源接入层：触发后台补数、连 WS、解析 K 线，不直接写 K 线库。"""
 
     def __init__(self) -> None:
-        self._client = BinanceClient()
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
@@ -71,53 +58,25 @@ class BinanceMonitor:
                 await asyncio.sleep(15)
 
     async def backfill_once(self) -> None:
-        service_health_store.set("binance_rest", "running", metadata={"operation": "backfill"})
+        service_health_store.set("binance_rest", "running", metadata={"operation": "live_window_sync"})
         for interval in settings.binance_intervals:
-            await self.backfill_interval(settings.binance_symbol, interval)  # type: ignore[arg-type]
+            await self.refresh_live_window(settings.binance_symbol, interval)  # type: ignore[arg-type]
+        service_health_store.set(
+            "binance_rest",
+            "idle",
+            metadata={"operation": "live_window_sync"},
+        )
 
-    async def backfill_interval(self, symbol: str, interval: Interval) -> None:
+    async def refresh_live_window(self, symbol: str, interval: Interval) -> None:
         async with AsyncSessionLocal() as session:
-            latest = await get_latest_candle(session, symbol=symbol, interval=interval)
-
-        if latest is None:
-            # 首次启动没有数据库窗口时，直接拉最近一段历史作为指标 warmup 基础。
-            candles = await self._client.fetch_klines(
+            # monitor 每分钟只补最近窗口，历史大缺口仍由 system_task 接管，避免和全量任务互相抢占。
+            await candle_sync_service.ensure_latest_window(
+                session,
                 symbol=symbol,
                 interval=interval,
                 limit=settings.candle_history_limit,
             )
-            async with AsyncSessionLocal() as session:
-                await upsert_candles(session, candles)
-                cached = await list_candles(session, symbol=symbol, interval=interval, limit=settings.candle_history_limit)
-            market_signal_pipeline.replace_live_candles(symbol, interval, cached)
-            return
-
-        interval_ms = INTERVAL_MS[interval]
-        start_ms = to_ms(latest.open_time)
-        end_ms = to_ms(utc_now())
-        while start_ms <= end_ms:
-            # Binance 单次 K 线查询有上限，按 open_time 分页补齐中断期间缺失的数据。
-            candles = await self._client.fetch_klines(
-                symbol=symbol,
-                interval=interval,
-                limit=BINANCE_KLINE_LIMIT,
-                start_ms=start_ms,
-                end_ms=end_ms,
-            )
-            if not candles:
-                break
-            async with AsyncSessionLocal() as session:
-                await upsert_candles(session, candles)
-            next_start_ms = to_ms(candles[-1].open_time) + interval_ms
-            if next_start_ms <= start_ms:
-                break
-            start_ms = next_start_ms
-            if len(candles) < BINANCE_KLINE_LIMIT:
-                break
-
-        async with AsyncSessionLocal() as session:
             cached = await list_candles(session, symbol=symbol, interval=interval, limit=settings.candle_history_limit)
-        # backfill 完成后刷新信号 pipeline 的内存窗口，后续 WS 增量才能基于完整历史计算指标。
         market_signal_pipeline.replace_live_candles(symbol, interval, cached)
 
     async def ws_loop(self) -> None:
@@ -187,27 +146,21 @@ def parse_ws_candle(raw_message: str | bytes) -> Candle | None:
     interval = str(kline.get("i") or "")
     if interval not in settings.binance_intervals:
         return None
-    return BinanceClient._parse_kline(
+    row = [
+        int(kline["t"]),
+        kline["o"],
+        kline["h"],
+        kline["l"],
+        kline["c"],
+        kline["v"],
+        int(kline["T"]),
+    ]
+    candle = BinanceClient._parse_kline(
         symbol=str(data.get("s") or settings.binance_symbol).upper(),
         interval=interval,  # type: ignore[arg-type]
-        row=[
-            int(kline["t"]),
-            kline["o"],
-            kline["h"],
-            kline["l"],
-            kline["c"],
-            kline["v"],
-            int(kline["T"]),
-        ],
+        row=row,
     ).model_copy(update={"is_closed": bool(kline.get("x"))})
-
-
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def to_ms(value: datetime) -> int:
-    return int(value.timestamp() * 1000)
+    return candle
 
 
 binance_monitor = BinanceMonitor()

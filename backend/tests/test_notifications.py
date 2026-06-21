@@ -368,11 +368,12 @@ async def test_telegram_delivery_sends_once_for_multiple_signals(monkeypatch) ->
     assert calls["delivery"]["signals"] == signals
     assert calls["delivery"]["delivery_key"] == f"telegram:{signals[0].dedupe_key}"
     assert len(calls["sent"]) == 1
-    assert "总分：50.00 🔥🔥🔥" in calls["sent"][0]
-    assert "🔥🔥🔥 信号提醒" in calls["sent"][0]
-    assert "🔴 卖出 做空" in calls["sent"][0]
+    assert "🔥🔥🔥市场：" in calls["sent"][0]
+    assert "总分：50.00" in calls["sent"][0]
+    assert "信号提醒：" in calls["sent"][0]
+    assert "方向：🔴DOWN" in calls["sent"][0]
     assert "RSI > 80" in calls["sent"][0]
-    assert "RSI-EMA diff = 13" in calls["sent"][0]
+    assert "RSI-Diff = -" in calls["sent"][0]
 
 
 def make_candle(open_time: datetime, interval: str = "1m", is_closed: bool = True) -> Candle:

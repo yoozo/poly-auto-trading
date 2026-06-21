@@ -1,7 +1,7 @@
 import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
 import { Button, Card, Dropdown, Empty, Modal, Segmented, Typography } from "antd";
 import type { MenuProps } from "antd";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
@@ -23,6 +23,7 @@ import type {
   MarketIndicatorPoint,
   StreamStatus,
 } from "../components/market-chart/types";
+import { INDICATOR_WARMUP_BARS, calculateIndicatorPoints } from "../components/market-chart/indicators";
 import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 import {
   candleAtOpenTime,
@@ -37,8 +38,19 @@ import {
   type PolymarketDisplayWindow,
 } from "./btcWatchMarketRules";
 
-const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h"];
+const intervals: CandleInterval[] = ["1m", "5m", "15m", "1h", "4h", "12h", "1d", "1w"];
 const polymarketIntervals: PolymarketInterval[] = ["5m", "15m", "1h", "4h"];
+const candleIntervalLabels: Record<CandleInterval, string> = {
+  "1m": "1m",
+  "5m": "5m",
+  "15m": "15m",
+  "30m": "30m",
+  "1h": "1h",
+  "4h": "4h",
+  "12h": "12h",
+  "1d": "1D",
+  "1w": "1W",
+};
 const INTERVAL_KEY = "poly-auto.btcWatch.interval";
 const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
@@ -49,10 +61,11 @@ const WIDE_VISIBLE_CANDLES = 100;
 const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
 // React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
 const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
-const EMPTY_MARKET_INDICATORS: MarketIndicatorPoint[] = [];
 const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
 const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
   wallet: null,
+  clob_address: null,
+  balance: null,
   condition_id: null,
   positions: [],
   orders: [],
@@ -74,7 +87,6 @@ export default function BTCWatchPage() {
   const [showRsi, setShowRsi] = useState(() => localStorage.getItem(RSI_KEY) !== "0");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
   const [candles, setCandles] = useState<MarketCandle[]>([]);
-  const [indicatorPoints, setIndicatorPoints] = useState<MarketIndicatorPoint[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSwitchingInterval, setIsSwitchingInterval] = useState(false);
   const [chartDataReady, setChartDataReady] = useState(false);
@@ -114,9 +126,6 @@ export default function BTCWatchPage() {
   const candleSnapshotReadyRef = useRef(false);
   const historicalJumpViewRef = useRef(false);
   const pendingLiveCandlesRef = useRef<MarketCandle[]>([]);
-  const pendingLiveIndicatorsRef = useRef<MarketIndicatorPoint[]>([]);
-  // 指标计算需要足够 warmup 数据，按当前 K 线数量动态扩大查询窗口。
-  const indicatorLimit = Math.min(Math.max(candles.length, 300), 1000);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(WIDE_LAYOUT_QUERY);
@@ -135,11 +144,7 @@ export default function BTCWatchPage() {
 
   const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
     queryKey: ["candles", interval],
-    queryFn: () => api.candles(interval, 300),
-  });
-  const { data: latestIndicators = EMPTY_MARKET_INDICATORS, dataUpdatedAt: latestIndicatorsUpdatedAt } = useQuery({
-    queryKey: ["indicators", interval, indicatorLimit],
-    queryFn: () => api.indicators(interval, indicatorLimit),
+    queryFn: () => api.candles(interval, 300 + INDICATOR_WARMUP_BARS),
   });
   const { data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS, error: polymarketError } = useQuery({
     queryKey: ["polymarket-btc-up-down", polymarketInterval],
@@ -152,8 +157,8 @@ export default function BTCWatchPage() {
 
   const activeCandles = useMemo(() => candles.filter((candle) => candle.interval === interval), [candles, interval]);
   const activeIndicators = useMemo(
-    () => indicatorPoints.filter((point) => point.interval === interval),
-    [indicatorPoints, interval]
+    () => calculateIndicatorPoints(activeCandles, interval),
+    [activeCandles, interval]
   );
   const latest = activeCandles.at(-1);
   const selectedPolymarket = selectedPolymarketMarket({
@@ -460,10 +465,11 @@ export default function BTCWatchPage() {
     // Polymarket 周期和 K 线周期允许不同；缺目标 open_time 时按当前 K 线周期补齐锚点附近数据。
     void (async () => {
       try {
-        const [focusCandlesResult, focusIndicatorsResult] = await Promise.allSettled([
-          api.candlesRange(requestInterval, startMs, endMs, limit),
-          api.indicatorsRange(requestInterval, startMs, endMs, limit),
-        ]);
+        const focusCandlesResult = await Promise.resolve(
+          api.candlesRange(requestInterval, withIndicatorWarmupStart(startMs, requestInterval), endMs, limit + INDICATOR_WARMUP_BARS)
+        )
+          .then((value) => ({ status: "fulfilled" as const, value }))
+          .catch((reason) => ({ status: "rejected" as const, reason }));
         if (requestEpoch !== dataEpochRef.current || requestInterval !== activeIntervalRef.current) return;
         if (focusCandlesResult.status === "rejected") {
           if (marketFocusDataRequestKeyRef.current === requestKey) {
@@ -479,9 +485,6 @@ export default function BTCWatchPage() {
           return;
         }
         setCandles((current) => mergeCandles(current, focusCandles));
-        if (focusIndicatorsResult.status === "fulfilled") {
-          setIndicatorPoints((current) => mergeIndicators(current, focusIndicatorsResult.value as MarketIndicatorPoint[]));
-        }
         setChartDataReady(true);
       } catch {
         if (marketFocusDataRequestKeyRef.current === requestKey) {
@@ -500,31 +503,13 @@ export default function BTCWatchPage() {
     }
     candleSnapshotReadyRef.current = true;
     const pendingLiveCandles = pendingLiveCandlesRef.current;
-    const pendingLiveIndicators = pendingLiveIndicatorsRef.current;
     pendingLiveCandlesRef.current = [];
-    pendingLiveIndicatorsRef.current = [];
     setCandles((current) => {
       if (requestEpoch !== dataEpochRef.current) return current;
       return mergeCandles(current, [...latestCandles, ...pendingLiveCandles]);
     });
     setIsSwitchingInterval(false);
-    if (pendingLiveIndicators.length > 0) {
-      setIndicatorPoints((current) => {
-        if (requestEpoch !== dataEpochRef.current) return current;
-        return mergeIndicators(current, pendingLiveIndicators);
-      });
-    }
   }, [latestCandles, latestCandlesUpdatedAt]);
-
-  useEffect(() => {
-    const requestEpoch = dataEpochRef.current;
-    if (historicalJumpViewRef.current) return;
-    if (latestIndicatorsUpdatedAt < intervalActivatedAtRef.current) return;
-    setIndicatorPoints((current) => {
-      if (requestEpoch !== dataEpochRef.current) return current;
-      return mergeIndicators(current, latestIndicators as MarketIndicatorPoint[]);
-    });
-  }, [latestIndicators, latestIndicatorsUpdatedAt]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -550,18 +535,13 @@ export default function BTCWatchPage() {
         if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
         if (historicalJumpViewRef.current) return;
         const candle = message.candle;
-        const indicator = message.indicator;
         if (!candleSnapshotReadyRef.current) {
           // 切换周期后的第一帧必须由 REST 快照决定窗口宽度；WS 单根 K 线先缓冲，避免先锚到错误位置再跳回。
           if (candle) pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
-          if (indicator) pendingLiveIndicatorsRef.current = mergeIndicators(pendingLiveIndicatorsRef.current, [indicator]);
           return;
         }
         if (candle) {
           setCandles((current) => mergeCandles(current, [candle]));
-        }
-        if (indicator) {
-          setIndicatorPoints((current) => mergeIndicators(current, [indicator]));
         }
       };
       socket.onerror = () => {
@@ -593,26 +573,18 @@ export default function BTCWatchPage() {
     async (startMs: number, endMs: number) => {
       setIsLoadingMore(true);
       try {
-        // 历史翻页必须同步补 candle 和 indicator，否则图表时间轴会有价格但缺少指标层。
+        // 指标由前端基于 candle 计算，历史翻页只需要多取 warmup K 线。
         const requestEpoch = dataEpochRef.current;
-        const older = await api.candlesRange(interval, startMs, endMs);
+        const older = await api.candlesRange(interval, withIndicatorWarmupStart(startMs, interval), endMs);
         if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) {
           return;
         }
         setCandles((current) => mergeCandles(current, older));
-        const olderIndicators = await queryClient.fetchQuery({
-          queryKey: ["indicators-range", interval, startMs, endMs],
-          queryFn: () => api.indicatorsRange(interval, startMs, endMs),
-        });
-        if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) {
-          return;
-        }
-        setIndicatorPoints((current) => mergeIndicators(current, olderIndicators as MarketIndicatorPoint[]));
       } finally {
         setIsLoadingMore(false);
       }
     },
-    [interval, queryClient]
+    [interval]
   );
 
   const switchCandleInterval = useCallback(
@@ -625,14 +597,11 @@ export default function BTCWatchPage() {
       historicalJumpViewRef.current = false;
       candleSnapshotReadyRef.current = false;
       pendingLiveCandlesRef.current = [];
-      pendingLiveIndicatorsRef.current = [];
       marketFocusDataRequestKeyRef.current = null;
       setPolymarketFocusNowMs(Date.now());
       // 切换目标周期时丢弃旧快照，强制首屏定位只基于本次切换后的 REST/WS 数据。
       queryClient.removeQueries({ queryKey: ["candles", nextInterval], exact: true });
-      queryClient.removeQueries({ queryKey: ["indicators", nextInterval], exact: false });
       setCandles([]);
-      setIndicatorPoints([]);
       setChartDataReady(false);
       setChartEpoch((epoch) => epoch + 1);
       setIsLoadingMore(false);
@@ -681,7 +650,7 @@ export default function BTCWatchPage() {
                 if (canSwitchMarket && item === interval) handlePolymarketIntervalChange(item as PolymarketInterval);
               }}
             >
-              {item}
+              {candleIntervalLabels[item]}
             </span>
           ),
         };
@@ -706,11 +675,13 @@ export default function BTCWatchPage() {
     setIsJumpingTime(true);
     setTimeJumpError(null);
     try {
-      // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近的 candle/indicator，再交给图表 focus。
-      const [jumpCandles, jumpIndicators] = await Promise.all([
-        api.candlesRange(jumpInterval, startMs, endMs, limit),
-        api.indicatorsRange(jumpInterval, startMs, endMs, limit),
-      ]);
+      // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近和指标 warmup 所需的 candle。
+      const jumpCandles = await api.candlesRange(
+        jumpInterval,
+        withIndicatorWarmupStart(startMs, jumpInterval),
+        endMs,
+        limit + INDICATOR_WARMUP_BARS
+      );
       if (requestEpoch !== dataEpochRef.current || jumpInterval !== activeIntervalRef.current) return;
       if (jumpCandles.length <= 0) {
         setTimeJumpError("该时间附近暂无 K 线");
@@ -719,12 +690,6 @@ export default function BTCWatchPage() {
       // 跳转到历史时间时只展示目标附近的连续窗口，避免和实时窗口跨天拼接成断裂曲线。
       historicalJumpViewRef.current = true;
       setCandles((current) => mergeCandles(current.filter((candle) => candle.interval !== jumpInterval), jumpCandles));
-      setIndicatorPoints((current) =>
-        mergeIndicators(
-          current.filter((point) => point.interval !== jumpInterval),
-          jumpIndicators as MarketIndicatorPoint[]
-        )
-      );
       setChartDataReady(true);
       setTimeJumpFocus({ timeMs: targetMs, nonce: Date.now() });
       setTimeJumpModalOpen(false);
@@ -1047,6 +1012,27 @@ function AccountStatePanel({
   const positions = accountState.positions.filter((position) => positionMatchesMarket(position, market));
   const orders = accountState.orders.filter((order) => orderMatchesMarket(order, market));
   const wsLabel = accountStateStatusLabel(accountState.ws_state);
+  const queryClient = useQueryClient();
+  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
+  const [orderNotice, setOrderNotice] = useState<string | null>(null);
+  const accountStateQueryKey = ["polymarket-account-state", market.condition_id ?? null];
+  const cancelOrderMutation = useMutation({
+    mutationFn: api.cancelPolymarketOrder,
+    onMutate: (orderId: string) => {
+      setCancelingOrderId(orderId);
+      setOrderNotice(null);
+    },
+    onSuccess: () => {
+      setOrderNotice("撤单已提交");
+      queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
+    },
+    onError: (mutationError) => {
+      setOrderNotice(errorMessage(mutationError));
+    },
+    onSettled: () => {
+      setCancelingOrderId(null);
+    },
+  });
   return (
     <div className="polymarket-account-panel">
       <div className="polymarket-account-head">
@@ -1056,7 +1042,16 @@ function AccountStatePanel({
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       {accountState.error && <Typography.Text type="secondary">{accountState.error}</Typography.Text>}
       <AccountPositionSection positions={positions} />
-      <AccountOrderSection orders={orders} />
+      {orderNotice && (
+        <Typography.Text className="polymarket-order-notice" type={orderNotice.includes("失败") ? "danger" : "secondary"}>
+          {orderNotice}
+        </Typography.Text>
+      )}
+      <AccountOrderSection
+        orders={orders}
+        cancelingOrderId={cancelingOrderId}
+        onCancelOrder={(orderId) => cancelOrderMutation.mutate(orderId)}
+      />
     </div>
   );
 }
@@ -1083,11 +1078,11 @@ function AccountPositionSection({ positions }: { positions: PolymarketAccountPos
               <span>{formatSize(position.size)}</span>
               <span>{formatCents(position.avg_price)}</span>
               <span className="polymarket-account-value-cell">
-                <strong>{formatCurrency(position.current_value)}</strong>
+                <strong>{formatCents(position.current_value)}</strong>
                 <small>
                   Cost {formatCurrency(positionCost(position))} ·{" "}
                   <span className={pnlClassName(position.cash_pnl)}>
-                  {formatSignedCurrency(position.cash_pnl)} {formatSignedPercent(position.percent_pnl)}
+                    {formatSignedCurrency(position.cash_pnl)} {formatSignedPercent(position.percent_pnl)}
                   </span>
                 </small>
                 {position.redeemable && <span className="polymarket-account-badge">可赎回</span>}
@@ -1100,7 +1095,15 @@ function AccountPositionSection({ positions }: { positions: PolymarketAccountPos
   );
 }
 
-function AccountOrderSection({ orders }: { orders: PolymarketAccountOrder[] }) {
+function AccountOrderSection({
+  orders,
+  cancelingOrderId,
+  onCancelOrder,
+}: {
+  orders: PolymarketAccountOrder[];
+  cancelingOrderId: string | null;
+  onCancelOrder: (orderId: string) => void;
+}) {
   return (
     <div className="polymarket-account-section">
       <div className="polymarket-account-section-title">当前挂单</div>
@@ -1114,14 +1117,27 @@ function AccountOrderSection({ orders }: { orders: PolymarketAccountOrder[] }) {
             <span>Price</span>
             <span>Remaining</span>
             <span>Status</span>
+            <span></span>
           </div>
           {orders.map((order) => (
             <div className="polymarket-account-row" key={order.id}>
-              <span className={orderSideClassName(order.side)}>{formatOrderSide(order.side)}</span>
-              <span>{order.outcome ?? order.asset_id ?? "-"}</span>
+              <span className="polymarket-account-side">{formatOrderSide(order.side)}</span>
+              <span className="polymarket-account-outcome-cell">
+                <span className={outcomePillClassName(order.outcome)}>{order.outcome ?? order.asset_id ?? "-"}</span>
+              </span>
               <span>{formatCents(order.price)}</span>
               <span>{formatSize(order.remaining_size)}</span>
               <span>{order.status ?? order.order_type ?? "-"}</span>
+              <span className="polymarket-account-action-cell">
+                <Button
+                  danger
+                  size="small"
+                  loading={cancelingOrderId === order.id}
+                  onClick={() => onCancelOrder(order.id)}
+                >
+                  撤
+                </Button>
+              </span>
             </div>
           ))}
         </div>
@@ -1224,17 +1240,9 @@ function parsePolymarketAccountMessage(value: string) {
   }
 }
 
-function mergeIndicators(existing: MarketIndicatorPoint[], incoming: MarketIndicatorPoint[]) {
-  const byKey = new Map<string, MarketIndicatorPoint>();
-  for (const point of existing) {
-    byKey.set(`${point.symbol}:${point.interval}:${point.candle_time}`, point);
-  }
-  for (const point of incoming) {
-    byKey.set(`${point.symbol}:${point.interval}:${point.candle_time}`, point);
-  }
-  return Array.from(byKey.values()).sort(
-    (left, right) => new Date(left.candle_time).getTime() - new Date(right.candle_time).getTime()
-  );
+function withIndicatorWarmupStart(startMs: number, interval: CandleInterval) {
+  // RSI/EMA/BOLL 都由前端计算，历史窗口向前多取一段 K 线作为指标 warmup。
+  return Math.max(0, startMs - INDICATOR_WARMUP_BARS * intervalMs(interval));
 }
 
 function marketComparisonLine({
@@ -1264,6 +1272,11 @@ function formatProbability(value: number | null) {
 function formatCents(value: number | null) {
   if (value == null) return "-";
   return `${Math.round(value * 100)}¢`;
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return "操作失败";
 }
 
 function formatSize(value: number | null) {
@@ -1334,13 +1347,6 @@ function accountStateStatusLabel(state: string) {
 function pnlClassName(value: number | null) {
   if (value == null || value === 0) return "polymarket-account-pnl neutral";
   return value > 0 ? "polymarket-account-pnl positive" : "polymarket-account-pnl negative";
-}
-
-function orderSideClassName(side: string | null) {
-  const normalized = (side ?? "").toLowerCase();
-  if (normalized === "buy") return "polymarket-account-side buy";
-  if (normalized === "sell") return "polymarket-account-side sell";
-  return "polymarket-account-side";
 }
 
 function outcomePillClassName(outcome: string | null) {

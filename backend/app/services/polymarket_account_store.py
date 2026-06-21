@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.schemas.polymarket import (
+    PolymarketAccountBalance,
     PolymarketAccountOrder,
     PolymarketAccountPosition,
     PolymarketAccountState,
@@ -21,6 +22,7 @@ class PolymarketAccountStore:
         self._positions: list[PolymarketAccountPosition] = []
         self._orders_by_id: dict[str, PolymarketAccountOrder] = {}
         self._recent_trades: list[PolymarketAccountTrade] = []
+        self._balance: PolymarketAccountBalance | None = None
         self._ws_state = "idle"
         self._error: str | None = None
         self._last_positions_refresh_at: datetime | None = None
@@ -37,6 +39,10 @@ class PolymarketAccountStore:
         async with self._lock:
             self._orders_by_id = {order.id: order for order in orders}
             self._last_orders_refresh_at = utc_now()
+
+    async def replace_balance(self, balance: PolymarketAccountBalance) -> None:
+        async with self._lock:
+            self._balance = balance
 
     async def apply_order(self, order: PolymarketAccountOrder) -> None:
         async with self._lock:
@@ -56,12 +62,17 @@ class PolymarketAccountStore:
             self._ws_state = state
             self._error = error
 
+    async def set_error(self, error: str | None) -> None:
+        async with self._lock:
+            self._error = error
+
     async def snapshot(self, condition_id: str | None = None) -> PolymarketAccountState:
         normalized_condition = normalize_key(condition_id)
         async with self._lock:
             positions = list(self._positions)
             orders = list(self._orders_by_id.values())
             recent_trades = list(self._recent_trades)
+            balance = self._balance
             ws_state = self._ws_state
             error = self._error
             last_positions_refresh_at = self._last_positions_refresh_at
@@ -81,6 +92,9 @@ class PolymarketAccountStore:
             ]
         return PolymarketAccountState(
             wallet=settings.polymarket_position_wallet.lower() or None,
+            clob_address=settings.polymarket_clob_address.lower() or None,
+            # 余额是账户级快照，condition_id 只过滤市场相关的 positions/orders/trades。
+            balance=balance,
             condition_id=condition_id,
             positions=positions,
             orders=orders,

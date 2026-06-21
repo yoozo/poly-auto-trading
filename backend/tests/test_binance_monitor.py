@@ -31,74 +31,61 @@ class FakeSessionLocal:
 
 
 @pytest.mark.asyncio
-async def test_backfill_interval_paginates_from_latest_database_candle(monkeypatch) -> None:
-    calls = []
-    upserted = []
-    latest = make_candle(0)
+async def test_backfill_once_syncs_live_windows_without_starting_full_task(monkeypatch) -> None:
+    calls = {"synced": [], "listed": []}
+    cached = [make_candle(index) for index in range(500)]
 
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                return [make_candle(index) for index in range(0, 1000)]
-            return [make_candle(index) for index in range(1000, 1002)]
-
-    async def fake_get_latest_candle(session, symbol, interval):
-        return latest
-
-    async def fake_upsert_candles(session, candles):
-        upserted.append(candles)
+    class FakeCandleSyncService:
+        async def ensure_latest_window(self, session, *, symbol, interval, limit):
+            calls["synced"].append({"symbol": symbol, "interval": interval, "limit": limit})
 
     async def fake_list_candles(session, symbol, interval, limit):
-        return [make_candle(index) for index in range(502, 1002)]
+        calls["listed"].append({"symbol": symbol, "interval": interval, "limit": limit})
+        return cached[-limit:]
 
+    monkeypatch.setattr(binance_monitor.settings, "binance_symbol", "BTCUSDT")
+    monkeypatch.setattr(binance_monitor.settings, "binance_intervals", ["1m", "5m"])
     monkeypatch.setattr(binance_monitor, "AsyncSessionLocal", FakeSessionLocal)
-    monkeypatch.setattr(binance_monitor, "get_latest_candle", fake_get_latest_candle)
-    monkeypatch.setattr(binance_monitor, "upsert_candles", fake_upsert_candles)
+    monkeypatch.setattr(binance_monitor, "candle_sync_service", FakeCandleSyncService())
     monkeypatch.setattr(binance_monitor, "list_candles", fake_list_candles)
-    monkeypatch.setattr(binance_monitor, "utc_now", lambda: datetime(2026, 1, 1, 16, 41, tzinfo=timezone.utc))
-
-    monitor = binance_monitor.BinanceMonitor()
-    monitor._client = FakeBinanceClient()
     binance_monitor.market_signal_pipeline._live_candles.clear()
 
-    await monitor.backfill_interval("BTCUSDT", "1m")
+    monitor = binance_monitor.BinanceMonitor()
+    await monitor.backfill_once()
 
-    assert [call["start_ms"] for call in calls] == [1767225600000, 1767285600000]
-    assert all(call["limit"] == 1000 for call in calls)
-    assert [len(batch) for batch in upserted] == [1000, 2]
+    assert calls["synced"] == [
+        {"symbol": "BTCUSDT", "interval": "1m", "limit": 500},
+        {"symbol": "BTCUSDT", "interval": "5m", "limit": 500},
+    ]
+    assert calls["listed"] == [
+        {"symbol": "BTCUSDT", "interval": "1m", "limit": 500},
+        {"symbol": "BTCUSDT", "interval": "5m", "limit": 500},
+    ]
     assert len(binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")]) == 500
+    assert len(binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "5m")]) == 500
 
 
 @pytest.mark.asyncio
-async def test_backfill_interval_initializes_recent_window_when_database_is_empty(monkeypatch) -> None:
-    calls = []
-    fetched = [make_candle(index) for index in range(500)]
+async def test_refresh_live_window_reads_database_only(monkeypatch) -> None:
+    calls = {"synced": [], "listed": []}
+    cached = [make_candle(index) for index in range(20)]
 
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls.append(kwargs)
-            return fetched
-
-    async def fake_get_latest_candle(session, symbol, interval):
-        return None
-
-    async def fake_upsert_candles(session, candles):
-        pass
+    class FakeCandleSyncService:
+        async def ensure_latest_window(self, session, *, symbol, interval, limit):
+            calls["synced"].append({"symbol": symbol, "interval": interval, "limit": limit})
 
     async def fake_list_candles(session, symbol, interval, limit):
-        return fetched[-limit:]
+        calls["listed"].append({"symbol": symbol, "interval": interval, "limit": limit})
+        return cached
 
     monkeypatch.setattr(binance_monitor, "AsyncSessionLocal", FakeSessionLocal)
-    monkeypatch.setattr(binance_monitor, "get_latest_candle", fake_get_latest_candle)
-    monkeypatch.setattr(binance_monitor, "upsert_candles", fake_upsert_candles)
+    monkeypatch.setattr(binance_monitor, "candle_sync_service", FakeCandleSyncService())
     monkeypatch.setattr(binance_monitor, "list_candles", fake_list_candles)
-
-    monitor = binance_monitor.BinanceMonitor()
-    monitor._client = FakeBinanceClient()
     binance_monitor.market_signal_pipeline._live_candles.clear()
 
-    await monitor.backfill_interval("BTCUSDT", "1m")
+    monitor = binance_monitor.BinanceMonitor()
+    await monitor.refresh_live_window("BTCUSDT", "1m")
 
-    assert calls == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
-    assert len(binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")]) == 500
+    assert calls["synced"] == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
+    assert calls["listed"] == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
+    assert binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")] == cached

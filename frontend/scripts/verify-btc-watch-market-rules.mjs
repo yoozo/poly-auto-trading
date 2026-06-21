@@ -90,7 +90,7 @@ const scenarioSource = `
     "target line must not use a neighboring 1m candle when the exact market-start open is missing"
   );
 
-  for (const interval of ["1m", "5m", "15m", "1h", "4h"]) {
+  for (const interval of ["1m", "5m", "15m", "1h", "4h", "12h", "1d", "1w"]) {
     assert.equal(
       baselineStartMsForMarket(window4h),
       targetStartMs,
@@ -103,6 +103,9 @@ const scenarioSource = `
   assert.equal(candleOpenAnchorMs(window4h.startMs, "15m"), Date.parse("2026-06-18T16:00:00.000Z"));
   assert.equal(candleOpenAnchorMs(window4h.startMs, "1h"), Date.parse("2026-06-18T16:00:00.000Z"));
   assert.equal(candleOpenAnchorMs(window4h.startMs, "4h"), Date.parse("2026-06-18T16:00:00.000Z"));
+  assert.equal(candleOpenAnchorMs(window4h.startMs, "12h"), Date.parse("2026-06-18T12:00:00.000Z"));
+  assert.equal(candleOpenAnchorMs(window4h.startMs, "1d"), Date.parse("2026-06-18T00:00:00.000Z"));
+  assert.equal(candleOpenAnchorMs(window4h.startMs, "1w"), Date.parse("2026-06-15T00:00:00.000Z"));
   const currentTimeIn4hMarket = Date.parse("2026-06-18T19:37:42.000Z");
   assert.equal(marketFocusAnchorMs(window4h, "1m", currentTimeIn4hMarket), Date.parse("2026-06-18T19:37:00.000Z"));
   assert.equal(marketFocusAnchorMs(window4h, "5m", currentTimeIn4hMarket), Date.parse("2026-06-18T19:35:00.000Z"));
@@ -224,7 +227,7 @@ const scenarioSource = `
     const targetBaseline = baselineStartMsForMarket(marketWindow);
     const comparisonTarget = marketComparisonTarget(market, marketWindow.startMs);
     assert.equal(comparisonTarget?.baselineStartMs, targetBaseline, "comparison target should use 1m baseline for " + market.interval);
-    for (const activeInterval of ["1m", "5m", "15m", "1h", "4h"]) {
+    for (const activeInterval of ["1m", "5m", "15m", "1h", "4h", "12h", "1d", "1w"]) {
       assert.equal(
         selectedPolymarketMarket({
           markets: [{ ...market, updated_at: "2026-06-18T16:11:00.000Z" }, current5mMarket],
@@ -271,7 +274,14 @@ const scenarioSource = `
       "15m": 15 * 60_000,
       "1h": 60 * 60_000,
       "4h": 4 * 60 * 60_000,
+      "12h": 12 * 60 * 60_000,
+      "1d": 24 * 60 * 60_000,
+      "1w": 7 * 24 * 60 * 60_000,
     }[interval];
+    if (interval === "1w") {
+      const binanceWeekAnchorMs = Date.UTC(1970, 0, 5);
+      return Math.floor((timeMs - binanceWeekAnchorMs) / stepMs) * stepMs + binanceWeekAnchorMs;
+    }
     return Math.floor(timeMs / stepMs) * stepMs;
   }
 `;

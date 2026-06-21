@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 from typing import Any
@@ -6,10 +7,18 @@ import httpx
 
 from app.core.config import settings
 from app.schemas.candle import Candle, Interval
+from app.services.candle_intervals import CANDLE_INTERVAL_MS, kline_open_ms, standard_close_time, validate_aligned_open_time
 from app.services.external_http import with_retry
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class KlinePage:
+    candles: list[Candle]
+    next_start_ms: int | None
+    raw_count: int
 
 
 class BinanceClient:
@@ -35,6 +44,23 @@ class BinanceClient:
         start_ms: int | None = None,
         end_ms: int | None = None,
     ) -> list[Candle]:
+        page = await self.fetch_klines_page(
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        return page.candles
+
+    async def fetch_klines_page(
+        self,
+        symbol: str,
+        interval: Interval,
+        limit: int = 300,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> KlinePage:
         params: dict[str, str | int] = {
             "symbol": symbol.upper(),
             "interval": interval,
@@ -57,7 +83,7 @@ class BinanceClient:
                     "running",
                     metadata={"endpoint": base_url, "symbol": symbol.upper(), "interval": interval},
                 )
-                return [self._parse_kline(symbol.upper(), interval, row) for row in rows]
+                return self._parse_klines_page(symbol.upper(), interval, rows)
             except Exception as exc:
                 last_error = RuntimeError(f"{base_url}: {type(exc).__name__}: {exc or 'connection failed'}")
                 logger.warning(
@@ -88,26 +114,44 @@ class BinanceClient:
     @staticmethod
     def _parse_kline(symbol: str, interval: Interval, row: list[Any]) -> Candle:
         try:
-            close_time = _from_ms(row[6])
-            return Candle(
+            open_ms = int(row[0])
+            open_time = _from_ms(open_ms)
+            validate_aligned_open_time(open_ms, interval)
+            candle = Candle(
                 symbol=symbol,
                 interval=interval,
-                open_time=_from_ms(row[0]),
-                close_time=close_time,
+                open_time=open_time,
+                close_time=standard_close_time(open_time, interval),
                 open=float(row[1]),
                 high=float(row[2]),
                 low=float(row[3]),
                 close=float(row[4]),
                 volume=float(row[5]),
-                is_closed=close_time <= datetime.now(timezone.utc),
+                is_closed=standard_close_time(open_time, interval) <= datetime.now(timezone.utc),
             )
+            return candle
         except Exception as exc:
             logger.warning(
                 "Rejecting invalid Binance kline",
                 extra={"symbol": symbol, "interval": interval, "row": row},
                 exc_info=exc,
             )
-            raise ValueError("Invalid Binance kline") from exc
+            raise ValueError(f"Invalid Binance kline: {row!r}") from exc
+
+    @classmethod
+    def _parse_klines(cls, symbol: str, interval: Interval, rows: list[Any]) -> list[Candle]:
+        return cls._parse_klines_page(symbol, interval, rows).candles
+
+    @classmethod
+    def _parse_klines_page(cls, symbol: str, interval: Interval, rows: list[Any]) -> KlinePage:
+        candles: list[Candle] = []
+        next_start_ms: int | None = None
+        for row in rows:
+            row_open_ms = kline_open_ms(row)
+            if row_open_ms is not None:
+                next_start_ms = row_open_ms + CANDLE_INTERVAL_MS[interval]
+            candles.append(cls._parse_kline(symbol, interval, row))
+        return KlinePage(candles=candles, next_start_ms=next_start_ms, raw_count=len(rows))
 
 
 def _from_ms(value: int) -> datetime:

@@ -11,20 +11,11 @@ export type Candle = {
   is_closed: boolean;
 };
 
-export type CandleInterval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
-
-export type IndicatorPoint = {
-  symbol: string;
-  interval: CandleInterval;
-  candle_time: string;
-  rsi: number | null;
-  rsi_ema: number | null;
-  rsi_ema_diff: number | null;
-  bollinger: {
-    upper: number | null;
-    middle: number | null;
-    lower: number | null;
-  };
+export type CandleInterval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "12h" | "1d" | "1w";
+export type CandleRange = {
+  count: number;
+  min_open_time: string | null;
+  max_open_time: string | null;
 };
 
 export type CandleBackfillStatus = {
@@ -42,6 +33,7 @@ export type CandleBackfillStatus = {
   finished_at: string | null;
   error: string | null;
   message: string;
+  candle_ranges: Record<string, CandleRange>;
 };
 
 export type CandleBackfillProgressStatus = {
@@ -53,6 +45,40 @@ export type CandleBackfillProgressStatus = {
   last_error: string;
   started_at: string | null;
   finished_at: string | null;
+  raw_count: number;
+  range: CandleRange | null;
+};
+
+export type SystemTaskType = "kline_backfill" | "indicator_backfill";
+
+export type SystemTaskStepStatus = {
+  id: number;
+  step_key: string;
+  interval: CandleInterval | string;
+  status: "pending" | "running" | "completed" | "error" | string;
+  start_ms: number;
+  cursor_ms: number;
+  end_ms: number | null;
+  inserted_count: number;
+  raw_count: number;
+  last_error: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type SystemTaskStatus = {
+  id: number | null;
+  task_type: SystemTaskType;
+  symbol: string;
+  status: "idle" | "running" | "completed" | "error" | string;
+  message: string;
+  error: string | null;
+  total_inserted: number;
+  started_at: string | null;
+  finished_at: string | null;
+  metadata: Record<string, unknown>;
+  steps: SystemTaskStepStatus[];
+  candle_ranges: Record<string, CandleRange>;
 };
 
 export type IndicatorBackfillStatus = {
@@ -386,8 +412,17 @@ export type PolymarketAccountTrade = {
   raw: Record<string, unknown>;
 };
 
+export type PolymarketAccountBalance = {
+  cash: number | null;
+  allowance: number | null;
+  updated_at: string | null;
+  raw: Record<string, unknown>;
+};
+
 export type PolymarketAccountState = {
   wallet: string | null;
+  clob_address: string | null;
+  balance: PolymarketAccountBalance | null;
   condition_id: string | null;
   positions: PolymarketAccountPosition[];
   orders: PolymarketAccountOrder[];
@@ -403,6 +438,12 @@ export type PolymarketAccountStateWsMessage = {
   type: "polymarket.account_state.snapshot";
   condition_id: string | null;
   state: PolymarketAccountState;
+};
+
+export type PolymarketCancelOrderResponse = {
+  canceled: string[];
+  not_canceled: Record<string, unknown>;
+  raw: Record<string, unknown>;
 };
 
 export type AuthSession = {
@@ -493,12 +534,13 @@ export const api = {
     request<Candle[]>(
       `/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
     ),
-  indicators: (interval: CandleInterval, limit = 300) =>
-    request<IndicatorPoint[]>(`/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
-  indicatorsRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000) =>
-    request<IndicatorPoint[]>(
-      `/api/indicators?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
-    ),
+  systemTasks: () => request<SystemTaskStatus[]>("/api/system-tasks?symbol=BTCUSDT"),
+  latestSystemTask: (taskType: SystemTaskType) =>
+    request<SystemTaskStatus>(`/api/system-tasks/latest?task_type=${taskType}&symbol=BTCUSDT`),
+  startSystemTask: (taskType: SystemTaskType) =>
+    request<SystemTaskStatus>(`/api/system-tasks/${taskType}/start?symbol=BTCUSDT`, {
+      method: "POST",
+    }),
   candleBackfillStatus: () => request<CandleBackfillStatus>("/api/candles/backfill"),
   startCandleBackfill: () =>
     request<CandleBackfillStatus>("/api/candles/backfill?symbol=BTCUSDT", {
@@ -554,6 +596,10 @@ export const api = {
     request<PolymarketAccountState>(
       conditionId ? `/api/polymarket/account-state/${encodeURIComponent(conditionId)}` : "/api/polymarket/account-state"
     ),
+  cancelPolymarketOrder: (orderId: string) =>
+    request<PolymarketCancelOrderResponse>(`/api/polymarket/orders/${encodeURIComponent(orderId)}/cancel`, {
+      method: "POST",
+    }),
   polymarketBtcUpDownWsUrl: (interval: PolymarketInterval) => {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/polymarket/btc-up-down", base);

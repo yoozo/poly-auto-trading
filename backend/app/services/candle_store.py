@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import logging
+from typing import TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Candle as CandleModel
+from app.db.models import CandleUnavailableRange
 from app.schemas.candle import Candle, Interval
 
 logger = logging.getLogger(__name__)
+
+CANDLE_UPSERT_BATCH_SIZE = 1000
+T = TypeVar("T")
 
 
 def _validate_candle(candle: Candle) -> Candle:
@@ -51,21 +56,13 @@ async def upsert_candles(session: AsyncSession, candles: list[Candle]) -> None:
         return
 
     validated_candles = [_validate_candle(candle) for candle in candles]
-    rows = [
-        {
-            "symbol": candle.symbol.upper(),
-            "interval": candle.interval,
-            "open_time": candle.open_time,
-            "close_time": candle.close_time,
-            "open": Decimal(str(candle.open)),
-            "high": Decimal(str(candle.high)),
-            "low": Decimal(str(candle.low)),
-            "close": Decimal(str(candle.close)),
-            "volume": Decimal(str(candle.volume)),
-            "is_closed": candle.is_closed,
-        }
-        for candle in validated_candles
-    ]
+    for batch in chunked(validated_candles, CANDLE_UPSERT_BATCH_SIZE):
+        await upsert_candle_batch(session, batch)
+    await session.commit()
+
+
+async def upsert_candle_batch(session: AsyncSession, candles: list[Candle]) -> None:
+    rows = [candle_to_row(candle) for candle in candles]
     statement = insert(CandleModel).values(rows)
     await session.execute(
         statement.on_conflict_do_update(
@@ -81,7 +78,25 @@ async def upsert_candles(session: AsyncSession, candles: list[Candle]) -> None:
             },
         )
     )
-    await session.commit()
+
+
+def candle_to_row(candle: Candle) -> dict[str, object]:
+    return {
+        "symbol": candle.symbol.upper(),
+        "interval": candle.interval,
+        "open_time": candle.open_time,
+        "close_time": candle.close_time,
+        "open": Decimal(str(candle.open)),
+        "high": Decimal(str(candle.high)),
+        "low": Decimal(str(candle.low)),
+        "close": Decimal(str(candle.close)),
+        "volume": Decimal(str(candle.volume)),
+        "is_closed": candle.is_closed,
+    }
+
+
+def chunked(items: list[T], size: int) -> list[list[T]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 async def list_candles(
@@ -158,3 +173,147 @@ async def get_latest_candle(
     if model is None:
         return None
     return _model_to_candle(model)
+
+
+async def get_earliest_candle_time(
+    session: AsyncSession,
+    symbol: str,
+    interval: Interval | None = None,
+) -> datetime | None:
+    filters = [CandleModel.symbol == symbol.upper()]
+    if interval is not None:
+        filters.append(CandleModel.interval == interval)
+    return await session.scalar(select(func.min(CandleModel.open_time)).where(*filters))
+
+
+async def list_candle_missing_ranges(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    interval: Interval,
+    start: datetime,
+    end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    if start > end:
+        return []
+    interval_delta = timedelta(milliseconds=interval_to_ms(interval))
+    previous_open_time = func.lag(CandleModel.open_time).over(order_by=CandleModel.open_time.asc()).label("prev_open_time")
+    ordered = (
+        select(
+            CandleModel.open_time.label("open_time"),
+            previous_open_time,
+        )
+        .where(
+            CandleModel.symbol == symbol.upper(),
+            CandleModel.interval == interval,
+            CandleModel.open_time >= start,
+            CandleModel.open_time <= end,
+        )
+        .order_by(CandleModel.open_time.asc())
+        .subquery()
+    )
+    rows = await session.execute(
+        select(ordered.c.prev_open_time, ordered.c.open_time)
+        .where(
+            ordered.c.prev_open_time.is_not(None),
+            func.extract("epoch", ordered.c.open_time - ordered.c.prev_open_time) > interval_delta.total_seconds(),
+        )
+        .order_by(ordered.c.prev_open_time.asc())
+    )
+    missing_ranges: list[tuple[datetime, datetime]] = []
+    for prev_open_time, next_open_time in rows.all():
+        missing_start = prev_open_time + interval_delta
+        missing_end = next_open_time - interval_delta
+        if missing_start <= missing_end:
+            missing_ranges.append((missing_start, missing_end))
+    return missing_ranges
+
+
+async def list_candle_ranges(session: AsyncSession, symbol: str) -> dict[str, dict[str, datetime | int | None]]:
+    rows = await session.execute(
+        select(
+            CandleModel.interval,
+            func.count(CandleModel.id),
+            func.min(CandleModel.open_time),
+            func.max(CandleModel.open_time),
+        )
+        .where(CandleModel.symbol == symbol.upper())
+        .group_by(CandleModel.interval)
+    )
+    return {
+        str(interval): {
+            "count": int(count),
+            "min_open_time": min_open,
+            "max_open_time": max_open,
+        }
+        for interval, count, min_open, max_open in rows.all()
+    }
+
+
+async def upsert_candle_unavailable_range(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    interval: Interval,
+    start_ms: int,
+    end_ms: int,
+    source: str = "binance_rest",
+    reason: str = "",
+) -> None:
+    if start_ms > end_ms:
+        return
+    statement = insert(CandleUnavailableRange).values(
+        {
+            "source": source,
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "reason": reason,
+        }
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            constraint="uq_candle_unavailable_range",
+            set_={
+                "reason": statement.excluded.reason,
+                "updated_at": func.now(),
+            },
+        )
+    )
+
+
+async def list_candle_unavailable_ranges(
+    session: AsyncSession,
+    *,
+    symbol: str,
+    interval: Interval,
+    start_ms: int,
+    end_ms: int,
+    source: str = "binance_rest",
+) -> list[tuple[int, int]]:
+    if start_ms > end_ms:
+        return []
+    rows = await session.execute(
+        select(CandleUnavailableRange.start_ms, CandleUnavailableRange.end_ms)
+        .where(
+            CandleUnavailableRange.source == source,
+            CandleUnavailableRange.symbol == symbol.upper(),
+            CandleUnavailableRange.interval == interval,
+            CandleUnavailableRange.start_ms <= end_ms,
+            CandleUnavailableRange.end_ms >= start_ms,
+        )
+        .order_by(CandleUnavailableRange.start_ms.asc())
+    )
+    return [(int(start), int(end)) for start, end in rows.all()]
+
+
+def interval_to_ms(interval: Interval) -> int:
+    multipliers = {
+        "m": 60_000,
+        "h": 60 * 60_000,
+        "d": 24 * 60 * 60_000,
+        "w": 7 * 24 * 60 * 60_000,
+    }
+    unit = interval[-1]
+    return int(interval[:-1]) * multipliers[unit]

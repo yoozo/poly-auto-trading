@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,3 +52,12 @@ def decimal_or_none(value: float | None) -> Decimal | None:
     if value is None:
         return None
     return Decimal(str(value))
+
+
+async def get_latest_indicator_time(session: AsyncSession, *, symbol: str, interval: str) -> datetime | None:
+    return await session.scalar(
+        select(func.max(IndicatorSnapshot.candle_time)).where(
+            IndicatorSnapshot.symbol == symbol.upper(),
+            IndicatorSnapshot.interval == interval,
+        )
+    )

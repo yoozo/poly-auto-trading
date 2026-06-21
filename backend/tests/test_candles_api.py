@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import routes_candles
@@ -9,6 +10,19 @@ from app.schemas.candle import Candle
 from app.services.candle_backfill import CandleBackfillStatus
 from app.services.indicator_backfill import IndicatorBackfillStatus
 from conftest import login_test_client
+
+
+class NoopCandleSyncService:
+    async def ensure_range(self, session, *, symbol, interval, start_ms, end_ms):
+        return None
+
+    async def ensure_latest_window(self, session, *, symbol, interval, limit):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def noop_candle_sync(monkeypatch):
+    monkeypatch.setattr(routes_candles, "candle_sync_service", NoopCandleSyncService())
 
 
 def make_candle(index: int) -> Candle:
@@ -39,17 +53,18 @@ def make_client() -> TestClient:
     return client
 
 
-def test_candles_range_mode(monkeypatch) -> None:
+def test_candles_range_mode_syncs_then_reads_database(monkeypatch) -> None:
     calls = {}
-    fetched = [make_candle(0), make_candle(1)]
+    cached = [make_candle(0), make_candle(1)]
 
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] = kwargs
-            return fetched
-
-    async def fake_upsert(session, candles):
-        calls["upserted"] = candles
+    class FakeCandleSyncService:
+        async def ensure_range(self, session, *, symbol, interval, start_ms, end_ms):
+            calls["sync"] = {
+                "symbol": symbol,
+                "interval": interval,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+            }
 
     async def fake_list_between(session, symbol, interval, start, end):
         calls["between"] = {
@@ -58,10 +73,9 @@ def test_candles_range_mode(monkeypatch) -> None:
             "start": start,
             "end": end,
         }
-        return fetched
+        return cached
 
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
-    monkeypatch.setattr(routes_candles, "upsert_candles", fake_upsert)
+    monkeypatch.setattr(routes_candles, "candle_sync_service", FakeCandleSyncService())
     monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
 
     client = make_client()
@@ -75,33 +89,23 @@ def test_candles_range_mode(monkeypatch) -> None:
         "2026-01-01T00:00:00Z",
         "2026-01-01T00:01:00Z",
     ]
-    assert calls["fetch"]["start_ms"] == 1767225600000
-    assert calls["fetch"]["end_ms"] == 1767229200000
-    assert calls["fetch"]["limit"] == 1000
-    assert calls["upserted"] == fetched
+    assert calls["sync"] == {
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "start_ms": 1767225600000,
+        "end_ms": 1767229200000,
+    }
     assert calls["between"]["symbol"] == "BTCUSDT"
 
 
-def test_candles_range_mode_paginates_until_range_is_downloaded(monkeypatch) -> None:
-    calls = {"between": 0, "upserted": []}
-    first_batch = [make_candle(index) for index in range(1000)]
-    second_batch = [make_candle(index) for index in range(1000, 1002)]
-    downloaded = [*first_batch, *second_batch]
-
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls.setdefault("fetches", []).append(kwargs)
-            return first_batch if len(calls["fetches"]) == 1 else second_batch
-
-    async def fake_upsert(session, candles):
-        calls["upserted"].append(candles)
+def test_candles_range_mode_returns_partial_database_window(monkeypatch) -> None:
+    calls = {"between": 0}
+    cached = [make_candle(index) for index in range(3)]
 
     async def fake_list_between(session, symbol, interval, start, end):
         calls["between"] += 1
-        return downloaded if calls["between"] > 1 else []
+        return cached
 
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
-    monkeypatch.setattr(routes_candles, "upsert_candles", fake_upsert)
     monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
 
     client = make_client()
@@ -110,10 +114,8 @@ def test_candles_range_mode_paginates_until_range_is_downloaded(monkeypatch) -> 
     )
 
     assert response.status_code == 200
-    assert len(response.json()) == 1002
-    assert [call["start_ms"] for call in calls["fetches"]] == [1767225600000, 1767285600000]
-    assert all(call["limit"] == 1000 for call in calls["fetches"])
-    assert [len(batch) for batch in calls["upserted"]] == [1000, 2]
+    assert len(response.json()) == 3
+    assert calls["between"] == 1
 
 
 def test_candle_backfill_endpoint_starts_runner(monkeypatch) -> None:
@@ -170,14 +172,9 @@ def test_indicator_backfill_endpoint_starts_runner(monkeypatch) -> None:
     assert calls["symbol"] == "BTCUSDT"
 
 
-def test_candles_range_mode_uses_database_cache_when_count_matches(monkeypatch) -> None:
-    calls = {"fetch": 0}
+def test_candles_range_mode_does_not_require_full_count(monkeypatch) -> None:
+    calls = {}
     cached = [make_candle(index) for index in range(10)]
-
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] += 1
-            return []
 
     async def fake_list_between(session, symbol, interval, start, end):
         calls["between"] = {
@@ -188,7 +185,6 @@ def test_candles_range_mode_uses_database_cache_when_count_matches(monkeypatch) 
         }
         return cached
 
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
     monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
 
     client = make_client()
@@ -198,7 +194,6 @@ def test_candles_range_mode_uses_database_cache_when_count_matches(monkeypatch) 
 
     assert response.status_code == 200
     assert len(response.json()) == 10
-    assert calls["fetch"] == 0
     assert calls["between"]["symbol"] == "BTCUSDT"
 
 
@@ -216,137 +211,65 @@ def test_candles_range_requires_ordered_bounds() -> None:
     assert response.status_code == 400
 
 
-def test_candles_limit_mode_uses_fresh_database_cache(monkeypatch) -> None:
-    calls = {"fetch": 0}
+def test_candles_limit_mode_syncs_latest_window_before_reading(monkeypatch) -> None:
+    calls = {}
     cached = [make_candle(index) for index in range(300)]
 
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] += 1
-            return []
+    class FakeCandleSyncService:
+        async def ensure_latest_window(self, session, *, symbol, interval, limit):
+            calls["sync"] = {"symbol": symbol, "interval": interval, "limit": limit}
 
     async def fake_list_candles(session, symbol, interval, limit):
         return cached[-limit:]
 
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
+    monkeypatch.setattr(routes_candles, "candle_sync_service", FakeCandleSyncService())
     monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
-    monkeypatch.setattr(routes_candles, "utc_now", lambda: datetime(2026, 1, 1, 4, 59, 30, tzinfo=timezone.utc))
 
     client = make_client()
     response = client.get("/api/candles?symbol=BTCUSDT&interval=1m&limit=300")
 
     assert response.status_code == 200
     assert len(response.json()) == 300
-    assert calls["fetch"] == 0
+    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 300}
 
 
-def test_candles_limit_mode_fetches_when_database_cache_is_short(monkeypatch) -> None:
-    calls = {"fetch": 0}
+def test_candles_limit_mode_returns_short_database_window(monkeypatch) -> None:
     cached = [make_candle(index) for index in range(10)]
-    fetched = [make_candle(index) for index in range(300)]
-
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] += 1
-            return fetched
 
     async def fake_list_candles(session, symbol, interval, limit):
-        if calls["fetch"]:
-            return fetched[-limit:]
         return cached
 
-    async def fake_upsert(session, candles):
-        calls["upserted"] = candles
-
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
     monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
-    monkeypatch.setattr(routes_candles, "upsert_candles", fake_upsert)
 
     client = make_client()
     response = client.get("/api/candles?symbol=BTCUSDT&interval=1m&limit=300")
 
     assert response.status_code == 200
-    assert len(response.json()) == 300
-    assert calls["fetch"] == 1
-    assert calls["upserted"] == fetched
+    assert len(response.json()) == 10
 
 
-def test_indicators_range_mode_uses_warmup_and_filters_response(monkeypatch) -> None:
-    calls = {}
-    fetched = [make_candle(index) for index in range(100)]
+def test_candles_limit_mode_returns_empty_after_sync_when_database_is_empty(monkeypatch) -> None:
+    calls = {"sync": 0}
 
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] = kwargs
-            return fetched
+    async def fake_list_candles(session, symbol, interval, limit):
+        return []
 
-    async def fake_upsert(session, candles):
-        calls["upserted"] = candles
+    class FakeCandleSyncService:
+        async def ensure_latest_window(self, session, *, symbol, interval, limit):
+            calls["sync"] += 1
 
-    async def fake_list_between(session, symbol, interval, start, end):
-        calls["between"] = {
-            "symbol": symbol,
-            "interval": interval,
-            "start": start,
-            "end": end,
-        }
-        return fetched
-
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
-    monkeypatch.setattr(routes_candles, "upsert_candles", fake_upsert)
-    monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
+    monkeypatch.setattr(routes_candles, "candle_sync_service", FakeCandleSyncService())
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
 
     client = make_client()
-    response = client.get(
-        "/api/indicators?symbol=BTCUSDT&interval=1m&limit=1000&start_ms=1767228000000&end_ms=1767230400000"
-    )
+    response = client.get("/api/candles?symbol=BTCUSDT&interval=1m&limit=300")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body[0]["candle_time"] == "2026-01-01T00:40:00Z"
-    assert body[-1]["candle_time"] == "2026-01-01T01:20:00Z"
-    assert calls["fetch"]["start_ms"] == 1767223200000
-    assert calls["fetch"]["end_ms"] == 1767230400000
-    assert calls["upserted"] == fetched
-    assert calls["between"]["symbol"] == "BTCUSDT"
+    assert response.json() == []
+    assert calls["sync"] == 1
 
 
-def test_indicators_range_mode_uses_database_cache_when_count_matches(monkeypatch) -> None:
-    calls = {"fetch": 0}
-    cached = [make_candle(index) for index in range(91)]
-
-    class FakeBinanceClient:
-        async def fetch_klines(self, **kwargs):
-            calls["fetch"] += 1
-            return []
-
-    async def fake_list_between(session, symbol, interval, start, end):
-        calls["between"] = {
-            "symbol": symbol,
-            "interval": interval,
-            "start": start,
-            "end": end,
-        }
-        return cached
-
-    monkeypatch.setattr(routes_candles, "BinanceClient", FakeBinanceClient)
-    monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
-
-    client = make_client()
-    response = client.get(
-        "/api/indicators?symbol=BTCUSDT&interval=1m&limit=1000&start_ms=1767230400000&end_ms=1767231000000"
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert len(body) == 11
-    assert body[0]["candle_time"] == "2026-01-01T01:20:00Z"
-    assert body[-1]["candle_time"] == "2026-01-01T01:30:00Z"
-    assert calls["fetch"] == 0
-    assert calls["between"]["symbol"] == "BTCUSDT"
-
-
-def test_indicators_range_requires_start_and_end() -> None:
+def test_indicators_query_endpoint_removed() -> None:
     client = make_client()
     response = client.get("/api/indicators?interval=1m&start_ms=1767225600000")
-    assert response.status_code == 400
+    assert response.status_code == 404

@@ -4,7 +4,6 @@ from statistics import fmean
 
 from app.schemas.candle import BollingerBands, Candle, IndicatorPoint, Interval
 
-
 RSI_PERIOD = 14
 RSI_EMA_PERIOD = 14
 BOLLINGER_PERIOD = 20
@@ -37,7 +36,6 @@ def calculate_indicator_points(candles: list[Candle], interval: Interval) -> lis
             )
         )
     return points
-
 
 def calculate_rsi_series(closes: list[float], period: int) -> list[float | None]:
     if len(closes) <= period:

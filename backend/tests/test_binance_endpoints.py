@@ -115,7 +115,7 @@ def test_binance_endpoint_config_keeps_legacy_single_endpoint_first() -> None:
 def test_signal_rsi_ema_diff_bonus_default_config_parses() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.signal_rsi_ema_diff_diff_bonus == [(12.0, 0.0), (15.0, 1.0), (18.0, 2.0), (20.0, 3.0), (22.0, 4.0), (25.0, 5.0)]
+    assert settings.signal_rsi_ema_diff_diff_bonus == [(12.0, 0.0), (15.0, 1.0), (19.0, 2.0)]
 
 
 def test_numeric_mapping_config_rejects_extra_colons() -> None:

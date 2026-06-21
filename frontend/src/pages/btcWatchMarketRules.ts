@@ -63,6 +63,10 @@ export function selectedPolymarketMarket({
 export function candleOpenAnchorMs(timeMs: number, interval: CandleInterval) {
   const stepMs = intervalMs(interval);
   if (!Number.isFinite(timeMs) || !Number.isFinite(stepMs) || stepMs <= 0) return timeMs;
+  if (interval === "1w") {
+    const binanceWeekAnchorMs = Date.UTC(1970, 0, 5);
+    return Math.floor((timeMs - binanceWeekAnchorMs) / stepMs) * stepMs + binanceWeekAnchorMs;
+  }
   return Math.floor(timeMs / stepMs) * stepMs;
 }
 

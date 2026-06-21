@@ -1,0 +1,75 @@
+app:
+  name: poly-auto-trading
+  env: development
+  log_level: INFO
+cors:
+  origins:
+  - http://localhost:5173
+  - http://127.0.0.1:5173
+auth:
+  cookie_name: poly_auto_session
+  session_ttl_seconds: 604800
+  cookie_secure: false
+binance:
+  symbol: BTCUSDT
+  archive_base_url: https://data.binance.vision
+  archive_enabled: true
+  rest_base_urls:
+  - https://api.binance.com
+  - https://api-gcp.binance.com
+  - https://api1.binance.com
+  - https://api2.binance.com
+  - https://api3.binance.com
+  - https://api4.binance.com
+  ws_base_urls:
+  - wss://stream.binance.com:9443
+  - wss://stream.binance.com:443
+  intervals:
+  - 1m
+  - 5m
+  - 15m
+  - 1h
+  - 4h
+  - 12h
+  - 1d
+  - 1w
+  candle_history_limit: 500
+  ws_enabled: true
+polymarket:
+  gamma_base_url: https://gamma-api.polymarket.com
+  data_base_url: https://data-api.polymarket.com
+  clob_base_url: https://clob.polymarket.com
+  ws_enabled: true
+  ws_market_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
+  user_ws_enabled: true
+  ws_user_url: wss://ws-subscriptions-clob.polymarket.com/ws/user
+  position_wallet: ""
+  account_refresh_seconds: 30
+  market_refresh_seconds: 60
+  market_boundary_refresh_window_seconds: 3
+  market_empty_retry_seconds: 5
+  market_signal_refresh_min_seconds: 30
+  ws_broadcast_interval_seconds: 0.2
+signals:
+  interval_base_scores:
+    1m: 1
+    5m: 2
+    15m: 3
+    1h: 4
+    4h: 5
+  rsi_ema_diff_diff_bonus:
+    12: 0
+    15: 1
+    19: 2
+  rsi_bonus:
+    70: 1
+    80: 2
+    90: 3
+telegram:
+  enabled_default: false
+  rsi_low: 30
+  rsi_high: 70
+  rsi_extreme_low: 20
+  rsi_extreme_high: 80
+  rsi_ema_diff_abs: 8
+  close_warning_seconds: 15

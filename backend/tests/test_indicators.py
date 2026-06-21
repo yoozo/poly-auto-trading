@@ -34,6 +34,79 @@ def test_calculate_indicator_points() -> None:
     assert points[-1].bollinger.upper is not None
 
 
+def test_calculate_indicator_points_keeps_raw_placeholder_candles() -> None:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles = [
+        Candle(
+            symbol="BTCUSDT",
+            interval="1m",
+            open_time=start + timedelta(minutes=index),
+            close_time=start + timedelta(minutes=index + 1),
+            open=100 + index,
+            high=101 + index,
+            low=99 + index,
+            close=100 + index,
+            volume=1,
+            is_closed=True,
+        )
+        for index in range(25)
+    ]
+    placeholder = Candle.model_construct(
+        symbol="BTCUSDT",
+        interval="1m",
+        open_time=start + timedelta(minutes=25),
+        close_time=start + timedelta(minutes=25),
+        open=125,
+        high=125,
+        low=125,
+        close=125,
+        volume=0,
+        is_closed=True,
+    )
+
+    points = calculate_indicator_points([*candles[:12], placeholder, *candles[12:]], "1m")
+
+    assert len(points) == len(candles) + 1
+    assert any(point.candle_time == placeholder.open_time for point in points)
+    assert points[-1].candle_time == candles[-1].open_time
+
+
+def test_calculate_indicator_points_trusts_validated_candles() -> None:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles = [
+        Candle(
+            symbol="BTCUSDT",
+            interval="1m",
+            open_time=start + timedelta(minutes=index),
+            close_time=start + timedelta(minutes=index + 1),
+            open=100 + index,
+            high=101 + index,
+            low=99 + index,
+            close=100 + index,
+            volume=1,
+            is_closed=True,
+        )
+        for index in range(25)
+    ]
+    invalid = Candle.model_construct(
+        symbol="BTCUSDT",
+        interval="1m",
+        open_time=start + timedelta(minutes=25),
+        close_time=start + timedelta(minutes=26),
+        open=125,
+        high=120,
+        low=124,
+        close=125,
+        volume=1,
+        is_closed=True,
+    )
+
+    points = calculate_indicator_points([*candles[:12], invalid, *candles[12:]], "1m")
+
+    assert len(points) == len(candles) + 1
+    assert any(point.candle_time == invalid.open_time for point in points)
+
+
 def test_bollinger_rolling_matches_previous_window_algorithm() -> None:
     closes = [100 + ((index % 7) * 1.3) - (index * 0.2) for index in range(80)]
 

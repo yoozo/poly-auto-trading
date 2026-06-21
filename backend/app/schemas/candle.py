@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
-Interval = Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
+Interval = Literal["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w"]
 
 
 class Candle(BaseModel):
@@ -31,14 +31,14 @@ class Candle(BaseModel):
 
     @model_validator(mode="after")
     def valid_candle_shape(self) -> "Candle":
-        if self.open_time >= self.close_time:
-            raise ValueError("open_time must be before close_time")
         if self.volume < 0:
             raise ValueError("volume must be greater than or equal to 0")
         if self.high < max(self.open, self.close, self.low):
             raise ValueError("high must be greater than or equal to open, close and low")
         if self.low > min(self.open, self.close, self.high):
             raise ValueError("low must be less than or equal to open, close and high")
+        if self.open_time >= self.close_time and self.volume != 0:
+            raise ValueError("open_time must be before close_time unless the candle is a zero-volume placeholder")
         return self
 
 

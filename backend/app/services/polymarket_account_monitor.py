@@ -91,8 +91,15 @@ class PolymarketAccountMonitor:
             positions = await self._client.fetch_positions(wallet=wallet, size_threshold=0)
             await polymarket_account_store.replace_positions(positions)
         if clob_credentials_configured():
-            orders = await self._client.fetch_open_orders()
+            try:
+                balance = await self._client.fetch_balance_allowance()
+                orders = await self._client.fetch_open_orders()
+            except Exception as exc:
+                await polymarket_account_store.set_error(f"Polymarket account fetch failed: {exc}")
+                return
+            await polymarket_account_store.replace_balance(balance)
             await polymarket_account_store.replace_orders(orders)
+            await polymarket_account_store.set_error(None)
 
     async def ws_loop(self) -> None:
         backoff = 1.0
@@ -255,6 +262,7 @@ def clob_credentials_configured() -> bool:
         settings.polymarket_clob_api_key
         and settings.polymarket_clob_secret
         and settings.polymarket_clob_passphrase
+        and settings.polymarket_clob_address
     )
 
 

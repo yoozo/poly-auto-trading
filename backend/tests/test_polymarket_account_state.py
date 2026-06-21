@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import create_app
-from app.schemas.polymarket import PolymarketAccountOrder, PolymarketAccountPosition
+from app.schemas.polymarket import PolymarketAccountBalance, PolymarketAccountOrder, PolymarketAccountPosition
 from app.services import polymarket_account_monitor
 from app.services.polymarket_account_monitor import (
     PolymarketAccountMonitor,
@@ -15,7 +15,12 @@ from app.services.polymarket_account_monitor import (
     user_subscription_payload,
 )
 from app.services.polymarket_account_store import PolymarketAccountStore
-from app.services.polymarket_client import normalize_account_order, normalize_account_position
+from app.services.polymarket_client import (
+    PolymarketClient,
+    normalize_account_balance,
+    normalize_account_order,
+    normalize_account_position,
+)
 from conftest import login_test_client
 
 
@@ -58,6 +63,16 @@ def test_normalizes_position_and_order_rows() -> None:
     assert order.status == "LIVE"
 
 
+def test_normalizes_balance_allowance_base_units() -> None:
+    balance = normalize_account_balance({"balance": "116050000", "allowance": "999000000"})
+    small_balance = normalize_account_balance({"balance": "500000", "allowance": "500000"})
+
+    assert balance.cash == 116.05
+    assert balance.allowance == 999
+    assert small_balance.cash == 0.5
+    assert small_balance.allowance == 0.5
+
+
 @pytest.mark.asyncio
 async def test_store_filters_snapshot_by_condition_id() -> None:
     store = PolymarketAccountStore()
@@ -73,11 +88,14 @@ async def test_store_filters_snapshot_by_condition_id() -> None:
             make_order("order-2", "0xdef", "down-token"),
         ]
     )
+    await store.replace_balance(PolymarketAccountBalance(cash=12.34, allowance=100.0))
 
     snapshot = await store.snapshot("0xabc")
 
     assert [position.asset for position in snapshot.positions] == ["up-token"]
     assert [order.id for order in snapshot.orders] == ["order-1"]
+    assert snapshot.balance
+    assert snapshot.balance.cash == 12.34
 
 
 @pytest.mark.asyncio
@@ -154,6 +172,7 @@ async def test_start_marks_user_ws_config_missing_without_clob_credentials(monke
     monkeypatch.setattr(settings, "polymarket_clob_api_key", "")
     monkeypatch.setattr(settings, "polymarket_clob_secret", "")
     monkeypatch.setattr(settings, "polymarket_clob_passphrase", "")
+    monkeypatch.setattr(settings, "polymarket_clob_address", "")
     monkeypatch.setattr(monitor, "snapshot_loop", fake_snapshot_loop)
     monkeypatch.setattr(monitor, "subscription_watch_loop", fake_subscription_watch_loop)
     monkeypatch.setattr(monitor, "set_ws_state", fake_set_ws_state)
@@ -169,6 +188,7 @@ def test_user_subscription_payload_uses_condition_ids_and_auth(monkeypatch: pyte
     monkeypatch.setattr(settings, "polymarket_clob_api_key", "key")
     monkeypatch.setattr(settings, "polymarket_clob_secret", "secret")
     monkeypatch.setattr(settings, "polymarket_clob_passphrase", "pass")
+    monkeypatch.setattr(settings, "polymarket_clob_address", "0x0000000000000000000000000000000000000001")
 
     payload = user_subscription_payload(["0xdef", "0xabc", "0xabc"], operation="subscribe")
 
@@ -177,6 +197,50 @@ def test_user_subscription_payload_uses_condition_ids_and_auth(monkeypatch: pyte
     assert payload["markets"] == ["0xabc", "0xdef"]
     assert payload["auth"] == {"apiKey": "key", "secret": "secret", "passphrase": "pass"}
     assert clob_credentials_configured() is True
+
+
+@pytest.mark.asyncio
+async def test_open_orders_uses_l2_credentials_without_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "polymarket_clob_api_key", "key")
+    monkeypatch.setattr(settings, "polymarket_clob_secret", "secret")
+    monkeypatch.setattr(settings, "polymarket_clob_passphrase", "pass")
+    monkeypatch.setattr(settings, "polymarket_clob_address", "0x0000000000000000000000000000000000000001")
+
+    async def fake_clob_l2_request(self, method: str, endpoint: str, **kwargs):
+        assert method == "GET"
+        assert endpoint == "/data/orders"
+        assert kwargs["params"]["next_cursor"] == "MA=="
+        return {
+            "data": [{"id": "order-1", "market": "0xabc", "asset_id": "up-token", "status": "LIVE"}],
+            "next_cursor": "LTE=",
+        }
+
+    monkeypatch.setattr(PolymarketClient, "_clob_l2_request", fake_clob_l2_request)
+
+    orders = await PolymarketClient().fetch_open_orders()
+
+    assert orders[0].id == "order-1"
+
+
+@pytest.mark.asyncio
+async def test_balance_allowance_uses_l2_credentials_without_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "polymarket_clob_api_key", "key")
+    monkeypatch.setattr(settings, "polymarket_clob_secret", "secret")
+    monkeypatch.setattr(settings, "polymarket_clob_passphrase", "pass")
+    monkeypatch.setattr(settings, "polymarket_clob_address", "0x0000000000000000000000000000000000000001")
+
+    async def fake_clob_l2_request(self, method: str, endpoint: str, **kwargs):
+        assert method == "GET"
+        assert endpoint == "/balance-allowance"
+        assert kwargs["params"] == {"asset_type": "COLLATERAL", "signature_type": 3}
+        return {"balance": "116050000", "allowance": "999000000"}
+
+    monkeypatch.setattr(PolymarketClient, "_clob_l2_request", fake_clob_l2_request)
+
+    balance = await PolymarketClient().fetch_balance_allowance()
+
+    assert balance.cash == 116.05
+    assert balance.allowance == 999
 
 
 def test_account_state_endpoint_returns_filtered_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,6 +266,31 @@ def test_account_state_endpoint_returns_filtered_snapshot(monkeypatch: pytest.Mo
     assert body["condition_id"] == "0xabc"
     assert body["positions"][0]["asset"] == "up-token"
     assert body["orders"][0]["id"] == "order-1"
+
+
+def test_cancel_order_endpoint_cancels_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_cancel_order(self, order_id: str):  # noqa: ANN001
+        calls.append(order_id)
+        return {"canceled": [order_id], "not_canceled": {}}
+
+    async def fake_refresh() -> None:
+        return None
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "cancel_order", fake_cancel_order)
+    monkeypatch.setattr(routes_polymarket, "refresh_account_state_after_order", fake_refresh)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+    response = client.post("/api/polymarket/orders/order-123/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["canceled"] == ["order-123"]
+    assert calls == ["order-123"]
 
 
 def make_position(condition_id: str, asset: str) -> PolymarketAccountPosition:

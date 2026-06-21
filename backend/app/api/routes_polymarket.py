@@ -4,7 +4,12 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from fastapi.encoders import jsonable_encoder
 
 from app.core.auth import require_websocket_auth
-from app.schemas.polymarket import PolymarketAccountState, PolymarketUpDownMarket
+from app.schemas.polymarket import (
+    PolymarketAccountState,
+    PolymarketCancelOrderResponse,
+    PolymarketUpDownMarket,
+)
+from app.services.polymarket_account_monitor import polymarket_account_monitor
 from app.services.polymarket_client import PolymarketClient, PolymarketInputError
 from app.services.polymarket_account_store import polymarket_account_store
 from app.services.polymarket_account_ws_hub import polymarket_account_ws_hub
@@ -58,6 +63,25 @@ async def account_state_for_market(condition_id: str) -> PolymarketAccountState:
     return await polymarket_account_store.snapshot(condition_id)
 
 
+@router.post("/polymarket/orders/{order_id}/cancel", response_model=PolymarketCancelOrderResponse)
+async def cancel_polymarket_order(order_id: str) -> PolymarketCancelOrderResponse:
+    try:
+        raw = await PolymarketClient().cancel_order(order_id)
+        await refresh_account_state_after_order()
+        canceled = raw.get("canceled") if isinstance(raw.get("canceled"), list) else []
+        not_canceled = raw.get("not_canceled") if isinstance(raw.get("not_canceled"), dict) else {}
+        return PolymarketCancelOrderResponse(
+            canceled=[str(item) for item in canceled],
+            not_canceled=not_canceled,
+            raw=raw,
+        )
+    except PolymarketInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Failed to cancel Polymarket order", extra={"order_id": order_id}, exc_info=exc)
+        raise HTTPException(status_code=502, detail=f"Polymarket 撤单失败: {exc}") from exc
+
+
 @router.websocket("/ws/polymarket/btc-up-down")
 async def btc_up_down_websocket(
     websocket: WebSocket,
@@ -102,3 +126,11 @@ async def account_state_websocket(
             await websocket.receive_text()
     except WebSocketDisconnect:
         await polymarket_account_ws_hub.disconnect(websocket, condition_id)
+
+
+async def refresh_account_state_after_order() -> None:
+    try:
+        await polymarket_account_monitor.refresh_account_snapshot()
+        await polymarket_account_monitor.broadcast_all_snapshots()
+    except Exception as exc:
+        logger.warning("Polymarket account-state refresh after order operation failed", exc_info=exc)

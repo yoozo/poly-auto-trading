@@ -3,23 +3,24 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.models import IndicatorBackfillProgress, IndicatorBackfillTask
+from app.db.models import SystemTask, SystemTaskStep
 from app.db.session import AsyncSessionLocal
-from app.schemas.candle import Interval
-from app.services.candle_backfill import INTERVAL_MS, SUPPORTED_INTERVALS, configured_intervals
+from app.schemas.candle import Candle, IndicatorPoint, Interval
+from app.services.candle_backfill import SUPPORTED_INTERVALS, configured_intervals
+from app.services.candle_intervals import CANDLE_INTERVAL_MS
 from app.services.candle_store import list_candles_from
-from app.services.indicator_store import upsert_indicator_snapshots
+from app.services.indicator_store import get_latest_indicator_time, upsert_indicator_snapshots
 from app.services.indicators import calculate_indicator_points
 from app.services.service_events import record_service_event
 from app.services.service_health import service_health_store
+from app.services.system_task_store import system_task_store
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class IndicatorBackfillStatus(BaseModel):
 
 
 class IndicatorBackfillRunner:
-    """指标补算任务：从已落库 candles 分批计算 RSI/Bollinger，再保存到 indicator_snapshots。"""
+    """指标补算任务：从标准化 candles 分段计算，缺口两侧不共享指标状态。"""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -74,12 +75,7 @@ class IndicatorBackfillRunner:
             if not is_missing_indicator_table(exc):
                 raise
             status = migration_required_status(exc)
-        service_health_store.set(
-            "indicator_backfill",
-            service_state(status),
-            last_error=status.error,
-            metadata=status_metadata(status),
-        )
+        service_health_store.set("indicator_backfill", service_state(status), last_error=status.error, metadata=status_metadata(status))
         return status
 
     async def start_all(self, *, symbol: str | None = None) -> IndicatorBackfillStatus:
@@ -191,7 +187,7 @@ class IndicatorBackfillRunner:
                 if task is None or progress is None:
                     return
                 interval = cast(Interval, progress.interval)
-                warmup_start_ms = max(0, progress.next_start_ms - (INTERVAL_MS[interval] * INDICATOR_WARMUP_BARS))
+                warmup_start_ms = max(0, progress.next_start_ms - (CANDLE_INTERVAL_MS[interval] * INDICATOR_WARMUP_BARS))
                 warmup_start = datetime.fromtimestamp(warmup_start_ms / 1000, tz=timezone.utc)
                 candles = await list_candles_from(
                     session,
@@ -206,7 +202,7 @@ class IndicatorBackfillRunner:
                 return
 
             target_start = datetime.fromtimestamp(progress.next_start_ms / 1000, tz=timezone.utc)
-            points = calculate_indicator_points(candles, cast(Interval, progress.interval))
+            points = calculate_indicator_segments(candles, cast(Interval, progress.interval))
             target_points = [point for point in points if point.candle_time >= target_start]
             if not target_points:
                 await self._complete_progress(task_id, progress_id)
@@ -219,7 +215,7 @@ class IndicatorBackfillRunner:
                     return
                 await upsert_indicator_snapshots(session, target_points)
                 progress.inserted_count += len(target_points)
-                progress.next_start_ms = int(target_points[-1].candle_time.timestamp() * 1000) + INTERVAL_MS[cast(Interval, progress.interval)]
+                progress.next_start_ms = int(target_points[-1].candle_time.timestamp() * 1000) + CANDLE_INTERVAL_MS[cast(Interval, progress.interval)]
                 task.total_inserted = await sum_inserted_count(session, task.id)
                 await session.commit()
                 await self._refresh_health(session, task)
@@ -239,35 +235,34 @@ class IndicatorBackfillRunner:
             await session.commit()
             await self._refresh_health(session, task)
 
-    async def _refresh_health(self, session: AsyncSession, task: IndicatorBackfillTask) -> None:
+    async def _refresh_health(self, session: AsyncSession, task: SystemTask) -> None:
         progress = await list_task_progress(session, task.id)
         status = serialize_status(task, progress)
         service_health_store.set("indicator_backfill", service_state(status), last_error=status.error, metadata=status_metadata(status))
 
 
-async def create_task(session: AsyncSession, *, symbol: str, intervals: list[Interval]) -> IndicatorBackfillTask:
+async def create_task(session: AsyncSession, *, symbol: str, intervals: list[Interval]) -> SystemTask:
     now = datetime.now(timezone.utc)
-    task = IndicatorBackfillTask(
+    task = system_task_store.create_task(
+        task_type="indicator_backfill",
         symbol=symbol,
         status="running",
         message="Indicator backfill started",
-        error="",
-        total_inserted=0,
         started_at=now,
-        finished_at=None,
-        task_metadata={"batch_candles": INDICATOR_BATCH_CANDLES, "warmup_bars": INDICATOR_WARMUP_BARS},
+        metadata={"batch_candles": INDICATOR_BATCH_CANDLES, "warmup_bars": INDICATOR_WARMUP_BARS},
     )
     session.add(task)
     await session.flush()
     for interval in intervals:
+        next_start_ms = await incremental_start_ms(session, symbol=symbol, interval=interval)
         session.add(
-            IndicatorBackfillProgress(
+            system_task_store.create_step(
                 task_id=task.id,
+                step_key=interval,
                 interval=interval,
-                status="pending",
-                next_start_ms=0,
-                inserted_count=0,
-                last_error="",
+                start_ms=next_start_ms,
+                cursor_ms=next_start_ms,
+                end_ms=None,
             )
         )
     await session.commit()
@@ -275,7 +270,7 @@ async def create_task(session: AsyncSession, *, symbol: str, intervals: list[Int
     return task
 
 
-async def resume_task(session: AsyncSession, task: IndicatorBackfillTask, *, intervals: list[Interval]) -> None:
+async def resume_task(session: AsyncSession, task: SystemTask, *, intervals: list[Interval]) -> None:
     task.status = "running"
     task.error = ""
     task.message = "Indicator backfill resumed"
@@ -283,61 +278,68 @@ async def resume_task(session: AsyncSession, task: IndicatorBackfillTask, *, int
     progress = await list_task_progress(session, task.id)
     existing = {item.interval for item in progress}
     for item in progress:
+        if item.inserted_count <= 0 and item.next_start_ms <= 0:
+            item.next_start_ms = await incremental_start_ms(
+                session,
+                symbol=task.symbol,
+                interval=cast(Interval, item.interval),
+            )
         if item.status == "error":
             item.status = "pending"
             item.last_error = ""
             item.finished_at = None
     for interval in intervals:
         if interval not in existing:
+            next_start_ms = await incremental_start_ms(session, symbol=task.symbol, interval=interval)
             session.add(
-                IndicatorBackfillProgress(
+                system_task_store.create_step(
                     task_id=task.id,
+                    step_key=interval,
                     interval=interval,
-                    status="pending",
-                    next_start_ms=0,
-                    inserted_count=0,
-                    last_error="",
+                    start_ms=next_start_ms,
+                    cursor_ms=next_start_ms,
+                    end_ms=None,
                 )
             )
     await session.commit()
 
 
-async def latest_task(session: AsyncSession) -> IndicatorBackfillTask | None:
-    return await session.scalar(select(IndicatorBackfillTask).order_by(IndicatorBackfillTask.id.desc()).limit(1))
+async def incremental_start_ms(session: AsyncSession, *, symbol: str, interval: Interval) -> int:
+    latest = await get_latest_indicator_time(session, symbol=symbol, interval=interval)
+    if latest is None:
+        return 0
+    return int(latest.timestamp() * 1000) + CANDLE_INTERVAL_MS[interval]
 
 
-async def latest_resumable_task(session: AsyncSession, symbol: str) -> IndicatorBackfillTask | None:
-    return await session.scalar(
-        select(IndicatorBackfillTask)
-        .where(IndicatorBackfillTask.symbol == symbol, IndicatorBackfillTask.status.in_(["running", "error"]))
-        .order_by(IndicatorBackfillTask.id.desc())
-        .limit(1)
+async def latest_task(session: AsyncSession) -> SystemTask | None:
+    return await system_task_store.latest_task(session, task_type="indicator_backfill")
+
+
+async def latest_resumable_task(session: AsyncSession, symbol: str) -> SystemTask | None:
+    return await system_task_store.latest_resumable_task(
+        session,
+        task_type="indicator_backfill",
+        symbol=symbol,
     )
 
 
-async def get_task(session: AsyncSession, task_id: int) -> IndicatorBackfillTask | None:
-    return await session.get(IndicatorBackfillTask, task_id)
+async def get_task(session: AsyncSession, task_id: int) -> SystemTask | None:
+    return await system_task_store.get_task(session, task_id=task_id, task_type="indicator_backfill")
 
 
-async def get_progress(session: AsyncSession, progress_id: int) -> IndicatorBackfillProgress | None:
-    return await session.get(IndicatorBackfillProgress, progress_id)
+async def get_progress(session: AsyncSession, progress_id: int) -> SystemTaskStep | None:
+    return await system_task_store.get_step(session, progress_id)
 
 
-async def list_task_progress(session: AsyncSession, task_id: int) -> list[IndicatorBackfillProgress]:
-    rows = await session.scalars(
-        select(IndicatorBackfillProgress)
-        .where(IndicatorBackfillProgress.task_id == task_id)
-        .order_by(IndicatorBackfillProgress.id.asc())
-    )
-    return list(rows.all())
+async def list_task_progress(session: AsyncSession, task_id: int) -> list[SystemTaskStep]:
+    return await system_task_store.list_steps(session, task_id)
 
 
 async def sum_inserted_count(session: AsyncSession, task_id: int) -> int:
-    progress = await list_task_progress(session, task_id)
-    return sum(item.inserted_count for item in progress)
+    return await system_task_store.sum_inserted_count(session, task_id)
 
 
-def serialize_status(task: IndicatorBackfillTask, progress: list[IndicatorBackfillProgress]) -> IndicatorBackfillStatus:
+def serialize_status(task: SystemTask, progress: list[SystemTaskStep]) -> IndicatorBackfillStatus:
     progress_status = [
         IndicatorBackfillProgressStatus(
             interval=cast(Interval, item.interval),
@@ -370,6 +372,29 @@ def serialize_status(task: IndicatorBackfillTask, progress: list[IndicatorBackfi
     )
 
 
+def calculate_indicator_segments(candles: list[Candle], interval: Interval) -> list[IndicatorPoint]:
+    if not candles:
+        return []
+    interval_ms = CANDLE_INTERVAL_MS[interval]
+    segments: list[list[Candle]] = []
+    current = [candles[0]]
+    for candle in candles[1:]:
+        previous = current[-1]
+        delta_ms = int((candle.open_time - previous.open_time).total_seconds() * 1000)
+        if delta_ms == interval_ms:
+            current.append(candle)
+            continue
+        segments.append(current)
+        current = [candle]
+    segments.append(current)
+
+    points: list[IndicatorPoint] = []
+    for segment in segments:
+        # 缺口两侧不能共享 RSI/EMA/BOLL 状态；每段独立计算，避免历史断点污染后续指标。
+        points.extend(calculate_indicator_points(segment, interval))
+    return points
+
+
 def service_state(status: IndicatorBackfillStatus) -> str:
     if status.state == "running":
         return "running"
@@ -378,13 +403,13 @@ def service_state(status: IndicatorBackfillStatus) -> str:
     return "idle"
 
 
-def status_metadata(status: IndicatorBackfillStatus) -> dict[str, Any]:
+def status_metadata(status: IndicatorBackfillStatus) -> dict[str, object]:
     return status.model_dump(mode="json")
 
 
 def is_missing_indicator_table(exc: ProgrammingError) -> bool:
     message = str(exc)
-    return "indicator_backfill_tasks" in message and "UndefinedTableError" in message
+    return "system_tasks" in message and "UndefinedTableError" in message
 
 
 def migration_required_status(exc: ProgrammingError) -> IndicatorBackfillStatus:

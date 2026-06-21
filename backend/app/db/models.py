@@ -198,13 +198,38 @@ class Candle(Base, TimestampMixin):
     is_closed: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class KlineBackfillTask(Base, TimestampMixin):
-    __tablename__ = "kline_backfill_tasks"
+class CandleUnavailableRange(Base, TimestampMixin):
+    __tablename__ = "candle_unavailable_ranges"
     __table_args__ = (
-        Index("ix_kline_backfill_tasks_status_created", "status", "created_at"),
+        UniqueConstraint(
+            "source",
+            "symbol",
+            "interval",
+            "start_ms",
+            "end_ms",
+            name="uq_candle_unavailable_range",
+        ),
+        Index("ix_candle_unavailable_symbol_interval", "symbol", "interval", "start_ms", "end_ms"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), default="binance_rest")
+    symbol: Mapped[str] = mapped_column(String(24))
+    interval: Mapped[str] = mapped_column(String(8))
+    start_ms: Mapped[int] = mapped_column(BigInteger)
+    end_ms: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text, default="")
+
+
+class SystemTask(Base, TimestampMixin):
+    __tablename__ = "system_tasks"
+    __table_args__ = (
+        Index("ix_system_tasks_type_status_created", "task_type", "status", "created_at"),
+        Index("ix_system_tasks_type_symbol", "task_type", "symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    task_type: Mapped[str] = mapped_column(String(64), index=True)
     symbol: Mapped[str] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(24), index=True)
     message: Mapped[str] = mapped_column(Text, default="")
@@ -215,25 +240,36 @@ class KlineBackfillTask(Base, TimestampMixin):
     task_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
 
 
-class KlineBackfillProgress(Base, TimestampMixin):
-    __tablename__ = "kline_backfill_progress"
+class SystemTaskStep(Base, TimestampMixin):
+    __tablename__ = "system_task_steps"
     __table_args__ = (
-        UniqueConstraint("task_id", "interval", name="uq_kline_backfill_progress_task_interval"),
-        Index("ix_kline_backfill_progress_task_status", "task_id", "status"),
+        UniqueConstraint("task_id", "step_key", name="uq_system_task_steps_task_key"),
+        Index("ix_system_task_steps_task_status", "task_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     task_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("kline_backfill_tasks.id", ondelete="CASCADE")
+        BigInteger, ForeignKey("system_tasks.id", ondelete="CASCADE")
     )
+    step_key: Mapped[str] = mapped_column(String(32))
     interval: Mapped[str] = mapped_column(String(8))
     status: Mapped[str] = mapped_column(String(24), index=True)
-    next_start_ms: Mapped[int] = mapped_column(BigInteger, default=0)
-    end_ms: Mapped[int] = mapped_column(BigInteger)
+    start_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    cursor_ms: Mapped[int] = mapped_column(BigInteger, default=0)
+    end_ms: Mapped[int | None] = mapped_column(BigInteger)
     inserted_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    raw_count: Mapped[int] = mapped_column(BigInteger, default=0)
     last_error: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @property
+    def next_start_ms(self) -> int:
+        return self.cursor_ms
+
+    @next_start_ms.setter
+    def next_start_ms(self, value: int) -> None:
+        self.cursor_ms = value
 
 
 class IndicatorSnapshot(Base):
@@ -257,43 +293,6 @@ class IndicatorSnapshot(Base):
     boll_lower: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class IndicatorBackfillTask(Base, TimestampMixin):
-    __tablename__ = "indicator_backfill_tasks"
-    __table_args__ = (
-        Index("ix_indicator_backfill_tasks_status_created", "status", "created_at"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(24))
-    status: Mapped[str] = mapped_column(String(24), index=True)
-    message: Mapped[str] = mapped_column(Text, default="")
-    error: Mapped[str] = mapped_column(Text, default="")
-    total_inserted: Mapped[int] = mapped_column(BigInteger, default=0)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    task_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
-
-
-class IndicatorBackfillProgress(Base, TimestampMixin):
-    __tablename__ = "indicator_backfill_progress"
-    __table_args__ = (
-        UniqueConstraint("task_id", "interval", name="uq_indicator_backfill_progress_task_interval"),
-        Index("ix_indicator_backfill_progress_task_status", "task_id", "status"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("indicator_backfill_tasks.id", ondelete="CASCADE")
-    )
-    interval: Mapped[str] = mapped_column(String(8))
-    status: Mapped[str] = mapped_column(String(24), index=True)
-    next_start_ms: Mapped[int] = mapped_column(BigInteger, default=0)
-    inserted_count: Mapped[int] = mapped_column(BigInteger, default=0)
-    last_error: Mapped[str] = mapped_column(Text, default="")
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ServiceEvent(Base):

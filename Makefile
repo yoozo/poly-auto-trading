@@ -50,6 +50,7 @@ dev: ## Start API and web dev servers.
 	@( \
 		trap 'pids=$$(jobs -p); [ -z "$$pids" ] || kill $$pids' INT TERM EXIT; \
 		$(MAKE) dev-api & \
+		sleep 2; \
 		$(MAKE) dev-web & \
 		wait \
 	)
@@ -58,13 +59,7 @@ db-up: ## Start PostgreSQL with docker compose.
 	docker compose up -d postgres
 
 db-create: ## Create local PostgreSQL database if missing.
-	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -c "import asyncio, asyncpg; \
-	async def main(): \
-	    conn = await asyncpg.connect(user='$(DB_USER)', password='$(DB_PASSWORD)', database='postgres', host='$(DB_HOST)', port=$(DB_PORT)); \
-	    exists = await conn.fetchval(\"select 1 from pg_database where datname='$(DB_NAME)'\"); \
-	    await conn.execute('create database $(DB_NAME)') if not exists else None; \
-	    await conn.close(); \
-	asyncio.run(main())"
+	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -c 'import asyncio, asyncpg; exec("""async def main():\n    conn = await asyncpg.connect(user="$(DB_USER)", password="$(DB_PASSWORD)", database="postgres", host="$(DB_HOST)", port=$(DB_PORT))\n    exists = await conn.fetchval("select 1 from pg_database where datname='\''$(DB_NAME)'\''")\n    if not exists:\n        await conn.execute("create database $(DB_NAME)")\n    await conn.close()\n"""); asyncio.run(main())'
 
 lsof: ## Show processes listening on API, web, and database ports.
 	@for port in $(API_PORT) $(WEB_PORT) $(DB_PORT); do \

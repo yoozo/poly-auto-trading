@@ -1,6 +1,5 @@
 from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PolymarketOrderLevel(BaseModel):
@@ -96,8 +95,17 @@ class PolymarketAccountTrade(BaseModel):
     raw: dict
 
 
+class PolymarketAccountBalance(BaseModel):
+    cash: float | None = None
+    allowance: float | None = None
+    updated_at: datetime | None = None
+    raw: dict = Field(default_factory=dict)
+
+
 class PolymarketAccountState(BaseModel):
     wallet: str | None
+    clob_address: str | None = None
+    balance: PolymarketAccountBalance | None = None
     condition_id: str | None = None
     positions: list[PolymarketAccountPosition]
     orders: list[PolymarketAccountOrder]
@@ -113,3 +121,9 @@ class PolymarketAccountStateWsMessage(BaseModel):
     type: str = "polymarket.account_state.snapshot"
     condition_id: str | None
     state: PolymarketAccountState
+
+
+class PolymarketCancelOrderResponse(BaseModel):
+    canceled: list[str]
+    not_canceled: dict
+    raw: dict

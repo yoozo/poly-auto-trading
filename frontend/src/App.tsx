@@ -2,6 +2,7 @@ import {
   AlertOutlined,
   BarChartOutlined,
   BellOutlined,
+  CloudDownloadOutlined,
   LoginOutlined,
   LineChartOutlined,
   LogoutOutlined,
@@ -11,23 +12,38 @@ import {
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
 import { Alert, Button, ConfigProvider, Form, Input, Spin, Typography, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, setUnauthorizedHandler } from "./api/client";
+import { api, setUnauthorizedHandler, type PolymarketAccountState, type PolymarketAccountStateWsMessage } from "./api/client";
 
 const BTCWatchPage = lazy(() => import("./pages/BTCWatchPage"));
 const MarketDetailPage = lazy(() => import("./pages/MarketDetailPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const SignalsPage = lazy(() => import("./pages/SignalsPage"));
 const SystemStatusPage = lazy(() => import("./pages/SystemStatusPage"));
+const SystemTasksPage = lazy(() => import("./pages/SystemTasksPage"));
 const TelegramNotificationsPage = lazy(() => import("./pages/TelegramNotificationsPage"));
 
-type RouteKey = "/btc-watch" | "/signals" | "/reports" | "/reports/market-detail" | "/telegram" | "/settings";
+type RouteKey = "/btc-watch" | "/signals" | "/reports" | "/reports/market-detail" | "/telegram" | "/system-tasks" | "/settings";
 type ThemeMode = "light" | "dark";
 type AuthStatus = "checking" | "authenticated" | "anonymous";
 
 const THEME_MODE_KEY = "poly-auto.themeMode";
 const SIDER_COLLAPSED_KEY = "poly-auto.siderCollapsed";
+const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
+  wallet: null,
+  clob_address: null,
+  balance: null,
+  condition_id: null,
+  positions: [],
+  orders: [],
+  recent_trades: [],
+  ws_state: "idle",
+  last_positions_refresh_at: null,
+  last_orders_refresh_at: null,
+  last_trade_at: null,
+  error: null,
+};
 
 const route = {
   path: "/",
@@ -35,6 +51,7 @@ const route = {
     { path: "/btc-watch", name: "BTC 看盘", icon: <LineChartOutlined /> },
     { path: "/signals", name: "信号", icon: <AlertOutlined /> },
     { path: "/telegram", name: "Telegram 提醒", icon: <BellOutlined /> },
+    { path: "/system-tasks", name: "系统任务", icon: <CloudDownloadOutlined /> },
     { path: "/reports", name: "收益报表", icon: <BarChartOutlined /> },
     { path: "/settings", name: "系统配置", icon: <SettingOutlined /> }
   ]
@@ -66,6 +83,7 @@ function renderPage(
     );
   }
   if (pathname === "/telegram") return <TelegramNotificationsPage />;
+  if (pathname === "/system-tasks") return <SystemTasksPage />;
   if (pathname === "/settings") return <SystemStatusPage />;
   return <BTCWatchPage />;
 }
@@ -77,6 +95,14 @@ export default function App() {
   const [siderCollapsed, setSiderCollapsed] = useState(() => readSiderCollapsed());
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState("");
+  const { data: accountStateSnapshot = EMPTY_ACCOUNT_STATE } = useQuery({
+    queryKey: ["polymarket-account-state", "global"],
+    queryFn: () => api.polymarketAccountState(),
+    enabled: authStatus === "authenticated",
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+  });
+  const [accountState, setAccountState] = useState<PolymarketAccountState>(EMPTY_ACCOUNT_STATE);
   const pathname = locationState.pathname;
   const searchParams = useMemo(() => new URLSearchParams(locationState.search), [locationState.search]);
   const pageTitle =
@@ -85,6 +111,7 @@ export default function App() {
       : pathname === "/reports/market-detail"
         ? false
         : route.routes.find((item) => item.path === pathname)?.name;
+  const pageContainerClassName = pathname === "/btc-watch" ? "app-page-container-watch" : undefined;
   const navigate = useCallback((nextPathname: RouteKey, search = "") => {
     const next = { pathname: nextPathname, search };
     window.history.pushState(null, "", `${nextPathname}${search}`);
@@ -109,6 +136,44 @@ export default function App() {
     });
     return () => setUnauthorizedHandler(null);
   }, [queryClient]);
+
+  useEffect(() => {
+    setAccountState(accountStateSnapshot);
+  }, [accountStateSnapshot]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setAccountState(EMPTY_ACCOUNT_STATE);
+      return;
+    }
+    let socket: WebSocket | null = null;
+    let connectTimer = 0;
+    let reconnectTimer = 0;
+    let closedByEffect = false;
+
+    const connect = () => {
+      if (closedByEffect) return;
+      socket = new WebSocket(api.polymarketAccountStateWsUrl());
+      socket.onmessage = (event) => {
+        const message = parsePolymarketAccountMessage(event.data);
+        if (!message || message.condition_id !== null) return;
+        setAccountState(message.state);
+      };
+      socket.onclose = () => {
+        if (closedByEffect) return;
+        reconnectTimer = window.setTimeout(connect, 1000);
+      };
+    };
+
+    // 顶栏展示账户级快照，不跟随具体 market 过滤；condition 过滤仍留给 BTC 页面局部面板。
+    connectTimer = window.setTimeout(connect, 0);
+    return () => {
+      closedByEffect = true;
+      if (connectTimer) window.clearTimeout(connectTimer);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [authStatus]);
 
   useEffect(() => {
     let mounted = true;
@@ -184,6 +249,7 @@ export default function App() {
           </button>
         )}
         actionsRender={() => [
+          <AccountHeaderSummary key="account" accountState={accountState} />,
           <Button
             key="theme"
             type="text"
@@ -199,7 +265,7 @@ export default function App() {
         layout="mix"
         contentStyle={{ padding: 0 }}
       >
-        <PageContainer title={pageTitle}>
+        <PageContainer className={pageContainerClassName} title={pageTitle}>
           <Suspense fallback={<div className="route-loading"><Spin /> 加载中...</div>}>
             {renderPage(pathname, searchParams, navigate)}
           </Suspense>
@@ -208,6 +274,48 @@ export default function App() {
       )}
     </ConfigProvider>
   );
+}
+
+function AccountHeaderSummary({ accountState }: { accountState: PolymarketAccountState }) {
+  const cash = accountState.balance?.cash ?? null;
+  const portfolio = accountPortfolioValue(accountState);
+  const accountLabel = accountState.wallet ?? accountState.clob_address;
+  return (
+    <div className="app-account-summary">
+      <div className="app-account-metrics">
+        <span className="app-account-metric-label">Portfolio</span>
+        <strong>{formatCurrency(portfolio)}</strong>
+        <span className="app-account-separator">·</span>
+        <span className="app-account-metric-label">Cash</span>
+        <strong>{formatCurrency(cash)}</strong>
+      </div>
+      <span className="app-account-meta">
+        {accountLabel ? `Account ${accountLabel}` : "Account not configured"}
+      </span>
+    </div>
+  );
+}
+
+function parsePolymarketAccountMessage(value: string) {
+  try {
+    const message = JSON.parse(value) as PolymarketAccountStateWsMessage;
+    if (message.type !== "polymarket.account_state.snapshot") return null;
+    return message;
+  } catch {
+    return null;
+  }
+}
+
+function accountPortfolioValue(accountState: PolymarketAccountState) {
+  const cash = accountState.balance?.cash;
+  const positionsValue = accountState.positions.reduce((sum, position) => sum + (position.current_value ?? 0), 0);
+  if (cash == null && positionsValue === 0) return null;
+  return (cash ?? 0) + positionsValue;
+}
+
+function formatCurrency(value: number | null) {
+  if (value == null) return "-";
+  return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
 function LoginPage({ error, onLogin }: { error: string; onLogin: (password: string) => Promise<void> }) {
@@ -276,6 +384,7 @@ function normalizePathname(pathname: string): RouteKey {
   if (pathname === "/reports") return "/reports";
   if (pathname === "/reports/market-detail") return "/reports/market-detail";
   if (pathname === "/telegram") return "/telegram";
+  if (pathname === "/system-tasks") return "/system-tasks";
   if (pathname === "/settings") return "/settings";
   return "/btc-watch";
 }

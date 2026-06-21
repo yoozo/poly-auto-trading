@@ -1,11 +1,15 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  min-height: 100vh;
   margin: 0;
 }
 
 body {
+  background: var(--app-bg, #f4f6fa);
+}
+
+#root {
   background: var(--app-bg, #f4f6fa);
 }
 
@@ -60,6 +64,50 @@ body[data-theme="dark"] {
   color: var(--text-muted, #667085);
 }
 
+.app-account-summary {
+  display: grid;
+  gap: 1px;
+  padding: 0 10px;
+  line-height: 1.15;
+}
+
+.app-account-metrics {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.app-account-metric-label {
+  color: #7a8594;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.app-account-metrics strong {
+  color: #0f7a4f;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-account-separator {
+  color: #c0c7d2;
+  font-size: 12px;
+  padding: 0 3px;
+}
+
+.app-account-meta {
+  min-width: 0;
+  color: #98a2b3;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: left;
+  white-space: nowrap;
+}
+
 .auth-loading,
 .login-page {
   display: flex;
@@ -93,9 +141,24 @@ body[data-theme="dark"] {
   display: grid;
   gap: 10px;
   height: calc(100vh - 112px);
-  min-height: 680px;
+  min-height: 0;
   grid-template-columns: minmax(720px, 1fr) minmax(360px, 430px);
   grid-template-rows: minmax(0, 1fr);
+}
+
+.app-page-container-watch .ant-page-header-no-children {
+  display: none;
+}
+
+.app-page-container-watch .ant-pro-page-container-children-container {
+  box-sizing: border-box;
+  height: calc(100vh - 56px);
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+.app-page-container-watch .watch-page:not(.watch-page-fullscreen) {
+  height: 100%;
 }
 
 .watch-page-fullscreen {
@@ -1721,7 +1784,7 @@ body[data-theme="dark"] {
 
 .polymarket-order-table .polymarket-account-table-head,
 .polymarket-order-table .polymarket-account-row {
-  grid-template-columns: 54px minmax(72px, 1fr) 54px 82px 72px;
+  grid-template-columns: 44px minmax(58px, 1fr) 48px 74px 58px 36px;
 }
 
 .polymarket-account-table-head {
@@ -1800,22 +1863,24 @@ body[data-theme="dark"] {
   color: #d92d20;
 }
 
-.polymarket-account-pnl.positive,
-.polymarket-account-side.buy {
+.polymarket-account-pnl.positive {
   color: #0f7a4f;
   font-weight: 700;
 }
 
-.polymarket-account-pnl.negative,
-.polymarket-account-side.sell {
+.polymarket-account-pnl.negative {
   color: #b42318;
   font-weight: 700;
 }
 
-.polymarket-account-pnl.neutral,
-.polymarket-account-side {
+.polymarket-account-pnl.neutral {
   color: #667085;
   font-weight: 700;
+}
+
+.polymarket-account-side {
+  color: #17202a;
+  font-weight: 800;
 }
 
 .polymarket-account-badge {
@@ -1829,6 +1894,73 @@ body[data-theme="dark"] {
   color: #0f7a4f;
   font-size: 10px;
   font-weight: 700;
+}
+
+.polymarket-order-entry {
+  padding: 8px;
+  border: 1px solid #eef1f5;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.polymarket-order-entry-controls,
+.polymarket-order-entry-inputs,
+.polymarket-order-entry-submit {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.polymarket-order-entry-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.polymarket-order-entry-inputs {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.polymarket-order-entry-inputs label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.polymarket-order-entry-inputs .ant-input-number-group-wrapper,
+.polymarket-order-entry-inputs .ant-input-number {
+  width: 100%;
+}
+
+.polymarket-order-entry-submit {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.polymarket-order-entry-submit .ant-checkbox-wrapper {
+  min-width: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.polymarket-order-notice {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-account-action-cell {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.polymarket-account-action-cell .ant-btn {
+  min-width: 28px;
+  padding-inline: 6px;
 }
 
 .telegram-panel {
@@ -2655,14 +2787,29 @@ body[data-theme="dark"] .pill.other {
   color: #fdba74;
 }
 
-body[data-theme="dark"] .report-metric-positive,
-body[data-theme="dark"] .report-metric-negative,
-body[data-theme="dark"] .report-metric-neutral,
+body[data-theme="dark"] .reports-page .ant-card.report-metric-positive {
+  border-color: rgba(16, 185, 129, 0.34);
+  background-color: rgba(16, 185, 129, 0.14);
+  background-image: linear-gradient(180deg, rgba(16, 185, 129, 0.22) 0%, rgba(16, 185, 129, 0.12) 100%);
+}
+
+body[data-theme="dark"] .reports-page .ant-card.report-metric-negative {
+  border-color: rgba(248, 113, 113, 0.34);
+  background-color: rgba(239, 68, 68, 0.14);
+  background-image: linear-gradient(180deg, rgba(239, 68, 68, 0.22) 0%, rgba(239, 68, 68, 0.12) 100%);
+}
+
+body[data-theme="dark"] .reports-page .ant-card.report-metric-neutral {
+  border-color: var(--panel-border);
+  background-color: #17212b;
+  background-image: linear-gradient(180deg, #1b2836 0%, #17212b 100%);
+}
+
 body[data-theme="dark"] .market-detail-metric-positive,
 body[data-theme="dark"] .market-detail-metric-negative,
 body[data-theme="dark"] .market-detail-metric-neutral,
 body[data-theme="dark"] .market-detail-metric-info {
-  background: var(--panel-bg);
+  background: inherit;
 }
 
 body[data-theme="dark"] .polymarket-market-rail {
@@ -2700,6 +2847,19 @@ body[data-theme="dark"] .polymarket-market-pill-live-dot {
 
 body[data-theme="dark"] .polymarket-market-pill.active .polymarket-market-pill-live-dot {
   background: #fb7185;
+}
+
+body[data-theme="dark"] .app-account-metric-label,
+body[data-theme="dark"] .app-account-meta {
+  color: #7f8ea3;
+}
+
+body[data-theme="dark"] .app-account-metrics strong {
+  color: #34d399;
+}
+
+body[data-theme="dark"] .app-account-separator {
+  color: #475569;
 }
 
 body[data-theme="dark"] .polymarket-outcome,
@@ -2782,7 +2942,8 @@ body[data-theme="dark"] .polymarket-panel-title-link:hover .anticon {
 }
 
 body[data-theme="dark"] .polymarket-account-panel,
-body[data-theme="dark"] .polymarket-account-table {
+body[data-theme="dark"] .polymarket-account-table,
+body[data-theme="dark"] .polymarket-order-entry {
   border-color: #263244;
   background: #101720;
   color: #cbd5e1;
@@ -2823,8 +2984,13 @@ body[data-theme="dark"] .polymarket-account-outcome-pill.down {
 
 body[data-theme="dark"] .polymarket-account-section-title,
 body[data-theme="dark"] .polymarket-account-pnl.neutral,
-body[data-theme="dark"] .polymarket-account-side {
+body[data-theme="dark"] .polymarket-order-entry-inputs label,
+body[data-theme="dark"] .polymarket-order-entry-submit .ant-checkbox-wrapper {
   color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-account-side {
+  color: #f8fafc;
 }
 
 body[data-theme="dark"] .polymarket-account-badge {
