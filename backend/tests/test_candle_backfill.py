@@ -5,6 +5,7 @@ import pytest
 
 from app.schemas.candle import Candle
 from app.services import candle_backfill
+from app.services.binance_archive_client import ArchivePeriod
 from app.services.binance_archive_client import BinanceArchiveFileNotFound
 from app.services.binance_client import KlinePage
 
@@ -64,6 +65,40 @@ def test_expected_candle_count_uses_inclusive_open_times() -> None:
 
     assert candle_backfill.expected_candle_count(start_ms, start_ms, "1m") == 1
     assert candle_backfill.expected_candle_count(start_ms, start_ms + 2 * 60_000, "1m") == 3
+
+
+def test_collect_archive_periods_returns_bounded_consecutive_months() -> None:
+    start_ms = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    end_ms = int(datetime(2026, 4, 30, 23, 59, tzinfo=timezone.utc).timestamp() * 1000)
+
+    periods = candle_backfill.collect_archive_periods(
+        symbol="BTCUSDT",
+        interval="1m",
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=3,
+    )
+
+    assert [period.path_suffix for period in periods] == [
+        "/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-01.zip",
+        "/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-02.zip",
+        "/data/spot/monthly/klines/BTCUSDT/1m/BTCUSDT-1m-2026-03.zip",
+    ]
+
+
+def test_collect_archive_periods_stops_when_archive_is_not_efficient() -> None:
+    start_ms = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+    end_ms = start_ms + 999 * 60_000
+
+    periods = candle_backfill.collect_archive_periods(
+        symbol="BTCUSDT",
+        interval="1m",
+        start_ms=start_ms,
+        end_ms=end_ms,
+        limit=3,
+    )
+
+    assert periods == []
 
 
 @pytest.mark.asyncio
@@ -375,6 +410,81 @@ async def test_fetch_archive_period_falls_back_to_rest_when_archive_missing() ->
     )
 
     assert result == {0: KlinePage(candles=[candle], next_start_ms=60_000, raw_count=1)}
+
+
+@pytest.mark.asyncio
+async def test_apply_archive_period_results_advances_by_sorted_prefix(monkeypatch) -> None:
+    async def fake_sum_inserted_count(session, task_id):
+        return 0
+
+    monkeypatch.setattr(candle_backfill, "sum_inserted_count", fake_sum_inserted_count)
+    progress = SimpleNamespace(
+        interval="1m",
+        next_start_ms=0,
+        end_ms=2999,
+        raw_count=0,
+        inserted_count=0,
+        status="running",
+        finished_at=None,
+    )
+    first = ArchivePeriod(kind="monthly", path_suffix="/1.zip", start_ms=0, end_ms=999, next_start_ms=1000)
+    second = ArchivePeriod(kind="monthly", path_suffix="/2.zip", start_ms=1000, end_ms=1999, next_start_ms=2000)
+    third = ArchivePeriod(kind="monthly", path_suffix="/3.zip", start_ms=2000, end_ms=2999, next_start_ms=3000)
+
+    failed = await candle_backfill.apply_archive_period_results(
+        object(),
+        SimpleNamespace(id=7, total_inserted=0),
+        progress,
+        [
+            candle_backfill.ArchiveBackfillPeriodResult(period=third, next_start_ms=3000, raw_count=30, inserted_count=30),
+            candle_backfill.ArchiveBackfillPeriodResult(period=first, next_start_ms=1000, raw_count=10, inserted_count=10),
+            candle_backfill.ArchiveBackfillPeriodResult(period=second, next_start_ms=2000, raw_count=20, inserted_count=20),
+        ],
+    )
+
+    assert failed is None
+    assert progress.next_start_ms == 3000
+    assert progress.raw_count == 60
+    assert progress.inserted_count == 60
+    assert progress.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_apply_archive_period_results_stops_at_first_failed_period(monkeypatch) -> None:
+    async def fake_sum_inserted_count(session, task_id):
+        return 0
+
+    monkeypatch.setattr(candle_backfill, "sum_inserted_count", fake_sum_inserted_count)
+    progress = SimpleNamespace(
+        interval="1m",
+        next_start_ms=0,
+        end_ms=2999,
+        raw_count=0,
+        inserted_count=0,
+        status="running",
+        finished_at=None,
+    )
+    first = ArchivePeriod(kind="monthly", path_suffix="/1.zip", start_ms=0, end_ms=999, next_start_ms=1000)
+    second = ArchivePeriod(kind="monthly", path_suffix="/2.zip", start_ms=1000, end_ms=1999, next_start_ms=2000)
+    third = ArchivePeriod(kind="monthly", path_suffix="/3.zip", start_ms=2000, end_ms=2999, next_start_ms=3000)
+
+    failed = await candle_backfill.apply_archive_period_results(
+        object(),
+        SimpleNamespace(id=7, total_inserted=0),
+        progress,
+        [
+            candle_backfill.ArchiveBackfillPeriodResult(period=third, next_start_ms=3000, raw_count=30, inserted_count=30),
+            candle_backfill.ArchiveBackfillPeriodResult(period=first, next_start_ms=1000, raw_count=10, inserted_count=10),
+            candle_backfill.ArchiveBackfillPeriodResult(period=second, next_start_ms=1000, error="rate limited"),
+        ],
+    )
+
+    assert failed is not None
+    assert failed.period is second
+    assert progress.next_start_ms == 1000
+    assert progress.raw_count == 10
+    assert progress.inserted_count == 10
+    assert progress.status == "running"
 
 
 def test_serialize_status_uses_step_columns_raw_counts_and_ranges() -> None:

@@ -18,6 +18,7 @@ from app.db.session import AsyncSessionLocal
 from app.schemas.candle import Interval
 from app.services.binance_archive_client import (
     ArchiveKlineBatch,
+    ArchivePeriod,
     BinanceArchiveClient,
     BinanceArchiveFileNotFound,
     select_archive_period,
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 BINANCE_KLINE_LIMIT = 1000
 KLINE_BACKFILL_CONCURRENCY = 10
+ARCHIVE_BACKFILL_CONCURRENCY = 3
 API_SYNC_MAX_PAGES = 2
 MISSING_RANGE_MERGE_PAGES = KLINE_BACKFILL_CONCURRENCY
 SUPPORTED_INTERVALS: tuple[Interval, ...] = ("1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w")
@@ -100,6 +102,16 @@ class KlineBackfillPageError(RuntimeError):
         super().__init__(f"page {start_ms} failed: {original}")
         self.start_ms = start_ms
         self.original = original
+
+
+@dataclass(frozen=True)
+class ArchiveBackfillPeriodResult:
+    period: ArchivePeriod
+    next_start_ms: int
+    raw_count: int = 0
+    inserted_count: int = 0
+    skipped_invalid_count: int = 0
+    error: str = ""
 
 
 class CandleBackfillRunner:
@@ -271,70 +283,78 @@ class CandleBackfillRunner:
                     await self._refresh_health(session, task)
                     return
                 interval = cast(Interval, progress.interval)
-                archive_period = select_archive_period(
+                archive_periods = collect_archive_periods(
                     symbol=task.symbol,
                     interval=interval,
                     start_ms=progress.next_start_ms,
                     end_ms=progress.end_ms,
+                    limit=ARCHIVE_BACKFILL_CONCURRENCY,
                 ) if settings.binance_archive_enabled else None
-                page_starts = [] if archive_period is not None else wave_page_starts(
+                page_starts = [] if archive_periods else wave_page_starts(
                     progress.next_start_ms,
                     end_ms=progress.end_ms,
                     interval=interval,
                 )
                 await self._refresh_health(session, task)
 
-            if archive_period is not None:
+            if archive_periods:
                 logger.info(
                     "K line backfill using Binance archive",
                     extra={
                         "symbol": task.symbol,
                         "interval": interval,
-                        "period": archive_period.kind,
-                        "path": archive_period.path_suffix,
-                        "start_ms": archive_period.start_ms,
-                        "end_ms": archive_period.end_ms,
+                        "period_count": len(archive_periods),
+                        "concurrency": ARCHIVE_BACKFILL_CONCURRENCY,
+                        "start_ms": archive_periods[0].start_ms,
+                        "end_ms": archive_periods[-1].end_ms,
                     },
                 )
-                try:
-                    archive_file_path = await archive_client.download_klines_period_file(
-                        symbol=task.symbol,
-                        interval=interval,
-                        period=archive_period,
-                    )
-                    await self._persist_archive_file(
-                        archive_client,
-                        task_id=task_id,
-                        progress_id=progress_id,
-                        file_path=archive_file_path,
-                        symbol=task.symbol,
-                        interval=interval,
-                        period=archive_period,
-                    )
-                    continue
-                except BinanceArchiveFileNotFound:
-                    logger.info("Binance archive file not found, falling back to REST", extra={"path": archive_period.path_suffix})
-                except Exception as exc:
-                    logger.warning(
-                        "Binance archive stream failed, falling back to REST",
-                        extra={"path": archive_period.path_suffix, "symbol": task.symbol, "interval": interval},
-                        exc_info=exc,
-                    )
-                results = await fetch_wave(
+                results = await self._persist_archive_periods(
                     client,
+                    archive_client,
+                    task_id=task_id,
+                    progress_id=progress_id,
                     symbol=task.symbol,
                     interval=interval,
-                    end_ms=archive_period.end_ms,
-                    page_starts=wave_page_starts(archive_period.start_ms, end_ms=archive_period.end_ms, interval=interval),
+                    periods=archive_periods,
                 )
-            else:
-                results = await fetch_wave(
-                    client,
-                    symbol=task.symbol,
-                    interval=interval,
-                    end_ms=progress.end_ms,
-                    page_starts=page_starts,
-                )
+                async with AsyncSessionLocal() as session:
+                    task = await get_task(session, task_id)
+                    progress = await get_progress(session, progress_id)
+                    if task is None or progress is None:
+                        return
+                    failed = await apply_archive_period_results(session, task, progress, results)
+                    task.total_inserted = await sum_inserted_count(session, task.id)
+                    if failed is not None:
+                        progress.status = "error"
+                        progress.next_start_ms = failed.period.start_ms
+                        progress.last_error = failed.error or "archive period failed"
+                        task.status = "error"
+                        task.error = progress.last_error
+                        task.message = "K line backfill failed"
+                        await session.commit()
+                        await self._refresh_health(session, task)
+                        raise KlineBackfillPageError(failed.period.start_ms, RuntimeError(progress.last_error))
+                    await session.commit()
+                    await self._refresh_health(session, task)
+                    logger.info(
+                        "K line backfill archive wave persisted",
+                        extra={
+                            "symbol": task.symbol,
+                            "interval": interval,
+                            "period_count": len(results),
+                            "next_start_ms": progress.next_start_ms,
+                        },
+                    )
+                continue
+
+            results = await fetch_wave(
+                client,
+                symbol=task.symbol,
+                interval=interval,
+                end_ms=progress.end_ms,
+                page_starts=page_starts,
+            )
             async with AsyncSessionLocal() as session:
                 task = await get_task(session, task_id)
                 progress = await get_progress(session, progress_id)
@@ -355,6 +375,107 @@ class CandleBackfillRunner:
                 await session.commit()
                 await self._refresh_health(session, task)
 
+    async def _persist_archive_periods(
+        self,
+        rest_client: BinanceClient,
+        archive_client: BinanceArchiveClient,
+        *,
+        task_id: int,
+        progress_id: int,
+        symbol: str,
+        interval: Interval,
+        periods: list[ArchivePeriod],
+    ) -> list[ArchiveBackfillPeriodResult]:
+        semaphore = asyncio.Semaphore(ARCHIVE_BACKFILL_CONCURRENCY)
+
+        async def run_period(period: ArchivePeriod) -> ArchiveBackfillPeriodResult:
+            async with semaphore:
+                return await self._persist_archive_period(
+                    rest_client,
+                    archive_client,
+                    task_id=task_id,
+                    progress_id=progress_id,
+                    symbol=symbol,
+                    interval=interval,
+                    period=period,
+                )
+
+        return list(await asyncio.gather(*(run_period(period) for period in periods)))
+
+    async def _persist_archive_period(
+        self,
+        rest_client: BinanceClient,
+        archive_client: BinanceArchiveClient,
+        *,
+        task_id: int,
+        progress_id: int,
+        symbol: str,
+        interval: Interval,
+        period: ArchivePeriod,
+    ) -> ArchiveBackfillPeriodResult:
+        try:
+            archive_file_path = await archive_client.download_klines_period_file(
+                symbol=symbol,
+                interval=interval,
+                period=period,
+            )
+            return await self._persist_archive_file(
+                archive_client,
+                task_id=task_id,
+                progress_id=progress_id,
+                file_path=archive_file_path,
+                symbol=symbol,
+                interval=interval,
+                period=period,
+            )
+        except BinanceArchiveFileNotFound:
+            logger.info("Binance archive file not found, falling back to REST", extra={"path": period.path_suffix})
+        except Exception as exc:
+            logger.warning(
+                "Binance archive stream failed, falling back to REST",
+                extra={"path": period.path_suffix, "symbol": symbol, "interval": interval},
+                exc_info=exc,
+            )
+        try:
+            results = await fetch_wave(
+                rest_client,
+                symbol=symbol,
+                interval=interval,
+                end_ms=period.end_ms,
+                page_starts=wave_page_starts(period.start_ms, end_ms=period.end_ms, interval=interval),
+            )
+            progress = SimpleNamespace(
+                interval=interval,
+                end_ms=period.end_ms,
+                raw_count=0,
+                next_start_ms=period.start_ms,
+                inserted_count=0,
+                status="running",
+                finished_at=None,
+            )
+            async with AsyncSessionLocal() as session:
+                failed_start_ms = await persist_wave(session, SimpleNamespace(symbol=symbol), progress, results)
+                await session.commit()
+            if failed_start_ms is not None:
+                value = results[failed_start_ms]
+                return ArchiveBackfillPeriodResult(
+                    period=period,
+                    next_start_ms=failed_start_ms,
+                    error=value if isinstance(value, str) else "REST fallback page failed",
+                )
+            return ArchiveBackfillPeriodResult(
+                period=period,
+                next_start_ms=max(period.next_start_ms, progress.next_start_ms),
+                raw_count=progress.raw_count,
+                inserted_count=progress.inserted_count,
+            )
+        except Exception as exc:
+            return ArchiveBackfillPeriodResult(
+                period=period,
+                next_start_ms=period.start_ms,
+                error=f"{type(exc).__name__}: {exc or 'REST fallback failed'}",
+            )
+
     async def _persist_archive_file(
         self,
         archive_client: BinanceArchiveClient,
@@ -365,7 +486,7 @@ class CandleBackfillRunner:
         symbol: str,
         interval: Interval,
         period,
-    ) -> None:
+    ) -> ArchiveBackfillPeriodResult:
         queue: asyncio.Queue[ArchiveKlineBatch | None] = asyncio.Queue(maxsize=2)
 
         async def produce_batches() -> None:
@@ -405,24 +526,10 @@ class CandleBackfillRunner:
                     continue
                 last_open_ms = int(candles[-1].open_time.timestamp() * 1000)
                 async with AsyncSessionLocal() as session:
-                    progress = await get_progress(session, progress_id)
-                    if progress is None:
-                        return
                     await upsert_candles(session, candles)
-                    progress = await get_progress(session, progress_id)
-                    if progress is None:
-                        return
-                    progress.raw_count += batch.raw_count
-                    progress.inserted_count += len(candles)
-                    progress.next_start_ms = last_open_ms + INTERVAL_MS[interval]
-                    await session.commit()
                     inserted_count += len(candles)
             await producer
             async with AsyncSessionLocal() as session:
-                task = await get_task(session, task_id)
-                progress = await get_progress(session, progress_id)
-                if task is None or progress is None:
-                    return
                 if raw_count == 0 or inserted_count == 0:
                     await upsert_candle_unavailable_range(
                         session,
@@ -433,14 +540,7 @@ class CandleBackfillRunner:
                         source="binance_archive",
                         reason="Binance archive returned no klines for this closed range",
                     )
-                progress.raw_count += max(0, raw_count - progress.raw_count)
-                progress.next_start_ms = period.next_start_ms if last_open_ms is None else max(period.next_start_ms, last_open_ms + INTERVAL_MS[interval])
-                if progress.next_start_ms > progress.end_ms:
-                    progress.status = "completed"
-                    progress.finished_at = datetime.now(timezone.utc)
-                task.total_inserted = await sum_inserted_count(session, task.id)
-                await session.commit()
-                await self._refresh_health(session, task)
+                    await session.commit()
             if skipped_invalid_count:
                 logger.warning(
                     "Skipped invalid Binance archive klines",
@@ -452,6 +552,9 @@ class CandleBackfillRunner:
                         "skipped_invalid_count": skipped_invalid_count,
                     },
                 )
+            next_start_ms = period.next_start_ms
+            if last_open_ms is not None:
+                next_start_ms = max(period.next_start_ms, last_open_ms + INTERVAL_MS[interval])
             logger.info(
                 "Binance archive stream persisted",
                 extra={
@@ -462,7 +565,15 @@ class CandleBackfillRunner:
                     "raw_count": raw_count,
                     "inserted_count": inserted_count,
                     "skipped_invalid_count": skipped_invalid_count,
+                    "next_start_ms": next_start_ms,
                 },
+            )
+            return ArchiveBackfillPeriodResult(
+                period=period,
+                next_start_ms=next_start_ms,
+                raw_count=raw_count,
+                inserted_count=inserted_count,
+                skipped_invalid_count=skipped_invalid_count,
             )
         finally:
             producer.cancel()
@@ -718,6 +829,63 @@ async def fetch_archive_period(
         end_ms=period.end_ms,
     )
     return {period.start_ms: page}
+
+
+def collect_archive_periods(
+    *,
+    symbol: str,
+    interval: Interval,
+    start_ms: int,
+    end_ms: int,
+    limit: int,
+) -> list[ArchivePeriod]:
+    periods: list[ArchivePeriod] = []
+    next_start_ms = start_ms
+    while len(periods) < limit:
+        period = select_archive_period(
+            symbol=symbol,
+            interval=interval,
+            start_ms=next_start_ms,
+            end_ms=end_ms,
+        )
+        if period is None:
+            break
+        periods.append(period)
+        if period.next_start_ms <= next_start_ms:
+            break
+        next_start_ms = period.next_start_ms
+    return periods
+
+
+async def apply_archive_period_results(
+    session: AsyncSession,
+    task: SystemTask,
+    progress: SystemTaskStep,
+    results: list[ArchiveBackfillPeriodResult],
+) -> ArchiveBackfillPeriodResult | None:
+    # archive period 会并发完成，但 task cursor 只能按连续前缀推进，避免失败重试时跳过中间月份。
+    interval = cast(Interval, progress.interval)
+    for result in sorted(results, key=lambda item: item.period.start_ms):
+        if result.error:
+            return result
+        progress.raw_count += result.raw_count
+        progress.inserted_count += result.inserted_count
+        progress.next_start_ms = max(progress.next_start_ms, result.next_start_ms)
+        if progress.next_start_ms > progress.end_ms:
+            progress.status = "completed"
+            progress.finished_at = datetime.now(timezone.utc)
+            break
+        if result.next_start_ms <= result.period.start_ms:
+            return ArchiveBackfillPeriodResult(
+                period=result.period,
+                next_start_ms=result.period.start_ms,
+                error=f"archive period did not advance cursor for {interval}",
+            )
+    if progress.next_start_ms > progress.end_ms:
+        progress.status = "completed"
+        progress.finished_at = datetime.now(timezone.utc)
+    task.total_inserted = await sum_inserted_count(session, task.id)
+    return None
 
 
 async def persist_wave(

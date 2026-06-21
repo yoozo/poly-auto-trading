@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 INDICATOR_BATCH_CANDLES = 3000
 INDICATOR_WARMUP_BARS = 120
+INDICATOR_BACKFILL_CONCURRENCY = 3
 
 IndicatorBackfillState = Literal["idle", "running", "completed", "error"]
 ProgressState = Literal["pending", "running", "completed", "error"]
@@ -120,10 +121,7 @@ class IndicatorBackfillRunner:
                         message="Indicator backfill started",
                         payload={"task_id": task.id, "symbol": task.symbol, "intervals": [item.interval for item in progress]},
                     )
-                for item in progress:
-                    if item.status == "completed":
-                        continue
-                    await self._backfill_interval(task_id=task_id, progress_id=item.id)
+                await self._backfill_steps(task_id, progress)
                 async with AsyncSessionLocal() as session:
                     task = await get_task(session, task_id)
                     if task is None:
@@ -169,6 +167,18 @@ class IndicatorBackfillRunner:
             finally:
                 self._active_task_id = None
 
+    async def _backfill_steps(self, task_id: int, progress: list[SystemTaskStep]) -> None:
+        semaphore = asyncio.Semaphore(INDICATOR_BACKFILL_CONCURRENCY)
+
+        async def run_step(item: SystemTaskStep) -> None:
+            if item.status == "completed":
+                return
+            async with semaphore:
+                await self._backfill_interval(task_id=task_id, progress_id=item.id)
+
+        # 不同 interval 的指标互不依赖，可以并发；同一个 step 内仍串行推进，保证 RSI/EMA 状态连续。
+        await asyncio.gather(*(run_step(item) for item in progress))
+
     async def _backfill_interval(self, *, task_id: int, progress_id: int) -> None:
         async with AsyncSessionLocal() as session:
             task = await get_task(session, task_id)
@@ -202,7 +212,7 @@ class IndicatorBackfillRunner:
                 return
 
             target_start = datetime.fromtimestamp(progress.next_start_ms / 1000, tz=timezone.utc)
-            points = calculate_indicator_segments(candles, cast(Interval, progress.interval))
+            points = await asyncio.to_thread(calculate_indicator_segments, candles, cast(Interval, progress.interval))
             target_points = [point for point in points if point.candle_time >= target_start]
             if not target_points:
                 await self._complete_progress(task_id, progress_id)
@@ -249,7 +259,11 @@ async def create_task(session: AsyncSession, *, symbol: str, intervals: list[Int
         status="running",
         message="Indicator backfill started",
         started_at=now,
-        metadata={"batch_candles": INDICATOR_BATCH_CANDLES, "warmup_bars": INDICATOR_WARMUP_BARS},
+        metadata={
+            "batch_candles": INDICATOR_BATCH_CANDLES,
+            "warmup_bars": INDICATOR_WARMUP_BARS,
+            "concurrency": INDICATOR_BACKFILL_CONCURRENCY,
+        },
     )
     session.add(task)
     await session.flush()

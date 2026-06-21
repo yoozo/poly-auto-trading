@@ -22,7 +22,7 @@ from app.services.service_health import service_health_store
 DAY_MS = 24 * 60 * 60 * 1000
 MICROSECOND_TIMESTAMP_THRESHOLD = 10_000_000_000_000
 REST_KLINE_LIMIT = 1000
-ARCHIVE_PARSE_BATCH_SIZE = 1000
+ARCHIVE_PARSE_BATCH_SIZE = 3000
 logger = logging.getLogger(__name__)
 
 
