@@ -1787,6 +1787,11 @@ body[data-theme="dark"] {
   grid-template-columns: 44px minmax(58px, 1fr) 48px 74px 58px 36px;
 }
 
+.polymarket-trade-table .polymarket-account-table-head,
+.polymarket-trade-table .polymarket-account-row {
+  grid-template-columns: 44px minmax(58px, 1fr) 48px 56px 72px 70px;
+}
+
 .polymarket-account-table-head {
   padding: 7px 10px;
   border-bottom: 1px solid #eef1f5;
@@ -1894,6 +1899,34 @@ body[data-theme="dark"] {
   color: #0f7a4f;
   font-size: 10px;
   font-weight: 700;
+}
+
+.polymarket-account-trade-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.polymarket-account-trade-status.pending {
+  background: #fff7e6;
+  color: #b76e00;
+}
+
+.polymarket-account-trade-status.confirmed {
+  background: #e7f6ee;
+  color: #0f7a4f;
+}
+
+.polymarket-account-trade-status.refresh_failed {
+  background: #fff1ef;
+  color: #b42318;
 }
 
 .polymarket-order-entry {
@@ -2996,6 +3029,21 @@ body[data-theme="dark"] .polymarket-account-side {
 body[data-theme="dark"] .polymarket-account-badge {
   background: rgba(16, 185, 129, 0.12);
   color: #6ee7b7;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.confirmed {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.refresh_failed {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
 }
 
 .kline-countdown {

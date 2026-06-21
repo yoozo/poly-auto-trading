@@ -409,6 +409,9 @@ export type PolymarketAccountTrade = {
   outcome: string | null;
   timestamp: string | null;
   order_id: string | null;
+  confirmation_status: "pending" | "confirmed" | "refresh_failed";
+  received_at: string | null;
+  confirmed_at: string | null;
   raw: Record<string, unknown>;
 };
 

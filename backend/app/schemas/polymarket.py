@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -92,6 +93,9 @@ class PolymarketAccountTrade(BaseModel):
     outcome: str | None
     timestamp: datetime | None
     order_id: str | None
+    confirmation_status: Literal["pending", "confirmed", "refresh_failed"] = "confirmed"
+    received_at: datetime | None = None
+    confirmed_at: datetime | None = None
     raw: dict
 
 

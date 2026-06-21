@@ -13,6 +13,9 @@ from app.schemas.polymarket import (
 )
 
 MAX_RECENT_TRADES = 50
+TRADE_PENDING = "pending"
+TRADE_CONFIRMED = "confirmed"
+TRADE_REFRESH_FAILED = "refresh_failed"
 
 
 class PolymarketAccountStore:
@@ -53,9 +56,31 @@ class PolymarketAccountStore:
             self._last_orders_refresh_at = utc_now()
 
     async def apply_trade(self, trade: PolymarketAccountTrade) -> None:
+        now = utc_now()
         async with self._lock:
-            self._recent_trades = dedupe_recent_trade([trade, *self._recent_trades])[:MAX_RECENT_TRADES]
-            self._last_trade_at = trade.timestamp or utc_now()
+            pending_trade = trade.model_copy(
+                update={
+                    "confirmation_status": TRADE_PENDING,
+                    "received_at": trade.received_at or now,
+                    "confirmed_at": None,
+                }
+            )
+            self._recent_trades = dedupe_recent_trade([pending_trade, *self._recent_trades])[:MAX_RECENT_TRADES]
+            self._last_trade_at = trade.timestamp or now
+
+    async def mark_trades_confirmation(self, trade_ids: set[str], status: str) -> None:
+        if not trade_ids:
+            return
+        now = utc_now()
+        confirmed_at = now if status == TRADE_CONFIRMED else None
+        async with self._lock:
+            # trade 先由 User WS 写入 pending；REST 快照完成后只更新确认状态，不覆盖成交明细。
+            self._recent_trades = [
+                trade.model_copy(update={"confirmation_status": status, "confirmed_at": confirmed_at})
+                if trade.id in trade_ids and trade.confirmation_status == TRADE_PENDING
+                else trade
+                for trade in self._recent_trades
+            ]
 
     async def set_ws_state(self, state: str, error: str | None = None) -> None:
         async with self._lock:

@@ -10,7 +10,11 @@ import websockets
 from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
-from app.services.polymarket_account_store import polymarket_account_store
+from app.services.polymarket_account_store import (
+    TRADE_CONFIRMED,
+    TRADE_REFRESH_FAILED,
+    polymarket_account_store,
+)
 from app.services.polymarket_account_ws_hub import polymarket_account_ws_hub
 from app.services.polymarket_client import (
     PolymarketClient,
@@ -84,7 +88,7 @@ class PolymarketAccountMonitor:
                 logger.exception("Polymarket account subscription watch failed")
                 await asyncio.sleep(5)
 
-    async def refresh_account_snapshot(self) -> None:
+    async def refresh_account_snapshot(self) -> str | None:
         wallet = settings.polymarket_position_wallet.strip().lower()
         fetches = []
         if wallet:
@@ -98,7 +102,7 @@ class PolymarketAccountMonitor:
             )
         if not fetches:
             await polymarket_account_store.set_error(None)
-            return
+            return None
 
         # 仓位、余额、挂单来自不同接口，互不依赖；并发拉取可以避免慢接口拖住其他账户状态。
         results = await asyncio.gather(*(fetch for _, fetch in fetches), return_exceptions=True)
@@ -113,9 +117,9 @@ class PolymarketAccountMonitor:
                 await polymarket_account_store.replace_balance(result)
             elif name == "orders":
                 await polymarket_account_store.replace_orders(result)
-        await polymarket_account_store.set_error(
-            f"Polymarket account fetch partially failed: {'; '.join(errors)}" if errors else None
-        )
+        error = f"Polymarket account fetch partially failed: {'; '.join(errors)}" if errors else None
+        await polymarket_account_store.set_error(error)
+        return error
 
     async def ws_loop(self) -> None:
         backoff = 1.0
@@ -195,25 +199,32 @@ class PolymarketAccountMonitor:
             return
         messages = payload if isinstance(payload, list) else [payload]
         changed_conditions: set[str | None] = set()
-        should_refresh_snapshot = False
+        trade_ids: set[str] = set()
         for message in messages:
             if not isinstance(message, dict):
                 continue
-            event_type = str(message.get("event_type") or message.get("type") or "").lower()
-            rows = normalize_event_rows(message)
-            if event_type == "order":
-                for row in rows:
+            for event_type, row in normalize_account_events(message):
+                if event_type == "order":
                     order = normalize_account_order(row)
                     await polymarket_account_store.apply_order(order)
                     changed_conditions.add(order.market)
-            elif event_type == "trade":
-                for row in rows:
+                elif event_type == "trade":
                     trade = normalize_account_trade(row)
                     await polymarket_account_store.apply_trade(trade)
                     changed_conditions.add(trade.market)
-                    should_refresh_snapshot = True
-        if should_refresh_snapshot:
-            await self.refresh_account_snapshot()
+                    trade_ids.add(trade.id)
+        if trade_ids:
+            await self.broadcast_changed_snapshots(changed_conditions)
+            snapshot_error = None
+            try:
+                snapshot_error = await self.refresh_account_snapshot()
+            except Exception:
+                logger.warning("Polymarket account snapshot refresh after trade failed", exc_info=True)
+                snapshot_error = "exception"
+            await polymarket_account_store.mark_trades_confirmation(
+                trade_ids,
+                TRADE_REFRESH_FAILED if snapshot_error else TRADE_CONFIRMED,
+            )
             changed_conditions.update(await polymarket_up_down_store.condition_ids())
         await self.broadcast_changed_snapshots(changed_conditions)
 
@@ -263,14 +274,53 @@ def user_subscription_payload(condition_ids: list[str], operation: str | None = 
     return payload
 
 
-def normalize_event_rows(message: dict[str, Any]) -> list[dict[str, Any]]:
-    for key in ("orders", "order", "trades", "trade", "data"):
-        value = message.get(key)
-        if isinstance(value, list):
-            return [row for row in value if isinstance(row, dict)]
-        if isinstance(value, dict):
-            return [value]
-    return [message]
+def normalize_account_events(message: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    events: list[tuple[str, dict[str, Any]]] = []
+    direct_type = account_event_type(message)
+    if direct_type in {"order", "trade"}:
+        events.append((direct_type, message))
+
+    for key, event_type in (("orders", "order"), ("order", "order"), ("trades", "trade"), ("trade", "trade")):
+        for row in dict_rows(message.get(key)):
+            events.append((event_type, row))
+
+    for row in dict_rows(message.get("data")):
+        nested_type = account_event_type(row)
+        if nested_type in {"order", "trade"}:
+            events.append((nested_type, row))
+    return dedupe_account_events(events)
+
+
+def account_event_type(row: dict[str, Any]) -> str:
+    event_type = str(row.get("event_type") or "").lower()
+    if event_type in {"order", "trade"}:
+        return event_type
+    value_type = str(row.get("type") or "").lower()
+    if value_type == "trade":
+        return "trade"
+    if value_type in {"placement", "update", "cancellation", "order"}:
+        return "order"
+    return ""
+
+
+def dict_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def dedupe_account_events(events: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
+    seen: set[tuple[str, int]] = set()
+    result: list[tuple[str, dict[str, Any]]] = []
+    for event_type, row in events:
+        key = (event_type, id(row))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append((event_type, row))
+    return result
 
 
 def clob_credentials_configured() -> bool:

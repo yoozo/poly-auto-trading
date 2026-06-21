@@ -10,6 +10,7 @@ import {
   type PolymarketAccountPosition,
   type PolymarketAccountState,
   type PolymarketAccountStateWsMessage,
+  type PolymarketAccountTrade,
   type PolymarketInterval,
   type PolymarketOutcomeQuote,
   type PolymarketUpDownMarket,
@@ -1011,6 +1012,7 @@ function AccountStatePanel({
 }) {
   const positions = accountState.positions.filter((position) => positionMatchesMarket(position, market));
   const orders = accountState.orders.filter((order) => orderMatchesMarket(order, market));
+  const trades = accountState.recent_trades.filter((trade) => tradeMatchesMarket(trade, market));
   const wsLabel = accountStateStatusLabel(accountState.ws_state);
   const queryClient = useQueryClient();
   const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
@@ -1042,6 +1044,7 @@ function AccountStatePanel({
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       {accountState.error && <Typography.Text type="secondary">{accountState.error}</Typography.Text>}
       <AccountPositionSection positions={positions} />
+      <AccountTradeSection trades={trades} />
       {orderNotice && (
         <Typography.Text className="polymarket-order-notice" type={orderNotice.includes("失败") ? "danger" : "secondary"}>
           {orderNotice}
@@ -1052,6 +1055,42 @@ function AccountStatePanel({
         cancelingOrderId={cancelingOrderId}
         onCancelOrder={(orderId) => cancelOrderMutation.mutate(orderId)}
       />
+    </div>
+  );
+}
+
+function AccountTradeSection({ trades }: { trades: PolymarketAccountTrade[] }) {
+  return (
+    <div className="polymarket-account-section">
+      <div className="polymarket-account-section-title">最近成交 / 待确认</div>
+      {trades.length === 0 ? (
+        <Typography.Text type="secondary">当前 market 暂无成交事件</Typography.Text>
+      ) : (
+        <div className="polymarket-account-table polymarket-trade-table">
+          <div className="polymarket-account-table-head">
+            <span>Side</span>
+            <span>Outcome</span>
+            <span>Price</span>
+            <span>Size</span>
+            <span>Time</span>
+            <span>Status</span>
+          </div>
+          {trades.map((trade) => (
+            <div className="polymarket-account-row" key={trade.id}>
+              <span className="polymarket-account-side">{formatOrderSide(trade.side)}</span>
+              <span className="polymarket-account-outcome-cell">
+                <span className={outcomePillClassName(trade.outcome)}>{trade.outcome ?? trade.asset_id ?? "-"}</span>
+              </span>
+              <span>{formatCents(trade.price)}</span>
+              <span>{formatSize(trade.size)}</span>
+              <span>{formatTradeTime(trade.timestamp ?? trade.received_at)}</span>
+              <span className={tradeStatusClassName(trade.confirmation_status)}>
+                {tradeStatusLabel(trade.confirmation_status)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1326,6 +1365,15 @@ function orderMatchesMarket(order: PolymarketAccountOrder, market: PolymarketUpD
   return market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId));
 }
 
+function tradeMatchesMarket(trade: PolymarketAccountTrade, market: PolymarketUpDownMarket) {
+  if (trade.market && market.condition_id && normalizeId(trade.market) !== normalizeId(market.condition_id)) {
+    return false;
+  }
+  const assetId = trade.asset_id;
+  if (!assetId) return true;
+  return market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId));
+}
+
 function normalizeId(value: string) {
   return value.toLowerCase();
 }
@@ -1361,6 +1409,23 @@ function formatOrderSide(side: string | null) {
   if (normalized === "buy") return "BUY";
   if (normalized === "sell") return "SELL";
   return side ?? "-";
+}
+
+function tradeStatusLabel(status: PolymarketAccountTrade["confirmation_status"]) {
+  if (status === "pending") return "待确认";
+  if (status === "refresh_failed") return "刷新失败";
+  return "已确认";
+}
+
+function tradeStatusClassName(status: PolymarketAccountTrade["confirmation_status"]) {
+  return `polymarket-account-trade-status ${status}`;
+}
+
+function formatTradeTime(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function formatBtcPrice(value: number) {

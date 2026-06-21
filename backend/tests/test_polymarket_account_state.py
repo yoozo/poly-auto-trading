@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 
 from app.core.config import settings
 from app.main import create_app
-from app.schemas.polymarket import PolymarketAccountBalance, PolymarketAccountOrder, PolymarketAccountPosition
+from app.schemas.polymarket import (
+    PolymarketAccountBalance,
+    PolymarketAccountOrder,
+    PolymarketAccountPosition,
+    PolymarketAccountTrade,
+)
 from app.services import polymarket_account_monitor
 from app.services.polymarket_account_monitor import (
     PolymarketAccountMonitor,
@@ -132,8 +137,109 @@ async def test_order_event_updates_store_and_trade_event_refreshes_snapshots(mon
     assert [order.id for order in snapshot.orders] == ["order-1"]
     assert [position.asset for position in snapshot.positions] == ["up-token"]
     assert [trade.id for trade in snapshot.recent_trades] == ["trade-1"]
+    assert [trade.confirmation_status for trade in snapshot.recent_trades] == ["confirmed"]
     assert None in broadcasts
     assert "0xabc" in broadcasts
+
+
+@pytest.mark.asyncio
+async def test_trade_event_broadcasts_pending_before_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+    snapshots: list[tuple[str | None, str]] = []
+    monitor = PolymarketAccountMonitor()
+
+    async def fake_refresh_account_snapshot() -> str | None:
+        return None
+
+    async def fake_broadcast_snapshot(condition_id: str | None) -> None:
+        snapshot = await store.snapshot(condition_id)
+        if snapshot.recent_trades:
+            snapshots.append((condition_id, snapshot.recent_trades[0].confirmation_status))
+
+    async def fake_condition_ids() -> list[str]:
+        return ["0xabc"]
+
+    monkeypatch.setattr(polymarket_account_monitor, "polymarket_account_store", store)
+    monkeypatch.setattr(monitor, "refresh_account_snapshot", fake_refresh_account_snapshot)
+    monkeypatch.setattr(monitor, "broadcast_snapshot", fake_broadcast_snapshot)
+    monkeypatch.setattr(polymarket_account_monitor.polymarket_up_down_store, "condition_ids", fake_condition_ids)
+
+    await monitor.handle_raw_message(
+        '{"event_type":"trade","id":"trade-1","market":"0xabc","asset_id":"up-token",'
+        '"side":"BUY","price":"0.52","size":"5","order_id":"order-1"}'
+    )
+
+    assert ("0xabc", "pending") in snapshots
+    assert ("0xabc", "confirmed") in snapshots
+
+
+@pytest.mark.asyncio
+async def test_user_ws_handles_nested_trade_data_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+    monitor = PolymarketAccountMonitor()
+
+    async def fake_refresh_account_snapshot() -> str | None:
+        return None
+
+    async def fake_broadcast_snapshot(condition_id: str | None) -> None:
+        return None
+
+    async def fake_condition_ids() -> list[str]:
+        return ["0xabc"]
+
+    monkeypatch.setattr(polymarket_account_monitor, "polymarket_account_store", store)
+    monkeypatch.setattr(monitor, "refresh_account_snapshot", fake_refresh_account_snapshot)
+    monkeypatch.setattr(monitor, "broadcast_snapshot", fake_broadcast_snapshot)
+    monkeypatch.setattr(polymarket_account_monitor.polymarket_up_down_store, "condition_ids", fake_condition_ids)
+
+    await monitor.handle_raw_message(
+        '{"type":"user","data":[{"event_type":"trade","id":"trade-1","market":"0xabc",'
+        '"asset_id":"up-token","side":"BUY","price":"0.52","size":"5","order_id":"order-1"}]}'
+    )
+
+    snapshot = await store.snapshot("0xabc")
+    assert [trade.id for trade in snapshot.recent_trades] == ["trade-1"]
+    assert [trade.confirmation_status for trade in snapshot.recent_trades] == ["confirmed"]
+
+
+@pytest.mark.asyncio
+async def test_trade_event_marks_refresh_failed_when_snapshot_refresh_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PolymarketAccountStore()
+    monitor = PolymarketAccountMonitor()
+
+    async def fake_refresh_account_snapshot() -> str | None:
+        return "Polymarket account fetch partially failed: balance: RuntimeError"
+
+    async def fake_broadcast_snapshot(condition_id: str | None) -> None:
+        return None
+
+    async def fake_condition_ids() -> list[str]:
+        return ["0xabc"]
+
+    monkeypatch.setattr(polymarket_account_monitor, "polymarket_account_store", store)
+    monkeypatch.setattr(monitor, "refresh_account_snapshot", fake_refresh_account_snapshot)
+    monkeypatch.setattr(monitor, "broadcast_snapshot", fake_broadcast_snapshot)
+    monkeypatch.setattr(polymarket_account_monitor.polymarket_up_down_store, "condition_ids", fake_condition_ids)
+
+    await monitor.handle_raw_message(
+        '{"event_type":"trade","id":"trade-1","market":"0xabc","asset_id":"up-token",'
+        '"side":"BUY","price":"0.52","size":"5","order_id":"order-1"}'
+    )
+
+    snapshot = await store.snapshot("0xabc")
+    assert [trade.confirmation_status for trade in snapshot.recent_trades] == ["refresh_failed"]
+
+
+@pytest.mark.asyncio
+async def test_store_dedupes_repeated_trade_events() -> None:
+    store = PolymarketAccountStore()
+
+    await store.apply_trade(make_trade("trade-1", "0xabc", "up-token"))
+    await store.apply_trade(make_trade("trade-1", "0xabc", "up-token"))
+
+    snapshot = await store.snapshot("0xabc")
+    assert [trade.id for trade in snapshot.recent_trades] == ["trade-1"]
+    assert snapshot.recent_trades[0].confirmation_status == "pending"
 
 
 @pytest.mark.asyncio
@@ -380,5 +486,20 @@ def make_order(order_id: str, condition_id: str, asset: str) -> PolymarketAccoun
         outcome="Up",
         created_at=None,
         updated_at=None,
+        raw={},
+    )
+
+
+def make_trade(trade_id: str, condition_id: str, asset: str) -> PolymarketAccountTrade:
+    return PolymarketAccountTrade(
+        id=trade_id,
+        market=condition_id,
+        asset_id=asset,
+        side="BUY",
+        price=0.52,
+        size=5,
+        outcome="Up",
+        timestamp=datetime(2026, 6, 19, tzinfo=timezone.utc),
+        order_id="order-1",
         raw={},
     )
