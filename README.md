@@ -29,14 +29,14 @@ just dev-api
 
 ## Configuration
 
-Non-secret runtime settings live in local `config/app.yaml`; use `config/app.example.yaml`
-as the committed template. Secrets stay in `.env`; use `.env.example` as the template for
+Non-secret runtime settings live in local `config/app.yaml` and are merged over
+`config/app.default.yaml`. Secrets stay in `.env`; use `.env.example` as the template for
 required secret keys.
 
 For a fresh setup:
 
 ```bash
-cp config/app.example.yaml config/app.yaml
+cp config/app.default.yaml config/app.yaml
 ```
 
 To migrate an existing all-in-one `.env` into the split format:

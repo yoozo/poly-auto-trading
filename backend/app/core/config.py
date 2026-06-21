@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 PROJECT_DIR = BACKEND_DIR.parent
 DEFAULT_CONFIG_PATH = PROJECT_DIR / "config" / "app.yaml"
+DEFAULT_YAML_CONFIG_PATH = PROJECT_DIR / "config" / "app.default.yaml"
 DEFAULT_ENV_FILES = (PROJECT_DIR / ".env", BACKEND_DIR / ".env")
 
 
@@ -277,14 +278,34 @@ class Settings:
 def load_yaml_config(config_path: Path | str | None) -> AppYamlConfig:
     if config_path is None:
         return AppYamlConfig()
+    raw = deep_merge_yaml(
+        read_yaml_config_file(DEFAULT_YAML_CONFIG_PATH),
+        read_yaml_config_file(config_path),
+    )
+    return AppYamlConfig.model_validate(raw)
+
+
+def read_yaml_config_file(config_path: Path | str) -> dict[str, Any]:
     path = Path(config_path)
     if not path.exists():
-        return AppYamlConfig()
+        return {}
     with path.open("r", encoding="utf-8") as file:
         raw = yaml.safe_load(file) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Config file must contain a YAML object: {path}")
-    return AppYamlConfig.model_validate(raw)
+    return raw
+
+
+def deep_merge_yaml(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        base_value = result.get(key)
+        # 本地 app.yaml 只需要写差异；dict 递归合并，列表和标量按本地值整体覆盖。
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            result[key] = deep_merge_yaml(base_value, value)
+        else:
+            result[key] = value
+    return result
 
 
 def first_or_default(values: list[str], default: str) -> str:

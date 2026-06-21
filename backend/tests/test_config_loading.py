@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.core.config import Settings
+from app.core.config import Settings, load_yaml_config
 
 
 def test_settings_loads_yaml_and_env_secrets(tmp_path: Path) -> None:
@@ -67,9 +67,51 @@ polymarket:
     assert settings.binance_rest_base_urls == ["https://binance-a.example", "https://binance-b.example"]
     assert settings.binance_ws_base_urls == ["wss://binance.example/ws"]
     assert settings.binance_intervals == ["1m", "4h"]
-    assert settings.signal_interval_base_scores == {"1m": 3.0, "4h": 8.0}
-    assert settings.signal_rsi_ema_diff_diff_bonus == [(10.0, 1.0), (20.0, 2.0)]
-    assert settings.signal_rsi_bonus == [(75.0, 1.0)]
+    assert settings.signal_interval_base_scores == {
+        "1m": 3.0,
+        "5m": 2.0,
+        "15m": 3.0,
+        "1h": 4.0,
+        "4h": 8.0,
+    }
+    assert settings.signal_rsi_ema_diff_diff_bonus == [
+        (10.0, 1.0),
+        (12.0, 0.0),
+        (15.0, 1.0),
+        (19.0, 2.0),
+        (20.0, 2.0),
+    ]
+    assert settings.signal_rsi_bonus == [
+        (70.0, 1.0),
+        (75.0, 1.0),
+        (80.0, 2.0),
+        (90.0, 3.0),
+    ]
     assert settings.telegram_enabled_default is True
     assert settings.polymarket_account_refresh_seconds == 11
     assert settings.polymarket_clob_api_key == "key"
+
+
+def test_yaml_config_merges_default_file_with_local_overrides(tmp_path: Path) -> None:
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text(
+        """
+app:
+  env: local-only
+binance:
+  intervals:
+    - 1m
+polymarket:
+  position_wallet: "0x0000000000000000000000000000000000000001"
+""",
+        encoding="utf-8",
+    )
+
+    yaml_config = load_yaml_config(config_path)
+
+    assert yaml_config.app.env == "local-only"
+    assert yaml_config.app.name == "poly-auto-trading"
+    assert yaml_config.binance.symbol == "BTCUSDT"
+    assert yaml_config.binance.intervals == ["1m"]
+    assert yaml_config.polymarket.gamma_base_url == "https://gamma-api.polymarket.com"
+    assert yaml_config.polymarket.position_wallet == "0x0000000000000000000000000000000000000001"
