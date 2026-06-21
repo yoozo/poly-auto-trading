@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db.session import AsyncSessionLocal
+from app.cron.scheduler import start_cron_scheduler, stop_cron_scheduler
 from app.services.binance_monitor import binance_monitor
 from app.services.polymarket_account_monitor import polymarket_account_monitor
 from app.services.polymarket_monitor import polymarket_market_monitor
@@ -26,9 +27,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await binance_monitor.start()
     await polymarket_market_monitor.start()
     await polymarket_account_monitor.start()
+    start_cron_scheduler()
     try:
         yield
     finally:
+        stop_cron_scheduler()
         await polymarket_account_monitor.stop()
         await polymarket_market_monitor.stop()
         await binance_monitor.stop()

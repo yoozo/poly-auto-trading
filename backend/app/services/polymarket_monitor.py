@@ -39,8 +39,6 @@ class PolymarketMarketMonitor:
             service_health_store.set("polymarket_ws", "idle")
             return
         self._tasks = [
-            # 定时刷新任务：每个边界窗口到期时补齐市场快照，解决首次启动和周期发现问题
-            asyncio.create_task(self.refresh_loop(), name="polymarket-market-refresh"),
             # WebSocket 任务：监听实时推送并发现市场变化；变化时触发订阅重建和快速兜底
             asyncio.create_task(self.ws_loop(), name="polymarket-market-ws"),
             # 广播任务：按固定周期把变更汇总后推送前端，降低瞬时抖动导致的高频更新
@@ -119,6 +117,12 @@ class PolymarketMarketMonitor:
         current_tokens = set(await polymarket_up_down_store.token_ids())
         if current_tokens != previous_tokens:
             self._token_change_event.set()
+
+    async def scheduled_refresh_once(self) -> None:
+        # cron 层负责“何时执行”，monitor 保留刷新后的状态推进和订阅变更信号。
+        await self.refresh_markets_once()
+        self._last_market_refresh_at = datetime.now(timezone.utc)
+        self._refresh_event.clear()
 
     async def broadcast_loop(self) -> None:
         # WS 事件会先落入内存缓存；前端快照按固定节奏合并推送，避免盘口高频抖动造成 UI 过载。
@@ -231,8 +235,14 @@ class PolymarketMarketMonitor:
             intervals = await polymarket_up_down_store.apply_ws_message(message)
             changed_intervals.update(intervals)
         if should_refresh_markets:
-            # WS 只能提示市场集合变化；真实 token/窗口仍由 refresh 统一发现并触发重订阅。
-            self._refresh_event.set()
+            # WS 只能提示市场集合变化；真实 token/窗口仍由 cron 统一发现并触发重订阅。
+            try:
+                from app.cron.scheduler import schedule_polymarket_market_signal_refresh
+
+                schedule_polymarket_market_signal_refresh()
+            except Exception:
+                logger.warning("Failed to schedule Polymarket market refresh signal", exc_info=True)
+                self._refresh_event.set()
         await self.queue_broadcast(changed_intervals)
 
     async def queue_broadcast(self, intervals: set[str]) -> None:

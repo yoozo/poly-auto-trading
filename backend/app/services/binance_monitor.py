@@ -30,7 +30,6 @@ class BinanceMonitor:
             service_health_store.set("binance_ws", "idle")
             return
         self._tasks = [
-            asyncio.create_task(self.backfill_loop(), name="binance-backfill"),
             asyncio.create_task(self.ws_loop(), name="binance-ws"),
         ]
 

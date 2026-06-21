@@ -38,7 +38,6 @@ class PolymarketAccountMonitor:
 
     async def start(self) -> None:
         self._tasks = [
-            asyncio.create_task(self.snapshot_loop(), name="polymarket-account-snapshot"),
             asyncio.create_task(self.subscription_watch_loop(), name="polymarket-account-subscriptions"),
         ]
         if not settings.polymarket_user_ws_enabled:
