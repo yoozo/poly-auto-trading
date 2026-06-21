@@ -143,11 +143,11 @@ export default function BTCWatchPage() {
     return () => mediaQuery.removeEventListener("change", syncVisibleCandles);
   }, []);
 
-  const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
-    queryKey: ["candles", interval],
-    queryFn: () => api.candles(interval, 300 + INDICATOR_WARMUP_BARS),
-  });
-  const { data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS, error: polymarketError } = useQuery({
+  const {
+    data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS,
+    error: polymarketError,
+    isFetched: polymarketSnapshotFetched,
+  } = useQuery({
     queryKey: ["polymarket-btc-up-down", polymarketInterval],
     queryFn: () => api.polymarketBtcUpDown(polymarketInterval, 12),
     // REST 只负责初始快照和切换 interval；后续盘口/窗口变化由 Polymarket WS 快照推送。
@@ -196,6 +196,43 @@ export default function BTCWatchPage() {
           candleInterval: interval,
         })
       : null;
+  const candleSnapshotEnabled = Boolean(
+    timeJumpFocus ||
+      selectedPolymarket ||
+      polymarketError ||
+      (polymarketSnapshotFetched && polymarketSnapshot.length === 0 && polymarketMarkets.length === 0)
+  );
+  const candleSnapshotQuery = useMemo(() => {
+    if (timeJumpFocus || polymarketChartFocusAnchorMs === null || !Number.isFinite(polymarketChartFocusAnchorMs)) {
+      return {
+        mode: "latest" as const,
+        queryKey: ["candles", interval, "latest"] as const,
+        queryFn: (signal: AbortSignal) => api.candles(interval, 300 + INDICATOR_WARMUP_BARS, { signal }),
+      };
+    }
+
+    const barMs = intervalMs(interval);
+    const visibleBars = Math.max(initialVisibleCandles, 80);
+    const startMs = Math.max(0, polymarketChartFocusAnchorMs - Math.round(visibleBars * 0.45) * barMs);
+    const endMs = polymarketChartFocusAnchorMs + Math.round(visibleBars * 0.65) * barMs;
+    const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
+    const warmupStartMs = withIndicatorWarmupStart(startMs, interval);
+
+    return {
+      mode: "focus" as const,
+      queryKey: ["candles", interval, "focus", warmupStartMs, endMs, limit + INDICATOR_WARMUP_BARS] as const,
+      queryFn: (signal: AbortSignal) =>
+        api.candlesRange(interval, warmupStartMs, endMs, limit + INDICATOR_WARMUP_BARS, { signal }),
+    };
+  }, [initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
+  const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
+    queryKey: candleSnapshotQuery.queryKey,
+    queryFn: ({ signal }) => candleSnapshotQuery.queryFn(signal),
+    enabled: candleSnapshotEnabled,
+    // K 线实时增量由 WS 维护；REST 只负责初始窗口/切换周期，避免浏览器聚焦时补打重复快照。
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
@@ -445,8 +482,15 @@ export default function BTCWatchPage() {
     if (timeJumpFocus || !chartFocusKey || polymarketChartFocusAnchorMs === null || !Number.isFinite(polymarketChartFocusAnchorMs)) {
       return;
     }
+    if (!candleSnapshotReadyRef.current) {
+      return;
+    }
     const focusAnchorMs = polymarketChartFocusAnchorMs;
     if (hasCandleAtTime(activeCandles, focusAnchorMs)) {
+      marketFocusDataRequestKeyRef.current = null;
+      return;
+    }
+    if (candleSnapshotQuery.mode === "focus") {
       marketFocusDataRequestKeyRef.current = null;
       return;
     }
@@ -463,7 +507,7 @@ export default function BTCWatchPage() {
     const endMs = focusAnchorMs + Math.round(visibleBars * 0.65) * barMs;
     const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
 
-    // Polymarket 周期和 K 线周期允许不同；缺目标 open_time 时按当前 K 线周期补齐锚点附近数据。
+    // 首屏 REST 快照先定基准；快照内仍缺目标 open_time 时，再按当前 K 线周期补齐锚点附近数据。
     void (async () => {
       try {
         const focusCandlesResult = await Promise.resolve(
@@ -493,7 +537,7 @@ export default function BTCWatchPage() {
         }
       }
     })();
-  }, [activeCandles, chartFocusKey, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
+  }, [activeCandles, candleSnapshotQuery.mode, chartFocusKey, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
 
   useEffect(() => {
     const requestEpoch = dataEpochRef.current;

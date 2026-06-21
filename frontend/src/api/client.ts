@@ -531,11 +531,12 @@ export const api = {
     if (targetKey) query.set("target_key", targetKey);
     return request<SignalRecord[]>(`/api/signals?${query.toString()}`);
   },
-  candles: (interval: CandleInterval, limit = 300) =>
-    request<Candle[]>(`/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}`),
-  candlesRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000) =>
+  candles: (interval: CandleInterval, limit = 300, init?: RequestInit) =>
+    request<Candle[]>(`/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}`, init),
+  candlesRange: (interval: CandleInterval, startMs: number, endMs: number, limit = 1000, init?: RequestInit) =>
     request<Candle[]>(
-      `/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`
+      `/api/candles?symbol=BTCUSDT&interval=${interval}&limit=${limit}&start_ms=${startMs}&end_ms=${endMs}`,
+      init
     ),
   systemTasks: () => request<SystemTaskStatus[]>("/api/system-tasks?symbol=BTCUSDT"),
   latestSystemTask: (taskType: SystemTaskType) =>
