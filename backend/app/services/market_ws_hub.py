@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import WebSocket
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class MarketWebSocketHub:
                 continue
             try:
                 await websocket.send_json(payload)
+            except WebSocketDisconnect:
+                disconnected.append(websocket)
             except Exception:
                 logger.exception("Market websocket broadcast failed", extra={"symbol": symbol, "interval": interval})
                 disconnected.append(websocket)
