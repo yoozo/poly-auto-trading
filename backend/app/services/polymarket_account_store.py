@@ -110,10 +110,19 @@ class PolymarketAccountStore:
                 if normalize_key(position.condition_id) == normalized_condition
             ]
             orders = [order for order in orders if normalize_key(order.market) == normalized_condition]
+            condition_assets = {
+                normalize_key(position.asset)
+                for position in positions
+                if position.asset
+            } | {
+                normalize_key(order.asset_id)
+                for order in orders
+                if order.asset_id
+            }
             recent_trades = [
                 trade
                 for trade in recent_trades
-                if normalize_key(trade.market) == normalized_condition
+                if trade_matches_condition(trade, normalized_condition, condition_assets)
             ]
         return PolymarketAccountState(
             wallet=settings.polymarket_position_wallet.lower() or None,
@@ -152,6 +161,18 @@ def dedupe_recent_trade(trades: list[PolymarketAccountTrade]) -> list[Polymarket
 
 def normalize_key(value: str | None) -> str | None:
     return value.lower() if value else None
+
+
+def trade_matches_condition(
+    trade: PolymarketAccountTrade,
+    condition_id: str,
+    condition_assets: set[str | None],
+) -> bool:
+    trade_market = normalize_key(trade.market)
+    if trade_market == condition_id:
+        return True
+    trade_asset = normalize_key(trade.asset_id)
+    return bool(trade_asset and trade_asset in condition_assets)
 
 
 def utc_now() -> datetime:

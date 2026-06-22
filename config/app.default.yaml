@@ -44,12 +44,18 @@ polymarket:
   user_ws_enabled: true
   ws_user_url: wss://ws-subscriptions-clob.polymarket.com/ws/user
   position_wallet: ""
-  account_refresh_seconds: 30
+  # 账户快照 REST 兜底刷新周期：拉 positions、balance/allowance、open orders；代码层最小值为 5 秒。
+  account_refresh_seconds: 10
+  # BTC Up/Down 市场发现的兜底间隔；真实调度会结合市场开始/结束边界动态提前刷新。
   market_refresh_seconds: 60
+  # 在市场边界前后保留一个刷新窗口，用于及时发现新窗口 token 并重建 market WS 订阅。
   market_boundary_refresh_window_seconds: 3
+  # 启动或异常情况下若没有发现市场，按这个间隔快速重试，避免空订阅长期挂起。
   market_empty_retry_seconds: 5
+  # market WS 收到 new_market/market_resolved 后触发 REST 刷新的最小间隔，避免事件抖动造成高频拉取。
   market_signal_refresh_min_seconds: 30
-  ws_broadcast_interval_seconds: 0.2
+  # 后端向前端广播 Polymarket 快照的节流间隔；不影响 Polymarket 上游 REST/WS 拉取频率。
+  ws_broadcast_interval_seconds: 0.3
 signals:
   interval_base_scores:
     1m: 1

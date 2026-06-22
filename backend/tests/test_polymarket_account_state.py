@@ -243,6 +243,19 @@ async def test_store_dedupes_repeated_trade_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_store_filters_trade_by_asset_when_trade_market_is_missing() -> None:
+    store = PolymarketAccountStore()
+    await store.replace_positions([make_position("0xabc", "up-token")])
+    await store.apply_trade(make_trade("trade-1", None, "up-token"))
+
+    matching_snapshot = await store.snapshot("0xabc")
+    other_snapshot = await store.snapshot("0xdef")
+
+    assert [trade.id for trade in matching_snapshot.recent_trades] == ["trade-1"]
+    assert other_snapshot.recent_trades == []
+
+
+@pytest.mark.asyncio
 async def test_refresh_account_snapshot_fetches_independent_sources_concurrently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -490,7 +503,7 @@ def make_order(order_id: str, condition_id: str, asset: str) -> PolymarketAccoun
     )
 
 
-def make_trade(trade_id: str, condition_id: str, asset: str) -> PolymarketAccountTrade:
+def make_trade(trade_id: str, condition_id: str | None, asset: str) -> PolymarketAccountTrade:
     return PolymarketAccountTrade(
         id=trade_id,
         market=condition_id,
