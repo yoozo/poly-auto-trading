@@ -1,9 +1,9 @@
 import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Typography } from "antd";
+import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Typography, notification } from "antd";
 import type { MenuProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ClobClient, Side } from "@polymarket/clob-client-v2";
+import { ClobClient, OrderType, Side } from "@polymarket/clob-client-v2";
 import { createWalletClient, custom, type Address } from "viem";
 import { polygon } from "viem/chains";
 import {
@@ -67,6 +67,7 @@ const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
 const POLYGON_CHAIN_ID = "0x89";
 const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
+const DEFAULT_ORDER_AMOUNT = 5;
 // React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
 const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
 const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
@@ -1067,7 +1068,21 @@ function AccountStatePanel({
   const wsLabel = accountStateStatusLabel(accountState.ws_state);
   const queryClient = useQueryClient();
   const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
-  const [orderNotice, setOrderNotice] = useState<string | null>(null);
+  const [notificationApi, notificationContextHolder] = notification.useNotification();
+  const showTradeNotice = useCallback(
+    (type: "success" | "error" | "warning", message: string, description?: string) => {
+      const options = {
+        message,
+        description,
+        placement: "topRight" as const,
+        duration: 4,
+      };
+      if (type === "success") notificationApi.success(options);
+      if (type === "error") notificationApi.error(options);
+      if (type === "warning") notificationApi.warning(options);
+    },
+    [notificationApi],
+  );
   const credentialsQuery = useQuery({
     queryKey: ["polymarket-credentials"],
     queryFn: api.polymarketCredentials,
@@ -1081,14 +1096,13 @@ function AccountStatePanel({
     mutationFn: api.cancelPolymarketOrder,
     onMutate: (orderId: string) => {
       setCancelingOrderId(orderId);
-      setOrderNotice(null);
     },
     onSuccess: () => {
-      setOrderNotice("撤单已提交");
+      showTradeNotice("success", "撤单已提交");
       queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
     },
     onError: (mutationError) => {
-      setOrderNotice(errorMessage(mutationError));
+      showTradeNotice("error", "撤单失败", errorMessage(mutationError));
     },
     onSettled: () => {
       setCancelingOrderId(null);
@@ -1118,35 +1132,31 @@ function AccountStatePanel({
   }
   return (
     <div className="polymarket-account-panel">
+      {notificationContextHolder}
       <div className="polymarket-account-head">
         <Typography.Text strong>我的账户</Typography.Text>
         <Typography.Text type="secondary">{wsLabel}</Typography.Text>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       {accountState.error && <Typography.Text type="secondary">{accountStateErrorSummary(accountState.error)}</Typography.Text>}
+      <PolymarketOrderEntry
+        market={market}
+        positions={positions}
+        tradingRestriction={accountState.trading_restriction}
+        activeCredential={activeCredential}
+        onNotice={showTradeNotice}
+        onOrderSubmitted={() => {
+          queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
+          queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
+        }}
+      />
       <AccountPositionSection market={market} positions={positions} trades={trades} />
       <AccountOrderSection
         orders={orders}
         cancelingOrderId={cancelingOrderId}
         onCancelOrder={(orderId) => cancelOrderMutation.mutate(orderId)}
       />
-      <PolymarketOrderEntry
-        market={market}
-        positions={positions}
-        tradingRestriction={accountState.trading_restriction}
-        activeCredential={activeCredential}
-        onNotice={setOrderNotice}
-        onOrderSubmitted={() => {
-          queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
-          queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
-        }}
-      />
       <AccountTradeSection trades={trades} />
-      {orderNotice && (
-        <Typography.Text className="polymarket-order-notice" type={orderNotice.includes("失败") ? "danger" : "secondary"}>
-          {orderNotice}
-        </Typography.Text>
-      )}
     </div>
   );
 }
@@ -1163,19 +1173,24 @@ function PolymarketOrderEntry({
   positions: PolymarketAccountPosition[];
   tradingRestriction: PolymarketAccountState["trading_restriction"];
   activeCredential: PolymarketCredentialProfile | null;
-  onNotice: (notice: string | null) => void;
+  onNotice: (type: "success" | "error" | "warning", message: string, description?: string) => void;
   onOrderSubmitted: () => void;
 }) {
   const firstTokenId = market.outcome_quotes.find((quote) => quote.token_id)?.token_id ?? null;
   const [tokenId, setTokenId] = useState<string | null>(firstTokenId);
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [orderMode, setOrderMode] = useState<"MARKET" | "LIMIT">("MARKET");
   const [priceCents, setPriceCents] = useState<number | null>(() => defaultOrderPriceCents(market.outcome_quotes[0], "BUY"));
-  const [size, setSize] = useState<number | null>(null);
+  const [amount, setAmount] = useState<number | null>(DEFAULT_ORDER_AMOUNT);
   const [submitting, setSubmitting] = useState(false);
   const selectedQuote = market.outcome_quotes.find((quote) => quote.token_id === tokenId) ?? market.outcome_quotes[0] ?? null;
   const selectedOutcome = selectedQuote?.name ?? "-";
   const closeOnly = Boolean(tradingRestriction?.close_only);
   const selectedPositionSize = selectedQuote?.token_id ? positionSizeForToken(positions, selectedQuote.token_id) : 0;
+  const marketPrice = marketOrderPrice(selectedQuote, side);
+  const inputLabel = orderMode === "MARKET" && side === "BUY" ? "Amount" : "Shares";
+  const inputSuffix = orderMode === "MARKET" && side === "BUY" ? "USDC" : "shares";
+  const maxInput = side === "SELL" ? selectedPositionSize : undefined;
   const sideOptions = closeOnly
     ? [{ label: "Sell", value: "SELL" }]
     : [
@@ -1186,10 +1201,11 @@ function PolymarketOrderEntry({
     activeCredential &&
       market.accepting_orders &&
       selectedQuote?.token_id &&
-      priceCents &&
-      size &&
-      size > 0 &&
-      (!closeOnly || (side === "SELL" && size <= selectedPositionSize)),
+      amount &&
+      amount > 0 &&
+      (orderMode === "MARKET" || priceCents) &&
+      (!closeOnly || side === "SELL") &&
+      (side !== "SELL" || amount <= selectedPositionSize),
   );
 
   useEffect(() => {
@@ -1206,33 +1222,32 @@ function PolymarketOrderEntry({
   }, [closeOnly, side]);
 
   const handleSubmit = async () => {
-    onNotice(null);
     if (!activeCredential) {
-      onNotice("请先点击右上角账户区域连接 MetaMask，并启用匹配的 wallet profile");
+      onNotice("warning", "无法下单", "请先点击右上角账户区域连接 MetaMask，并启用匹配的 wallet profile");
       return;
     }
     if (!market.accepting_orders) {
-      onNotice("当前 market 暂停接单");
+      onNotice("warning", "无法下单", "当前 market 暂停接单");
       return;
     }
     if (!selectedQuote?.token_id) {
-      onNotice("当前 outcome 缺少 token_id，无法下单");
+      onNotice("warning", "无法下单", "当前 outcome 缺少 token_id，无法下单");
       return;
     }
-    if (!priceCents || priceCents <= 0 || priceCents >= 100) {
-      onNotice("请输入 1-99¢ 的限价");
+    if (orderMode === "LIMIT" && (!priceCents || priceCents <= 0 || priceCents >= 100)) {
+      onNotice("warning", "请输入有效限价", "请输入 1-99¢ 的限价");
       return;
     }
-    if (!size || size <= 0) {
-      onNotice("请输入下单 size");
+    if (!amount || amount <= 0) {
+      onNotice("warning", "请输入数量", side === "BUY" && orderMode === "MARKET" ? "请输入买入金额" : "请输入 shares 数量");
       return;
     }
     if (closeOnly && side === "BUY") {
-      onNotice("当前地区为 close-only，只允许 SELL 平仓");
+      onNotice("warning", "当前地区为 close-only", "只允许 SELL 平仓");
       return;
     }
-    if (closeOnly && side === "SELL" && size > selectedPositionSize) {
-      onNotice(`当前地区为 close-only，SELL size 不能超过持仓 ${formatSize(selectedPositionSize)}`);
+    if (side === "SELL" && amount > selectedPositionSize) {
+      onNotice("warning", "SELL size 超出持仓", `不能超过当前持仓 ${formatSize(selectedPositionSize)}`);
       return;
     }
     setSubmitting(true);
@@ -1258,31 +1273,49 @@ function PolymarketOrderEntry({
         signatureType: activeCredential.signature_type,
         funderAddress: activeCredential.funder_address,
       });
-      const price = priceCents / 100;
-      const signedOrder = await clobClient.createOrder(
-        {
-          tokenID: selectedQuote.token_id,
-          price,
-          side: side === "BUY" ? Side.BUY : Side.SELL,
-          size,
-        },
-        { tickSize: "0.01" },
-      );
+      const price = orderMode === "LIMIT" ? (priceCents ?? 0) / 100 : marketPrice ?? selectedQuote.price ?? selectedQuote.last_trade_price ?? 0;
+      const signedOrder =
+        orderMode === "MARKET"
+          ? await clobClient.createMarketOrder(
+              {
+                tokenID: selectedQuote.token_id,
+                amount,
+                side: side === "BUY" ? Side.BUY : Side.SELL,
+                price: marketPrice ?? undefined,
+                orderType: OrderType.FOK,
+              },
+              { tickSize: "0.01" },
+            )
+          : await clobClient.createOrder(
+              {
+                tokenID: selectedQuote.token_id,
+                price,
+                side: side === "BUY" ? Side.BUY : Side.SELL,
+                size: amount,
+              },
+              { tickSize: "0.01" },
+            );
       const response = await api.postSignedPolymarketOrder({
         signed_order: signedOrder as unknown as Record<string, unknown>,
         condition_id: market.condition_id,
         token_id: selectedQuote.token_id,
         side,
         price,
-        size,
-        order_type: "GTC",
-        post_only: true,
+        size: amount,
+        order_type: orderMode === "MARKET" ? "FOK" : "GTC",
+        post_only: orderMode === "LIMIT",
         defer_exec: false,
       });
-      onNotice(response.order_id ? `挂单已提交：${shortAddress(response.order_id)}` : "挂单已提交");
+      onNotice(
+        "success",
+        "下单已提交",
+        response.order_id
+          ? `${orderMode === "MARKET" ? "市价单" : "挂单"}已提交：${shortAddress(response.order_id)}`
+          : `${orderMode === "MARKET" ? "市价单" : "挂单"}已提交`,
+      );
       onOrderSubmitted();
     } catch (error) {
-      onNotice(`下单失败：${errorMessage(error)}`);
+      onNotice("error", "下单失败", errorMessage(error));
     } finally {
       setSubmitting(false);
     }
@@ -1290,58 +1323,100 @@ function PolymarketOrderEntry({
 
   return (
     <div className="polymarket-account-section">
-      <div className="polymarket-account-section-title">创建挂单</div>
-      <div className="polymarket-order-entry">
+      <div className={`polymarket-order-entry ${side.toLowerCase()} ${selectedOutcome.toLowerCase()}`}>
+        <div className="polymarket-order-entry-head">
+          <div>
+            <span>交易</span>
+            <small>{market.accepting_orders ? "当前 market 可交易" : "暂停接单"}</small>
+          </div>
+          <strong>{selectedOutcome} {formatCents(marketPrice)}</strong>
+        </div>
         <div className="polymarket-order-entry-controls">
-          <Segmented
-            size="small"
-            value={tokenId ?? undefined}
-            options={market.outcome_quotes.map((quote) => ({ label: quote.name, value: quote.token_id ?? quote.name }))}
-            onChange={(value) => setTokenId(String(value))}
-          />
           <Segmented
             size="small"
             value={side}
             options={sideOptions}
             onChange={(value) => setSide(value as "BUY" | "SELL")}
           />
+          <Segmented
+            size="small"
+            value={orderMode}
+            options={[
+              { label: "Market", value: "MARKET" },
+              { label: "Limit", value: "LIMIT" },
+            ]}
+            onChange={(value) => setOrderMode(value as "MARKET" | "LIMIT")}
+          />
+        </div>
+        <div className="polymarket-outcome-selector">
+          <Segmented
+            size="small"
+            value={tokenId ?? undefined}
+            options={market.outcome_quotes.map((quote) => ({ label: quote.name, value: quote.token_id ?? quote.name }))}
+            onChange={(value) => setTokenId(String(value))}
+          />
+          <Typography.Text type="secondary">
+            {selectedOutcome} {formatCents(marketPrice)}
+          </Typography.Text>
         </div>
         <div className="polymarket-order-entry-inputs">
+          {orderMode === "LIMIT" && (
+            <label>
+              Price
+              <InputNumber
+                min={1}
+                max={99}
+                step={1}
+                value={priceCents}
+                addonAfter="¢"
+                onChange={(value) => setPriceCents(typeof value === "number" ? value : null)}
+              />
+            </label>
+          )}
           <label>
-            Price
-            <InputNumber
-              min={1}
-              max={99}
-              step={1}
-              value={priceCents}
-              addonAfter="¢"
-              onChange={(value) => setPriceCents(typeof value === "number" ? value : null)}
-            />
-          </label>
-          <label>
-            Size
+            {inputLabel}
             <InputNumber
               min={0.01}
-              max={closeOnly && side === "SELL" ? selectedPositionSize : undefined}
+              max={maxInput}
               step={1}
-              value={size}
-              placeholder="shares"
-              onChange={(value) => setSize(typeof value === "number" ? value : null)}
+              value={amount}
+              addonAfter={inputSuffix}
+              placeholder={side === "BUY" && orderMode === "MARKET" ? "USDC" : "shares"}
+              onChange={(value) => setAmount(typeof value === "number" ? value : null)}
             />
           </label>
         </div>
+        {side === "SELL" && (
+          <div className="polymarket-order-entry-presets">
+            {[0.25, 0.5, 0.75, 1].map((ratio) => (
+              <Button key={ratio} size="small" onClick={() => setAmount(roundInputAmount(selectedPositionSize * ratio))}>
+                {ratio === 1 ? "Max" : `${Math.round(ratio * 100)}%`}
+              </Button>
+            ))}
+          </div>
+        )}
+        {side === "BUY" && orderMode === "MARKET" && (
+          <div className="polymarket-order-entry-presets">
+            {[1, 5, 10, 100].map((preset) => (
+              <Button key={preset} size="small" onClick={() => setAmount(roundInputAmount((amount ?? 0) + preset))}>
+                +${preset}
+              </Button>
+            ))}
+          </div>
+        )}
         <div className="polymarket-order-entry-submit">
           <div className="polymarket-order-entry-meta">
-            <Checkbox checked disabled>
-              Post only · GTC
+            <Checkbox checked={orderMode === "LIMIT"} disabled>
+              {orderMode === "LIMIT" ? "Post only · GTC" : "FOK · immediate"}
             </Checkbox>
             <span>
-              {selectedOutcome} / {side} / {priceCents ? `${priceCents}¢` : "-"} / {size ? formatSize(size) : "-"}
-              {closeOnly && side === "SELL" ? ` / max ${formatSize(selectedPositionSize)}` : ""}
+              {selectedOutcome} / {side} / {orderMode === "MARKET" ? "Market" : priceCents ? `${priceCents}¢` : "-"} /{" "}
+              {amount ? formatSize(amount) : "-"} {inputSuffix}
+              {side === "SELL" ? ` / max ${formatSize(selectedPositionSize)}` : ""}
             </span>
           </div>
           <Button type="primary" size="small" loading={submitting} disabled={!canSubmit} onClick={handleSubmit}>
-            挂单
+            {orderMode === "MARKET" ? (side === "BUY" ? "市价买入" : "市价卖出") : "挂单"}
           </Button>
         </div>
         {!activeCredential && (
@@ -1650,6 +1725,17 @@ function defaultOrderPriceCents(quote: PolymarketOutcomeQuote | null | undefined
   if (!quote) return null;
   const value = side === "BUY" ? quote.best_bid ?? quote.sell_price ?? quote.price : quote.best_ask ?? quote.buy_price ?? quote.price;
   return value == null ? null : Math.round(value * 100);
+}
+
+function marketOrderPrice(quote: PolymarketOutcomeQuote | null | undefined, side: "BUY" | "SELL") {
+  if (!quote) return null;
+  return side === "BUY"
+    ? quote.buy_price ?? quote.best_ask ?? quote.price ?? quote.last_trade_price
+    : quote.sell_price ?? quote.best_bid ?? quote.price ?? quote.last_trade_price;
+}
+
+function roundInputAmount(value: number) {
+  return Math.max(0, Math.round(value * 100) / 100);
 }
 
 function positionSizeForToken(positions: PolymarketAccountPosition[], tokenId: string) {

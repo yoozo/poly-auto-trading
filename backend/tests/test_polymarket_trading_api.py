@@ -127,6 +127,62 @@ def test_post_signed_order_submits_sanitized_payload(monkeypatch: pytest.MonkeyP
     assert "api-secret" not in str(response.json())
 
 
+def test_post_signed_market_order_skips_limit_price_size_equality(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_credentials = RuntimePolymarketCredentials(
+        source="db",
+        credential_id="profile-1",
+        signer_address=SIGNER,
+        funder_address=FUNDER,
+        signature_type=3,
+        api_key="api-key-owner",
+        api_secret="api-secret",
+        api_passphrase="api-pass",
+    )
+    submitted: dict = {}
+
+    async def fake_resolve_runtime_credentials() -> RuntimePolymarketCredentials:
+        return runtime_credentials
+
+    async def fake_post_signed_order(self, **kwargs):  # noqa: ANN001
+        submitted.update(kwargs)
+        return {"success": True, "orderID": "0xmarket", "status": "matched", "errorMsg": ""}
+
+    async def fake_fetch_trading_restriction(self):  # noqa: ANN001
+        return PolymarketTradingRestriction(blocked=False, close_only=False, country="HK")
+
+    async def fake_refresh() -> None:
+        return None
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket, "resolve_runtime_credentials", fake_resolve_runtime_credentials)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "post_signed_order", fake_post_signed_order)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "fetch_trading_restriction", fake_fetch_trading_restriction)
+    monkeypatch.setattr(routes_polymarket, "refresh_account_state_after_order", fake_refresh)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post(
+        "/api/polymarket/orders/signed",
+        json={
+            "signed_order": make_signed_order(side="BUY", maker_amount="2500000", taker_amount="4550000"),
+            "token_id": "token-1",
+            "side": "BUY",
+            "price": 0.01,
+            "size": 1,
+            "order_type": "FOK",
+            "post_only": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["order_id"] == "0xmarket"
+    assert submitted["order_type"] == "FOK"
+    assert submitted["post_only"] is False
+
+
 def test_post_signed_order_http_error_does_not_echo_response_body(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_credentials = RuntimePolymarketCredentials(
         source="db",

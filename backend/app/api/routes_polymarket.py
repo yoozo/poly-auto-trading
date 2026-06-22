@@ -315,12 +315,17 @@ def validate_order_amounts(request: PolymarketSignedOrderRequest) -> None:
     try:
         maker_amount = Decimal(str(order.get("makerAmount")))
         taker_amount = Decimal(str(order.get("takerAmount")))
-        request_price = Decimal(str(request.price))
-        request_size = Decimal(str(request.size))
     except (InvalidOperation, TypeError) as exc:
         raise PolymarketInputError("signed_order makerAmount/takerAmount must be numeric") from exc
     if maker_amount <= 0 or taker_amount <= 0:
         raise PolymarketInputError("signed_order makerAmount/takerAmount must be positive")
+    if request.order_type in {"FOK", "FAK"}:
+        return
+    try:
+        request_price = Decimal(str(request.price))
+        request_size = Decimal(str(request.size))
+    except (InvalidOperation, TypeError) as exc:
+        raise PolymarketInputError("order price/size must be numeric") from exc
     unit = Decimal("1000000")
     if request.side == "BUY":
         signed_size = taker_amount / unit

@@ -2377,14 +2377,89 @@ body[data-theme="dark"] .app-account-login-action {
 }
 
 .polymarket-order-entry {
-  padding: 8px;
-  border: 1px solid #eef1f5;
-  border-radius: 6px;
-  background: #ffffff;
+  --trade-accent: #155eef;
+  --trade-accent-soft: rgba(21, 94, 239, 0.1);
+  --trade-accent-border: #bfdbfe;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--trade-accent-border);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(239, 246, 255, 0.82) 0%, rgba(255, 255, 255, 0.96) 42%),
+    #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
+
+.polymarket-order-entry.buy,
+.polymarket-order-entry.up {
+  --trade-accent: #067647;
+  --trade-accent-soft: rgba(16, 185, 129, 0.13);
+  --trade-accent-border: rgba(16, 185, 129, 0.34);
+}
+
+.polymarket-order-entry.sell,
+.polymarket-order-entry.down {
+  --trade-accent: #b42318;
+  --trade-accent-soft: rgba(248, 113, 113, 0.14);
+  --trade-accent-border: rgba(248, 113, 113, 0.38);
+}
+
+.polymarket-order-entry.buy.down {
+  --trade-accent: #b42318;
+  --trade-accent-soft: rgba(248, 113, 113, 0.14);
+  --trade-accent-border: rgba(248, 113, 113, 0.38);
+}
+
+.polymarket-order-entry.sell.up {
+  --trade-accent: #067647;
+  --trade-accent-soft: rgba(16, 185, 129, 0.13);
+  --trade-accent-border: rgba(16, 185, 129, 0.34);
+}
+
+.polymarket-order-entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 2px;
+}
+
+.polymarket-order-entry-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.polymarket-order-entry-head span {
+  color: #17202a;
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.polymarket-order-entry-head small {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-order-entry-head strong {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--trade-accent-soft);
+  color: var(--trade-accent);
+  font-size: 13px;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
 .polymarket-order-entry-controls,
+.polymarket-outcome-selector,
 .polymarket-order-entry-inputs,
+.polymarket-order-entry-presets,
 .polymarket-order-entry-submit {
   display: grid;
   min-width: 0;
@@ -2393,19 +2468,72 @@ body[data-theme="dark"] .app-account-login-action {
 
 .polymarket-order-entry-controls {
   grid-template-columns: minmax(0, 1fr) auto;
+  padding: 4px;
+  border-radius: 7px;
+  background: rgba(241, 245, 249, 0.88);
+}
+
+.polymarket-order-entry-controls .ant-segmented,
+.polymarket-outcome-selector .ant-segmented {
+  background: transparent;
+}
+
+.polymarket-order-entry-controls .ant-segmented-item-selected,
+.polymarket-outcome-selector .ant-segmented-item-selected {
+  color: var(--trade-accent);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+}
+
+.polymarket-outcome-selector {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  padding: 4px;
+  border-radius: 7px;
+  background: rgba(241, 245, 249, 0.72);
+}
+
+.polymarket-outcome-selector .ant-segmented {
+  width: 100%;
+}
+
+.polymarket-outcome-selector .ant-segmented-group {
+  width: 100%;
+  gap: 4px;
+}
+
+.polymarket-outcome-selector .ant-segmented-item {
+  flex: 1;
+}
+
+.polymarket-outcome-selector .ant-typography {
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .polymarket-order-entry-inputs {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  padding: 10px;
+  border: 1px solid var(--trade-accent-border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.polymarket-order-entry-inputs label:only-child {
+  grid-column: 1 / -1;
 }
 
 .polymarket-order-entry-inputs label {
   display: grid;
   min-width: 0;
-  gap: 4px;
+  gap: 6px;
   color: #667085;
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 850;
   text-transform: uppercase;
 }
 
@@ -2414,9 +2542,39 @@ body[data-theme="dark"] .app-account-login-action {
   width: 100%;
 }
 
+.polymarket-order-entry-inputs .ant-input-number-group-addon {
+  min-width: 54px;
+  color: #344054;
+  font-weight: 800;
+}
+
+.polymarket-order-entry-inputs .ant-input-number-input {
+  height: 34px;
+  color: #17202a;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.polymarket-order-entry-presets {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.polymarket-order-entry-presets .ant-btn {
+  min-width: 0;
+  height: 30px;
+  border-color: #d0d5dd;
+  font-weight: 700;
+  background: #ffffff;
+}
+
 .polymarket-order-entry-submit {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(90deg, var(--trade-accent-soft), rgba(241, 245, 249, 0.72));
 }
 
 .polymarket-order-entry-meta {
@@ -2440,12 +2598,36 @@ body[data-theme="dark"] .app-account-login-action {
   font-size: 12px;
 }
 
-.polymarket-order-notice {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.polymarket-order-entry-submit .ant-btn-primary {
+  min-width: 92px;
+  height: 34px;
+  border-color: var(--trade-accent);
+  border-radius: 7px;
+  background: var(--trade-accent);
+  color: #ffffff;
+  font-weight: 850;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.18);
+}
+
+.polymarket-order-entry-submit .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):hover,
+.polymarket-order-entry-submit .ant-btn-primary:not(:disabled):not(.ant-btn-disabled):focus-visible {
+  border-color: var(--trade-accent);
+  background: var(--trade-accent);
+  color: #ffffff;
+  filter: brightness(0.96);
+}
+
+.polymarket-order-entry-submit .ant-btn-primary span {
+  color: inherit;
+}
+
+.polymarket-order-entry-submit .ant-btn-primary:disabled,
+.polymarket-order-entry-submit .ant-btn-primary.ant-btn-disabled {
+  border-color: #d0d5dd;
+  background: #f2f4f7;
+  color: #98a2b3;
+  box-shadow: none;
+  filter: none;
 }
 
 .polymarket-account-action-cell {
@@ -3451,6 +3633,61 @@ body[data-theme="dark"] .polymarket-order-entry {
   border-color: #263244;
   background: #101720;
   color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-order-entry {
+  --trade-accent: #60a5fa;
+  --trade-accent-soft: rgba(96, 165, 250, 0.12);
+  --trade-accent-border: rgba(96, 165, 250, 0.28);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(16, 23, 32, 0.98) 52%),
+    #101720;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+body[data-theme="dark"] .polymarket-order-entry.buy,
+body[data-theme="dark"] .polymarket-order-entry.up {
+  --trade-accent: #34d399;
+  --trade-accent-soft: rgba(16, 185, 129, 0.14);
+  --trade-accent-border: rgba(52, 211, 153, 0.36);
+}
+
+body[data-theme="dark"] .polymarket-order-entry.sell,
+body[data-theme="dark"] .polymarket-order-entry.down {
+  --trade-accent: #f87171;
+  --trade-accent-soft: rgba(248, 113, 113, 0.14);
+  --trade-accent-border: rgba(248, 113, 113, 0.36);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-head span,
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-input {
+  color: #f8fafc;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-head small {
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-controls,
+body[data-theme="dark"] .polymarket-outcome-selector,
+body[data-theme="dark"] .polymarket-order-entry-submit {
+  background: rgba(30, 41, 55, 0.74);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-inputs {
+  border-color: var(--trade-accent-border);
+  background: rgba(15, 23, 42, 0.66);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-group-addon {
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-submit .ant-btn-primary:disabled,
+body[data-theme="dark"] .polymarket-order-entry-submit .ant-btn-primary.ant-btn-disabled {
+  border-color: #334155;
+  background: #1e2937;
+  color: #64748b;
 }
 
 body[data-theme="dark"] .polymarket-account-row {
