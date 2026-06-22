@@ -23,7 +23,6 @@ from polymarket import (
 from polymarket._internal.actions import data as polymarket_data_actions
 from polymarket._internal.pagination import encode_offset_cursor
 from py_clob_client_v2 import BookParams, ClobClient
-from py_clob_client_v2.clob_types import ApiCreds
 from py_clob_client_v2.signing.hmac import build_hmac_signature
 
 from app.core.config import settings
@@ -32,8 +31,13 @@ from app.schemas.polymarket import (
     PolymarketAccountOrder,
     PolymarketAccountPosition,
     PolymarketAccountTrade,
+    PolymarketTradingRestriction,
 )
 from app.services.external_http import is_retryable_http_error, with_retry
+from app.services.polymarket_credentials import (
+    RuntimePolymarketCredentials,
+    resolve_runtime_credentials,
+)
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,8 @@ UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
 }
+CLOSE_ONLY_COUNTRIES = {"PL", "SG", "TH", "TW"}
+GEOBLOCK_URL = "https://polymarket.com/api/geoblock"
 
 
 @dataclass(frozen=True)
@@ -238,7 +244,7 @@ class PolymarketClient:
 
     async def fetch_positions(self, wallet: str, size_threshold: float = 0) -> list[PolymarketAccountPosition]:
         if not is_wallet(wallet):
-            raise PolymarketInputError("POLYMARKET_POSITION_WALLET 不是有效钱包地址")
+            raise PolymarketInputError("Polymarket position wallet 不是有效钱包地址")
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await with_retry(
@@ -264,10 +270,15 @@ class PolymarketClient:
         *,
         market: str | None = None,
         asset_id: str | None = None,
+        credentials: RuntimePolymarketCredentials | None = None,
     ) -> list[PolymarketAccountOrder]:
         try:
             payload = await with_retry(
-                lambda: self._fetch_open_orders_with_clob_rest(market=market, asset_id=asset_id),
+                lambda: self._fetch_open_orders_with_clob_rest(
+                    market=market,
+                    asset_id=asset_id,
+                    credentials=credentials,
+                ),
                 retryable=is_retryable_http_error,
             )
             service_health_store.set("polymarket", "running", metadata={"endpoint": "open_orders"})
@@ -277,12 +288,22 @@ class PolymarketClient:
             logger.warning("Polymarket open orders fetch failed", extra={"market": market, "asset_id": asset_id}, exc_info=exc)
             raise
 
-    async def cancel_order(self, order_id: str) -> dict[str, Any]:
+    async def cancel_order(
+        self,
+        order_id: str,
+        *,
+        credentials: RuntimePolymarketCredentials | None = None,
+    ) -> dict[str, Any]:
         if not order_id.strip():
             raise PolymarketInputError("order_id is required")
         try:
             payload = await with_retry(
-                lambda: self._clob_l2_request("DELETE", "/order", body={"orderID": order_id.strip()}),
+                lambda: self._clob_l2_request(
+                    "DELETE",
+                    "/order",
+                    body={"orderID": order_id.strip()},
+                    credentials=credentials,
+                ),
                 retryable=is_retryable_http_error,
             )
             service_health_store.set("polymarket", "running", metadata={"endpoint": "cancel_order"})
@@ -292,13 +313,57 @@ class PolymarketClient:
             logger.warning("Polymarket order cancel failed", extra={"order_id": order_id}, exc_info=exc)
             raise
 
-    async def fetch_balance_allowance(self) -> PolymarketAccountBalance:
+    async def post_signed_order(
+        self,
+        *,
+        signed_order: dict[str, Any],
+        order_type: str,
+        post_only: bool,
+        defer_exec: bool,
+        credentials: RuntimePolymarketCredentials | None = None,
+    ) -> dict[str, Any]:
+        resolved_credentials = credentials or await resolve_runtime_credentials()
+        if resolved_credentials is None:
+            raise PolymarketInputError("Polymarket CLOB API credentials are not configured")
+        body = {
+            "order": signed_order_to_clob_wire_order(signed_order),
+            "owner": resolved_credentials.api_key,
+            "orderType": order_type,
+            "deferExec": defer_exec,
+            "postOnly": post_only,
+        }
+        payload = await with_retry(
+            lambda: self._clob_l2_request(
+                "POST",
+                "/order",
+                body=body,
+                credentials=resolved_credentials,
+            ),
+            retryable=is_retryable_http_error,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Unexpected Polymarket order response")
+        service_health_store.set("polymarket", "running", metadata={"endpoint": "post_signed_order"})
+        return payload
+
+    async def fetch_balance_allowance(
+        self,
+        *,
+        credentials: RuntimePolymarketCredentials | None = None,
+    ) -> PolymarketAccountBalance:
         try:
+            resolved_credentials = credentials or await resolve_runtime_credentials()
+            if resolved_credentials is None:
+                raise PolymarketInputError("Polymarket CLOB API credentials are not configured")
             payload = await with_retry(
                 lambda: self._clob_l2_request(
                     "GET",
                     "/balance-allowance",
-                    params={"asset_type": "COLLATERAL", "signature_type": 3},
+                    params={
+                        "asset_type": "COLLATERAL",
+                        "signature_type": resolved_credentials.signature_type,
+                    },
+                    credentials=resolved_credentials,
                 ),
                 retryable=is_retryable_http_error,
             )
@@ -310,6 +375,23 @@ class PolymarketClient:
             service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "balance_allowance"})
             logger.warning("Polymarket balance fetch failed", exc_info=exc)
             raise
+
+    async def fetch_trading_restriction(self) -> PolymarketTradingRestriction:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                payload = await with_retry(
+                    lambda: client.get(GEOBLOCK_URL),
+                    retryable=is_retryable_http_error,
+                )
+            data = payload.json()
+            if not isinstance(data, dict):
+                raise RuntimeError("Unexpected Polymarket geoblock response")
+            service_health_store.set("polymarket", "running", metadata={"endpoint": "geoblock"})
+            return normalize_trading_restriction(data)
+        except Exception as exc:
+            service_health_store.set("polymarket", "error", last_error=str(exc), metadata={"endpoint": "geoblock"})
+            logger.warning("Polymarket geoblock fetch failed", exc_info=exc)
+            return PolymarketTradingRestriction(checked_at=datetime.now(timezone.utc), error=type(exc).__name__)
 
     async def iter_activity_batches(
         self,
@@ -770,9 +852,18 @@ class PolymarketClient:
         *,
         params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None,
+        credentials: RuntimePolymarketCredentials | None = None,
     ) -> Any:
         serialized_body = json.dumps(body, separators=(",", ":"), ensure_ascii=False) if body is not None else None
-        headers = clob_l2_headers(method, endpoint, serialized_body)
+        resolved_credentials = credentials or await resolve_runtime_credentials()
+        if resolved_credentials is None:
+            raise PolymarketInputError("Polymarket CLOB API credentials are not configured")
+        headers = clob_l2_headers_for_credentials(
+            resolved_credentials,
+            method,
+            endpoint,
+            serialized_body,
+        )
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.request(
                 method,
@@ -792,12 +883,18 @@ class PolymarketClient:
         *,
         market: str | None,
         asset_id: str | None,
+        credentials: RuntimePolymarketCredentials | None = None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         cursor = CLOB_INITIAL_CURSOR
         base_params = {key: value for key, value in {"market": market, "asset_id": asset_id}.items() if value}
         while cursor != CLOB_END_CURSOR:
-            response = await self._clob_l2_request("GET", "/data/orders", params={**base_params, "next_cursor": cursor})
+            response = await self._clob_l2_request(
+                "GET",
+                "/data/orders",
+                params={**base_params, "next_cursor": cursor},
+                credentials=credentials,
+            )
             if not isinstance(response, dict):
                 raise RuntimeError("Unexpected Polymarket open orders response")
             rows = response.get("data")
@@ -812,20 +909,74 @@ class PolymarketClient:
 
 
 def clob_l2_headers(method: str, endpoint: str, serialized_body: str | None = None) -> dict[str, str]:
-    # L2 REST 只需要 API secret 做 HMAC；私钥只保留给真正签订单的独立流程。
-    creds = clob_api_creds()
-    address = settings.polymarket_clob_address.strip()
-    if not address:
-        raise PolymarketInputError("POLYMARKET_CLOB_ADDRESS is not configured")
+    raise PolymarketInputError("Runtime Polymarket credentials are required")
+
+
+def signed_order_to_clob_wire_order(order: dict[str, Any]) -> dict[str, Any]:
+    is_v2_order = any(key in order for key in ("timestamp", "metadata", "builder"))
+    fields = (
+        (
+            "salt",
+            "maker",
+            "signer",
+            "taker",
+            "tokenId",
+            "makerAmount",
+            "takerAmount",
+            "side",
+            "signatureType",
+            "timestamp",
+            "expiration",
+            "metadata",
+            "builder",
+            "signature",
+        )
+        if is_v2_order
+        else (
+            "salt",
+            "maker",
+            "signer",
+            "taker",
+            "tokenId",
+            "makerAmount",
+            "takerAmount",
+            "expiration",
+            "nonce",
+            "feeRateBps",
+            "side",
+            "signatureType",
+            "signature",
+        )
+    )
+    wire_order: dict[str, Any] = {}
+    for field in fields:
+        if field not in order or order[field] is None:
+            continue
+        wire_order[field] = int(order[field]) if field in {"salt", "signatureType"} else order[field]
+    return wire_order
+
+
+def clob_l2_headers_for_credentials(
+    credentials: RuntimePolymarketCredentials,
+    method: str,
+    endpoint: str,
+    serialized_body: str | None = None,
+) -> dict[str, str]:
     timestamp = int(datetime.now(timezone.utc).timestamp())
     return {
         "Accept": "*/*",
         "Content-Type": "application/json",
-        "POLY_ADDRESS": address,
-        "POLY_API_KEY": creds.api_key,
-        "POLY_PASSPHRASE": creds.api_passphrase,
+        "POLY_ADDRESS": credentials.signer_address,
+        "POLY_API_KEY": credentials.api_key,
+        "POLY_PASSPHRASE": credentials.api_passphrase,
         "POLY_TIMESTAMP": str(timestamp),
-        "POLY_SIGNATURE": build_hmac_signature(creds.api_secret, timestamp, method, endpoint, serialized_body),
+        "POLY_SIGNATURE": build_hmac_signature(
+            credentials.api_secret,
+            timestamp,
+            method,
+            endpoint,
+            serialized_body,
+        ),
     }
 
 
@@ -1023,20 +1174,6 @@ def sdk_order_book_to_clob_dict(book: Any) -> dict[str, Any]:
     return normalized
 
 
-def clob_api_creds() -> ApiCreds:
-    if not (
-        settings.polymarket_clob_api_key
-        and settings.polymarket_clob_secret
-        and settings.polymarket_clob_passphrase
-    ):
-        raise PolymarketInputError("Polymarket CLOB API credentials are not configured")
-    return ApiCreds(
-        api_key=settings.polymarket_clob_api_key,
-        api_secret=settings.polymarket_clob_secret,
-        api_passphrase=settings.polymarket_clob_passphrase,
-    )
-
-
 def normalize_account_balance(row: dict[str, Any]) -> PolymarketAccountBalance:
     return PolymarketAccountBalance(
         cash=usdc_amount_or_none(row.get("balance") or row.get("cash") or row.get("availableBalance")),
@@ -1046,7 +1183,37 @@ def normalize_account_balance(row: dict[str, Any]) -> PolymarketAccountBalance:
     )
 
 
+def normalize_trading_restriction(row: dict[str, Any]) -> PolymarketTradingRestriction:
+    country = string_or_none(row.get("country"))
+    normalized_country = country.upper() if country else None
+    return PolymarketTradingRestriction(
+        blocked=bool(row.get("blocked")),
+        close_only=normalized_country in CLOSE_ONLY_COUNTRIES,
+        country=normalized_country,
+        region=string_or_none(row.get("region")),
+        checked_at=datetime.now(timezone.utc),
+        raw=row,
+    )
+
+
 def normalize_account_position(row: dict[str, Any]) -> PolymarketAccountPosition:
+    size = first_float(row, "size")
+    current_value = first_float(row, "currentValue", "current_value")
+    cash_pnl = first_float(row, "cashPnl", "cash_pnl")
+    avg_price = first_float(row, "avgPrice", "avg_price", "averagePrice", "average_price", "avg", "average")
+    if avg_price is None:
+        position_cost = first_float(
+            row,
+            "initialValue",
+            "initial_value",
+            "totalBought",
+            "total_bought",
+            "cost",
+            "costBasis",
+            "cost_basis",
+        )
+        if position_cost is not None and size and size > 0:
+            avg_price = position_cost / size
     return PolymarketAccountPosition(
         condition_id=string_or_none(row.get("conditionId") or row.get("condition_id")),
         asset=string_or_none(row.get("asset") or row.get("assetId") or row.get("asset_id")),
@@ -1054,11 +1221,11 @@ def normalize_account_position(row: dict[str, Any]) -> PolymarketAccountPosition
         slug=string_or_none(row.get("slug")),
         event_slug=string_or_none(row.get("eventSlug") or row.get("event_slug")),
         outcome=string_or_none(row.get("outcome")),
-        size=float_or_none(row.get("size")),
-        avg_price=float_or_none(row.get("avgPrice") or row.get("avg_price")),
+        size=size,
+        avg_price=avg_price,
         cur_price=float_or_none(row.get("curPrice") or row.get("cur_price")),
-        current_value=float_or_none(row.get("currentValue") or row.get("current_value")),
-        cash_pnl=float_or_none(row.get("cashPnl") or row.get("cash_pnl")),
+        current_value=current_value,
+        cash_pnl=cash_pnl,
         percent_pnl=float_or_none(row.get("percentPnl") or row.get("percent_pnl")),
         redeemable=bool(row.get("redeemable")),
         mergeable=bool(row.get("mergeable")),
@@ -1704,6 +1871,15 @@ def decimal_or_none(value: Any) -> Decimal | None:
 def float_or_none(value: Any) -> float | None:
     decimal = decimal_or_none(value)
     return float(decimal) if decimal is not None else None
+
+
+def first_float(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in row:
+            value = float_or_none(row.get(key))
+            if value is not None:
+                return value
+    return None
 
 
 def usdc_amount_or_none(value: Any) -> float | None:

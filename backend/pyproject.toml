@@ -7,6 +7,7 @@ dependencies = [
   "alembic>=1.13.0",
   "apscheduler>=3.10.4,<4.0.0",
   "asyncpg>=0.29.0",
+  "cryptography>=43.0.0",
   "fastapi>=0.111.0",
   "httpx>=0.27.0",
   "polymarket-client>=0.1.0b7,<0.2.0",
@@ -20,6 +21,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "aiosqlite>=0.20.0",
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
   "ruff>=0.5.0",

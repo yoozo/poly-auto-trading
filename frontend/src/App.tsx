@@ -7,14 +7,23 @@ import {
   LineChartOutlined,
   LogoutOutlined,
   MoonOutlined,
+  ReloadOutlined,
   SettingOutlined
 } from "@ant-design/icons";
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
-import { Alert, Button, ConfigProvider, Form, Input, Spin, Typography, theme } from "antd";
+import { Alert, Button, ConfigProvider, Form, Input, Popover, Spin, Typography, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { api, setUnauthorizedHandler, type PolymarketAccountState, type PolymarketAccountStateWsMessage } from "./api/client";
+import {
+  api,
+  setUnauthorizedHandler,
+  type PolymarketAccountState,
+  type PolymarketAccountStateWsMessage,
+  type PolymarketCredentialProfile
+} from "./api/client";
+import { PolymarketCredentialManager } from "./components/PolymarketCredentialManager";
+import { connectWallet, disconnectWallet, useWalletConnection } from "./hooks/useWalletConnection";
 
 const BTCWatchPage = lazy(() => import("./pages/BTCWatchPage"));
 const MarketDetailPage = lazy(() => import("./pages/MarketDetailPage"));
@@ -34,6 +43,7 @@ const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
   wallet: null,
   clob_address: null,
   balance: null,
+  trading_restriction: null,
   condition_id: null,
   positions: [],
   orders: [],
@@ -95,10 +105,31 @@ export default function App() {
   const [siderCollapsed, setSiderCollapsed] = useState(() => readSiderCollapsed());
   const [authStatus, setAuthStatus] = useState<AuthStatus>("checking");
   const [authError, setAuthError] = useState("");
+  const walletConnection = useWalletConnection();
+  const walletConnected = Boolean(walletConnection.address);
+  const { data: credentialData } = useQuery({
+    queryKey: ["polymarket-credentials"],
+    queryFn: api.polymarketCredentials,
+    enabled: authStatus === "authenticated" && walletConnected,
+    refetchOnWindowFocus: false,
+  });
+  const activeWalletProfile = useMemo(
+    () => credentialData?.profiles.find((profile) => profile.id === credentialData.active_id) ?? null,
+    [credentialData],
+  );
+  const activeWalletMatches = Boolean(
+    walletConnection.address &&
+      activeWalletProfile &&
+      normalizeAddress(activeWalletProfile.signer_address) === normalizeAddress(walletConnection.address),
+  );
+  const accountStateQueryKey = useMemo(
+    () => ["polymarket-account-state", "global", activeWalletProfile?.id ?? "none"] as const,
+    [activeWalletProfile?.id],
+  );
   const { data: accountStateSnapshot = EMPTY_ACCOUNT_STATE } = useQuery({
-    queryKey: ["polymarket-account-state", "global"],
+    queryKey: accountStateQueryKey,
     queryFn: () => api.polymarketAccountState(),
-    enabled: authStatus === "authenticated",
+    enabled: authStatus === "authenticated" && activeWalletMatches,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
   });
@@ -138,11 +169,16 @@ export default function App() {
   }, [queryClient]);
 
   useEffect(() => {
+    if (!activeWalletMatches) {
+      setAccountState(EMPTY_ACCOUNT_STATE);
+      queryClient.removeQueries({ queryKey: ["polymarket-account-state"] });
+      return;
+    }
     setAccountState(accountStateSnapshot);
-  }, [accountStateSnapshot]);
+  }, [accountStateSnapshot, activeWalletMatches, queryClient]);
 
   useEffect(() => {
-    if (authStatus !== "authenticated") {
+    if (authStatus !== "authenticated" || !activeWalletMatches) {
       setAccountState(EMPTY_ACCOUNT_STATE);
       return;
     }
@@ -157,6 +193,7 @@ export default function App() {
       socket.onmessage = (event) => {
         const message = parsePolymarketAccountMessage(event.data);
         if (!message || message.condition_id !== null) return;
+        queryClient.setQueryData(accountStateQueryKey, message.state);
         setAccountState(message.state);
       };
       socket.onclose = () => {
@@ -173,7 +210,7 @@ export default function App() {
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [authStatus]);
+  }, [accountStateQueryKey, activeWalletMatches, activeWalletProfile?.id, authStatus, queryClient]);
 
   useEffect(() => {
     let mounted = true;
@@ -249,7 +286,12 @@ export default function App() {
           </button>
         )}
         actionsRender={() => [
-          <AccountHeaderSummary key="account" accountState={accountState} />,
+          <AccountHeaderSummary
+            key="account"
+            accountState={accountState}
+            activeProfile={activeWalletMatches ? activeWalletProfile : null}
+            connectedAddress={walletConnection.address}
+          />,
           <Button
             key="theme"
             type="text"
@@ -276,12 +318,128 @@ export default function App() {
   );
 }
 
-function AccountHeaderSummary({ accountState }: { accountState: PolymarketAccountState }) {
-  const cash = accountState.balance?.cash ?? null;
-  const portfolio = accountPortfolioValue(accountState);
+function AccountHeaderSummary({
+  accountState,
+  activeProfile,
+  connectedAddress,
+}: {
+  accountState: PolymarketAccountState;
+  activeProfile: PolymarketCredentialProfile | null;
+  connectedAddress: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const accountStateQueryKey = useMemo(
+    () => ["polymarket-account-state", "global", activeProfile?.id ?? "none"] as const,
+    [activeProfile?.id],
+  );
+  const refreshAccountMutation = useMutation({
+    mutationFn: api.refreshPolymarketAccountState,
+    onSuccess: (state) => {
+      queryClient.setQueryData(accountStateQueryKey, state);
+      queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
+    },
+  });
+  const activateCredentialMutation = useMutation({
+    mutationFn: api.activatePolymarketCredential,
+    onSuccess: (data) => {
+      queryClient.removeQueries({ queryKey: ["polymarket-account-state"] });
+      queryClient.setQueryData(["polymarket-credentials"], data);
+      queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
+    },
+  });
+  const handleWalletConnect = async () => {
+    try {
+      const address = await connectWallet();
+      const credentialData = await queryClient.fetchQuery({
+        queryKey: ["polymarket-credentials"],
+        queryFn: api.polymarketCredentials,
+      });
+      queryClient.removeQueries({ queryKey: ["polymarket-account-state"] });
+      const matchingProfile = credentialData.profiles.find(
+        (profile) => normalizeAddress(profile.signer_address) === normalizeAddress(address),
+      );
+      if (!matchingProfile) {
+        setPopoverOpen(true);
+        return;
+      }
+      if (matchingProfile.id !== credentialData.active_id) {
+        activateCredentialMutation.mutate(matchingProfile.id);
+      }
+      setPopoverOpen(false);
+    } catch {
+      setPopoverOpen(false);
+    }
+  };
+  const handleWalletLogout = async () => {
+    await disconnectWallet({ revoke: true });
+    setPopoverOpen(false);
+    queryClient.removeQueries({ queryKey: ["polymarket-account-state"] });
+    queryClient.invalidateQueries({ queryKey: ["polymarket-credentials"] });
+  };
+  useEffect(() => {
+    if (!connectedAddress) return;
+    let cancelled = false;
+    queryClient
+      .fetchQuery({
+        queryKey: ["polymarket-credentials"],
+        queryFn: api.polymarketCredentials,
+      })
+      .then((credentialData) => {
+        if (cancelled) return;
+        const matchingProfile = credentialData.profiles.find(
+          (profile) => normalizeAddress(profile.signer_address) === normalizeAddress(connectedAddress),
+        );
+        if (matchingProfile && matchingProfile.id !== credentialData.active_id) {
+          activateCredentialMutation.mutate(matchingProfile.id);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [connectedAddress, queryClient]);
+  if (!connectedAddress) {
+    return (
+      <div className="app-account-control">
+        <button
+          className="app-account-summary app-account-summary-guest"
+          type="button"
+          onClick={() => void handleWalletConnect()}
+        >
+          <div className="app-account-metrics">
+            <span className="app-account-metric-label">Guest</span>
+            <strong>游客模式</strong>
+            <span className="app-account-login-action">
+              <LoginOutlined />
+              登录
+            </span>
+          </div>
+          <span className="app-account-meta">连接后显示账户数据</span>
+        </button>
+      </div>
+    );
+  }
+  const hasSyncError = Boolean(accountState.error);
+  const hasBalanceSnapshot = Boolean(accountState.balance?.updated_at);
+  const hasPositionsSnapshot = Boolean(accountState.last_positions_refresh_at);
+  const cash = hasBalanceSnapshot ? accountState.balance?.cash ?? null : null;
+  const portfolio = hasBalanceSnapshot || hasPositionsSnapshot ? accountPortfolioValue(accountState, hasPositionsSnapshot) : null;
   const accountLabel = accountState.wallet ?? accountState.clob_address;
-  return (
+  const shortAccountLabel = accountLabel ? shortAddress(accountLabel) : null;
+  const profileLabel = activeProfile?.label || "MetaMask";
+  const metaText = accountLabel
+    ? hasSyncError
+      ? `${shortAccountLabel} · 部分同步失败`
+      : hasBalanceSnapshot || hasPositionsSnapshot
+        ? `${shortAccountLabel}`
+        : `${shortAccountLabel} · 等待同步`
+    : "Account not configured";
+  const accountSummary = (
     <div className="app-account-summary">
+      <span className="app-account-profile-label" title={profileLabel}>
+        {profileLabel}
+      </span>
       <div className="app-account-metrics">
         <span className="app-account-metric-label">Portfolio</span>
         <strong>{formatCurrency(portfolio)}</strong>
@@ -289,9 +447,48 @@ function AccountHeaderSummary({ accountState }: { accountState: PolymarketAccoun
         <span className="app-account-metric-label">Cash</span>
         <strong>{formatCurrency(cash)}</strong>
       </div>
-      <span className="app-account-meta">
-        {accountLabel ? `Account ${accountLabel}` : "Account not configured"}
-      </span>
+      <span className="app-account-meta" title={accountState.error ?? undefined}>{metaText}</span>
+    </div>
+  );
+  const accountSummaryNode = activeProfile ? (
+    accountSummary
+  ) : (
+    <Popover
+      trigger={[]}
+      open={popoverOpen}
+      onOpenChange={setPopoverOpen}
+      placement="bottomRight"
+      overlayClassName="app-account-popover"
+      content={<PolymarketCredentialManager variant="popover" />}
+    >
+      {accountSummary}
+    </Popover>
+  );
+  return (
+    <div className="app-account-control">
+      {accountSummaryNode}
+      <div className="app-account-actions">
+        <Button
+          aria-label="刷新账户"
+          className="app-account-refresh"
+          icon={<ReloadOutlined />}
+          loading={refreshAccountMutation.isPending}
+          size="small"
+          type="text"
+          disabled={!connectedAddress}
+          onClick={() => refreshAccountMutation.mutate()}
+        />
+        <Button
+          aria-label="登出钱包"
+          className="app-account-logout"
+          icon={<LogoutOutlined />}
+          size="small"
+          type="text"
+          onClick={() => void handleWalletLogout()}
+        >
+          登出
+        </Button>
+      </div>
     </div>
   );
 }
@@ -306,16 +503,27 @@ function parsePolymarketAccountMessage(value: string) {
   }
 }
 
-function accountPortfolioValue(accountState: PolymarketAccountState) {
+function accountPortfolioValue(accountState: PolymarketAccountState, includePositions: boolean) {
   const cash = accountState.balance?.cash;
-  const positionsValue = accountState.positions.reduce((sum, position) => sum + (position.current_value ?? 0), 0);
-  if (cash == null && positionsValue === 0) return null;
+  const positionsValue = includePositions
+    ? accountState.positions.reduce((sum, position) => sum + (position.current_value ?? 0), 0)
+    : 0;
+  if (cash == null && !includePositions) return null;
   return (cash ?? 0) + positionsValue;
 }
 
 function formatCurrency(value: number | null) {
   if (value == null) return "-";
   return `$${value.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
+function normalizeAddress(value: string | null | undefined) {
+  return value?.toLowerCase() ?? "";
+}
+
+function shortAddress(value: string) {
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
 function LoginPage({ error, onLogin }: { error: string; onLogin: (password: string) => Promise<void> }) {

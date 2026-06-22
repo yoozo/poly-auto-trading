@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from app.core.config import settings
 from app.schemas.polymarket import (
     PolymarketAccountBalance,
     PolymarketAccountOrder,
     PolymarketAccountPosition,
     PolymarketAccountState,
     PolymarketAccountTrade,
+    PolymarketTradingRestriction,
 )
 
 MAX_RECENT_TRADES = 50
 TRADE_PENDING = "pending"
 TRADE_CONFIRMED = "confirmed"
 TRADE_REFRESH_FAILED = "refresh_failed"
+CANCELED_ORDER_SUPPRESSION_SECONDS = 90
 
 
 class PolymarketAccountStore:
@@ -24,8 +25,12 @@ class PolymarketAccountStore:
     def __init__(self) -> None:
         self._positions: list[PolymarketAccountPosition] = []
         self._orders_by_id: dict[str, PolymarketAccountOrder] = {}
+        self._suppressed_order_ids: dict[str, datetime] = {}
         self._recent_trades: list[PolymarketAccountTrade] = []
         self._balance: PolymarketAccountBalance | None = None
+        self._trading_restriction: PolymarketTradingRestriction | None = None
+        self._wallet: str | None = None
+        self._clob_address: str | None = None
         self._ws_state = "idle"
         self._error: str | None = None
         self._last_positions_refresh_at: datetime | None = None
@@ -40,19 +45,63 @@ class PolymarketAccountStore:
 
     async def replace_orders(self, orders: list[PolymarketAccountOrder]) -> None:
         async with self._lock:
-            self._orders_by_id = {order.id: order for order in orders}
+            self._prune_suppressed_order_ids_locked()
+            self._orders_by_id = {
+                order.id: order
+                for order in orders
+                if order.id not in self._suppressed_order_ids
+            }
             self._last_orders_refresh_at = utc_now()
 
     async def replace_balance(self, balance: PolymarketAccountBalance) -> None:
         async with self._lock:
             self._balance = balance
 
+    async def replace_trading_restriction(self, restriction: PolymarketTradingRestriction) -> None:
+        async with self._lock:
+            self._trading_restriction = restriction
+
+    async def set_account_identity(self, *, wallet: str | None, clob_address: str | None) -> None:
+        normalized_wallet = wallet.lower() if wallet else None
+        normalized_clob_address = clob_address.lower() if clob_address else None
+        async with self._lock:
+            identity_changed = self._wallet != normalized_wallet or self._clob_address != normalized_clob_address
+            self._wallet = normalized_wallet
+            self._clob_address = normalized_clob_address
+            if identity_changed:
+                self._positions = []
+                self._orders_by_id = {}
+                self._suppressed_order_ids = {}
+                self._recent_trades = []
+                self._balance = None
+                self._trading_restriction = None
+                self._error = None
+                self._last_positions_refresh_at = None
+                self._last_orders_refresh_at = None
+                self._last_trade_at = None
+
     async def apply_order(self, order: PolymarketAccountOrder) -> None:
         async with self._lock:
+            self._prune_suppressed_order_ids_locked()
+            if order.id in self._suppressed_order_ids:
+                self._orders_by_id.pop(order.id, None)
+                self._last_orders_refresh_at = utc_now()
+                return
             if order_is_open(order):
                 self._orders_by_id[order.id] = order
             else:
                 self._orders_by_id.pop(order.id, None)
+            self._last_orders_refresh_at = utc_now()
+
+    async def suppress_canceled_orders(self, order_ids: list[str]) -> None:
+        if not order_ids:
+            return
+        expires_at = utc_now() + timedelta(seconds=CANCELED_ORDER_SUPPRESSION_SECONDS)
+        async with self._lock:
+            self._prune_suppressed_order_ids_locked()
+            for order_id in order_ids:
+                self._suppressed_order_ids[order_id] = expires_at
+                self._orders_by_id.pop(order_id, None)
             self._last_orders_refresh_at = utc_now()
 
     async def apply_trade(self, trade: PolymarketAccountTrade) -> None:
@@ -94,10 +143,14 @@ class PolymarketAccountStore:
     async def snapshot(self, condition_id: str | None = None) -> PolymarketAccountState:
         normalized_condition = normalize_key(condition_id)
         async with self._lock:
+            self._prune_suppressed_order_ids_locked()
             positions = list(self._positions)
             orders = list(self._orders_by_id.values())
             recent_trades = list(self._recent_trades)
             balance = self._balance
+            trading_restriction = self._trading_restriction
+            wallet = self._wallet
+            clob_address = self._clob_address
             ws_state = self._ws_state
             error = self._error
             last_positions_refresh_at = self._last_positions_refresh_at
@@ -125,10 +178,11 @@ class PolymarketAccountStore:
                 if trade_matches_condition(trade, normalized_condition, condition_assets)
             ]
         return PolymarketAccountState(
-            wallet=settings.polymarket_position_wallet.lower() or None,
-            clob_address=settings.polymarket_clob_address.lower() or None,
+            wallet=wallet,
+            clob_address=clob_address,
             # 余额是账户级快照，condition_id 只过滤市场相关的 positions/orders/trades。
             balance=balance,
+            trading_restriction=trading_restriction,
             condition_id=condition_id,
             positions=positions,
             orders=orders,
@@ -139,6 +193,16 @@ class PolymarketAccountStore:
             last_trade_at=last_trade_at,
             error=error,
         )
+
+    def _prune_suppressed_order_ids_locked(self) -> None:
+        now = utc_now()
+        expired_order_ids = [
+            order_id
+            for order_id, expires_at in self._suppressed_order_ids.items()
+            if expires_at <= now
+        ]
+        for order_id in expired_order_ids:
+            self._suppressed_order_ids.pop(order_id, None)
 
 
 def order_is_open(order: PolymarketAccountOrder) -> bool:

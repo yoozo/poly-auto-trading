@@ -97,6 +97,24 @@ class AppSetting(Base):
     )
 
 
+class PolymarketCredential(Base, TimestampMixin):
+    __tablename__ = "polymarket_credentials"
+    __table_args__ = (
+        UniqueConstraint("signer_address", "funder_address", name="uq_polymarket_credentials_wallets"),
+        Index("ix_polymarket_credentials_signer", "signer_address"),
+        Index("ix_polymarket_credentials_funder", "funder_address"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    label: Mapped[str] = mapped_column(String(120), default="")
+    signer_address: Mapped[str] = mapped_column(String(64))
+    funder_address: Mapped[str] = mapped_column(String(64))
+    signature_type: Mapped[int] = mapped_column(Integer, default=3)
+    api_key_encrypted: Mapped[str] = mapped_column(Text)
+    api_secret_encrypted: Mapped[str] = mapped_column(Text)
+    api_passphrase_encrypted: Mapped[str] = mapped_column(Text)
+
+
 class MarketMetadata(Base):
     __tablename__ = "market_metadata"
 

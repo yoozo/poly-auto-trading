@@ -1,16 +1,19 @@
 import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
-import { Button, Card, Dropdown, Empty, Modal, Segmented, Typography } from "antd";
+import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ClobClient, Side } from "@polymarket/clob-client-v2";
+import { createWalletClient, custom, type Address } from "viem";
+import { polygon } from "viem/chains";
 import {
   api,
   type CandleInterval,
   type PolymarketAccountOrder,
   type PolymarketAccountPosition,
   type PolymarketAccountState,
-  type PolymarketAccountStateWsMessage,
   type PolymarketAccountTrade,
+  type PolymarketCredentialProfile,
   type PolymarketInterval,
   type PolymarketOutcomeQuote,
   type PolymarketUpDownMarket,
@@ -26,6 +29,7 @@ import type {
 } from "../components/market-chart/types";
 import { INDICATOR_WARMUP_BARS, calculateIndicatorPoints } from "../components/market-chart/indicators";
 import { intervalMs, mergeCandles } from "../components/market-chart/utils";
+import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletConnection";
 import {
   candleAtOpenTime,
   hasCandleAtTime,
@@ -60,6 +64,9 @@ const MAX_VISIBLE_MARKET_PILLS = 5;
 const COMPACT_VISIBLE_CANDLES = 50;
 const WIDE_VISIBLE_CANDLES = 100;
 const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
+const POLYGON_CHAIN_ID = "0x89";
+const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
+const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
 // React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
 const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
 const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
@@ -67,6 +74,7 @@ const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
   wallet: null,
   clob_address: null,
   balance: null,
+  trading_restriction: null,
   condition_id: null,
   positions: [],
   orders: [],
@@ -80,6 +88,8 @@ const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
 
 export default function BTCWatchPage() {
   const queryClient = useQueryClient();
+  const walletConnection = useWalletConnection();
+  const walletConnected = Boolean(walletConnection.address);
   const [interval, setInterval] = useState<CandleInterval>(() => {
     const saved = localStorage.getItem(INTERVAL_KEY);
     return intervals.includes(saved as CandleInterval) ? (saved as CandleInterval) : "1m";
@@ -170,13 +180,29 @@ export default function BTCWatchPage() {
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
   const comparisonTarget = selectedPolymarket ? marketComparisonTarget(selectedPolymarket) : null;
   const selectedPolymarketConditionId = selectedPolymarket?.condition_id ?? null;
+  const { data: credentialData } = useQuery({
+    queryKey: ["polymarket-credentials"],
+    queryFn: api.polymarketCredentials,
+    enabled: walletConnected,
+    refetchOnWindowFocus: false,
+  });
+  const activeCredential = useMemo(
+    () => credentialData?.profiles.find((profile) => profile.id === credentialData.active_id) ?? null,
+    [credentialData],
+  );
+  const activeCredentialMatches = Boolean(
+    walletConnection.address &&
+      activeCredential &&
+      normalizeId(activeCredential.signer_address) === normalizeId(walletConnection.address),
+  );
+  const activeCredentialQueryId = activeCredential?.id ?? "none";
   const {
     data: accountStateSnapshot = EMPTY_ACCOUNT_STATE,
     error: accountStateError,
   } = useQuery({
-    queryKey: ["polymarket-account-state", selectedPolymarketConditionId],
-    queryFn: () => api.polymarketAccountState(selectedPolymarketConditionId),
-    enabled: Boolean(selectedPolymarketConditionId),
+    queryKey: ["polymarket-account-state", "global", activeCredentialQueryId],
+    queryFn: () => api.polymarketAccountState(),
+    enabled: activeCredentialMatches && Boolean(selectedPolymarketConditionId),
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
   });
@@ -279,12 +305,12 @@ export default function BTCWatchPage() {
   }, [polymarketSnapshot]);
 
   useEffect(() => {
-    if (!selectedPolymarketConditionId) {
+    if (!activeCredentialMatches || !selectedPolymarketConditionId) {
       setPolymarketAccountState(EMPTY_ACCOUNT_STATE);
       return;
     }
     setPolymarketAccountState(accountStateSnapshot);
-  }, [accountStateSnapshot, selectedPolymarketConditionId]);
+  }, [accountStateSnapshot, activeCredentialMatches, activeCredentialQueryId, selectedPolymarketConditionId]);
 
   useEffect(() => {
     if (!selectedPolymarketId) {
@@ -294,37 +320,6 @@ export default function BTCWatchPage() {
     const freshMarket = polymarketMarkets.find((market) => market.id === selectedPolymarketId);
     if (freshMarket) setSelectedPolymarketSnapshot(freshMarket);
   }, [polymarketMarkets, selectedPolymarketId]);
-
-  useEffect(() => {
-    if (!selectedPolymarketConditionId) return;
-    let socket: WebSocket | null = null;
-    let connectTimer = 0;
-    let reconnectTimer = 0;
-    let closedByEffect = false;
-    const conditionId = selectedPolymarketConditionId;
-
-    const connect = () => {
-      if (closedByEffect) return;
-      socket = new WebSocket(api.polymarketAccountStateWsUrl(conditionId));
-      socket.onmessage = (event) => {
-        const message = parsePolymarketAccountMessage(event.data);
-        if (!message || message.condition_id !== conditionId) return;
-        setPolymarketAccountState(message.state);
-      };
-      socket.onclose = () => {
-        if (closedByEffect) return;
-        reconnectTimer = window.setTimeout(connect, 1000);
-      };
-    };
-
-    connectTimer = window.setTimeout(connect, 0);
-    return () => {
-      closedByEffect = true;
-      if (connectTimer) window.clearTimeout(connectTimer);
-      if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      socket?.close();
-    };
-  }, [selectedPolymarketConditionId]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -874,6 +869,8 @@ export default function BTCWatchPage() {
           error={polymarketError instanceof Error ? polymarketError.message : null}
           accountState={polymarketAccountState}
           accountStateError={accountStateError instanceof Error ? accountStateError.message : null}
+          walletConnected={walletConnected}
+          walletProfileReady={activeCredentialMatches}
         />
       )}
       <Modal
@@ -921,6 +918,8 @@ function PolymarketBtcPanel({
   error,
   accountState,
   accountStateError,
+  walletConnected,
+  walletProfileReady,
 }: {
   interval: PolymarketInterval;
   markets: PolymarketUpDownMarket[];
@@ -930,6 +929,8 @@ function PolymarketBtcPanel({
   error: string | null;
   accountState: PolymarketAccountState;
   accountStateError: string | null;
+  walletConnected: boolean;
+  walletProfileReady: boolean;
 }) {
   const activeMarket =
     markets.find((market) => market.id === selectedMarketId) ??
@@ -1038,6 +1039,8 @@ function PolymarketBtcPanel({
             market={activeMarket}
             accountState={accountState}
             error={accountStateError}
+            walletConnected={walletConnected}
+            walletProfileReady={walletProfileReady}
           />
         </div>
       )}
@@ -1049,10 +1052,14 @@ function AccountStatePanel({
   market,
   accountState,
   error,
+  walletConnected,
+  walletProfileReady,
 }: {
   market: PolymarketUpDownMarket;
   accountState: PolymarketAccountState;
   error: string | null;
+  walletConnected: boolean;
+  walletProfileReady: boolean;
 }) {
   const positions = accountState.positions.filter((position) => positionMatchesMarket(position, market));
   const orders = accountState.orders.filter((order) => orderMatchesMarket(order, market));
@@ -1061,7 +1068,15 @@ function AccountStatePanel({
   const queryClient = useQueryClient();
   const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
   const [orderNotice, setOrderNotice] = useState<string | null>(null);
-  const accountStateQueryKey = ["polymarket-account-state", market.condition_id ?? null];
+  const credentialsQuery = useQuery({
+    queryKey: ["polymarket-credentials"],
+    queryFn: api.polymarketCredentials,
+    enabled: walletConnected,
+    refetchOnWindowFocus: false,
+  });
+  const activeCredential =
+    credentialsQuery.data?.profiles.find((profile) => profile.id === credentialsQuery.data?.active_id) ?? null;
+  const accountStateQueryKey = ["polymarket-account-state", "global", activeCredential?.id ?? "none"];
   const cancelOrderMutation = useMutation({
     mutationFn: api.cancelPolymarketOrder,
     onMutate: (orderId: string) => {
@@ -1079,6 +1094,28 @@ function AccountStatePanel({
       setCancelingOrderId(null);
     },
   });
+  if (!walletConnected) {
+    return (
+      <div className="polymarket-account-panel polymarket-account-panel-guest">
+        <div className="polymarket-account-head">
+          <Typography.Text strong>游客模式</Typography.Text>
+          <Typography.Text type="secondary">未连接钱包</Typography.Text>
+        </div>
+        <Typography.Text type="secondary">连接 MetaMask 后显示当前 market 的仓位、挂单和下单入口。</Typography.Text>
+      </div>
+    );
+  }
+  if (!walletProfileReady) {
+    return (
+      <div className="polymarket-account-panel polymarket-account-panel-guest">
+        <div className="polymarket-account-head">
+          <Typography.Text strong>钱包已连接</Typography.Text>
+          <Typography.Text type="secondary">未启用 profile</Typography.Text>
+        </div>
+        <Typography.Text type="secondary">请点击右上角账户区域初始化或切换到当前 MetaMask 匹配的 wallet profile。</Typography.Text>
+      </div>
+    );
+  }
   return (
     <div className="polymarket-account-panel">
       <div className="polymarket-account-head">
@@ -1086,19 +1123,236 @@ function AccountStatePanel({
         <Typography.Text type="secondary">{wsLabel}</Typography.Text>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
-      {accountState.error && <Typography.Text type="secondary">{accountState.error}</Typography.Text>}
-      <AccountPositionSection positions={positions} />
+      {accountState.error && <Typography.Text type="secondary">{accountStateErrorSummary(accountState.error)}</Typography.Text>}
+      <AccountPositionSection market={market} positions={positions} trades={trades} />
+      <AccountOrderSection
+        orders={orders}
+        cancelingOrderId={cancelingOrderId}
+        onCancelOrder={(orderId) => cancelOrderMutation.mutate(orderId)}
+      />
+      <PolymarketOrderEntry
+        market={market}
+        positions={positions}
+        tradingRestriction={accountState.trading_restriction}
+        activeCredential={activeCredential}
+        onNotice={setOrderNotice}
+        onOrderSubmitted={() => {
+          queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
+          queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
+        }}
+      />
       <AccountTradeSection trades={trades} />
       {orderNotice && (
         <Typography.Text className="polymarket-order-notice" type={orderNotice.includes("失败") ? "danger" : "secondary"}>
           {orderNotice}
         </Typography.Text>
       )}
-      <AccountOrderSection
-        orders={orders}
-        cancelingOrderId={cancelingOrderId}
-        onCancelOrder={(orderId) => cancelOrderMutation.mutate(orderId)}
-      />
+    </div>
+  );
+}
+
+function PolymarketOrderEntry({
+  market,
+  positions,
+  tradingRestriction,
+  activeCredential,
+  onNotice,
+  onOrderSubmitted,
+}: {
+  market: PolymarketUpDownMarket;
+  positions: PolymarketAccountPosition[];
+  tradingRestriction: PolymarketAccountState["trading_restriction"];
+  activeCredential: PolymarketCredentialProfile | null;
+  onNotice: (notice: string | null) => void;
+  onOrderSubmitted: () => void;
+}) {
+  const firstTokenId = market.outcome_quotes.find((quote) => quote.token_id)?.token_id ?? null;
+  const [tokenId, setTokenId] = useState<string | null>(firstTokenId);
+  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
+  const [priceCents, setPriceCents] = useState<number | null>(() => defaultOrderPriceCents(market.outcome_quotes[0], "BUY"));
+  const [size, setSize] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const selectedQuote = market.outcome_quotes.find((quote) => quote.token_id === tokenId) ?? market.outcome_quotes[0] ?? null;
+  const selectedOutcome = selectedQuote?.name ?? "-";
+  const closeOnly = Boolean(tradingRestriction?.close_only);
+  const selectedPositionSize = selectedQuote?.token_id ? positionSizeForToken(positions, selectedQuote.token_id) : 0;
+  const sideOptions = closeOnly
+    ? [{ label: "Sell", value: "SELL" }]
+    : [
+        { label: "Buy", value: "BUY" },
+        { label: "Sell", value: "SELL" },
+      ];
+  const canSubmit = Boolean(
+    activeCredential &&
+      market.accepting_orders &&
+      selectedQuote?.token_id &&
+      priceCents &&
+      size &&
+      size > 0 &&
+      (!closeOnly || (side === "SELL" && size <= selectedPositionSize)),
+  );
+
+  useEffect(() => {
+    const nextTokenId = market.outcome_quotes.find((quote) => quote.token_id)?.token_id ?? null;
+    setTokenId(nextTokenId);
+  }, [market.id]);
+
+  useEffect(() => {
+    setPriceCents(defaultOrderPriceCents(selectedQuote, side));
+  }, [selectedQuote?.token_id, side]);
+
+  useEffect(() => {
+    if (closeOnly && side === "BUY") setSide("SELL");
+  }, [closeOnly, side]);
+
+  const handleSubmit = async () => {
+    onNotice(null);
+    if (!activeCredential) {
+      onNotice("请先点击右上角账户区域连接 MetaMask，并启用匹配的 wallet profile");
+      return;
+    }
+    if (!market.accepting_orders) {
+      onNotice("当前 market 暂停接单");
+      return;
+    }
+    if (!selectedQuote?.token_id) {
+      onNotice("当前 outcome 缺少 token_id，无法下单");
+      return;
+    }
+    if (!priceCents || priceCents <= 0 || priceCents >= 100) {
+      onNotice("请输入 1-99¢ 的限价");
+      return;
+    }
+    if (!size || size <= 0) {
+      onNotice("请输入下单 size");
+      return;
+    }
+    if (closeOnly && side === "BUY") {
+      onNotice("当前地区为 close-only，只允许 SELL 平仓");
+      return;
+    }
+    if (closeOnly && side === "SELL" && size > selectedPositionSize) {
+      onNotice(`当前地区为 close-only，SELL size 不能超过持仓 ${formatSize(selectedPositionSize)}`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const provider = requireEthereumProvider();
+      const accounts = await provider.request<string[]>({ method: "eth_requestAccounts" });
+      const signerAddress = accounts[0];
+      if (!signerAddress) throw new Error("MetaMask 未返回钱包地址");
+      if (normalizeId(signerAddress) !== normalizeId(activeCredential.signer_address)) {
+        throw new Error(`MetaMask 当前地址不是 active signer: ${shortAddress(activeCredential.signer_address)}`);
+      }
+      await switchToPolygon(provider);
+      const walletClient = createWalletClient({
+        account: signerAddress as Address,
+        chain: polygon,
+        transport: custom(provider),
+      });
+      // BUY/SELL 订单只在 MetaMask 内签名；前端只把一次性的 signed order 发给后端提交。
+      const clobClient = new ClobClient({
+        host: POLYMARKET_CLOB_HOST,
+        chain: 137,
+        signer: walletClient,
+        signatureType: activeCredential.signature_type,
+        funderAddress: activeCredential.funder_address,
+      });
+      const price = priceCents / 100;
+      const signedOrder = await clobClient.createOrder(
+        {
+          tokenID: selectedQuote.token_id,
+          price,
+          side: side === "BUY" ? Side.BUY : Side.SELL,
+          size,
+        },
+        { tickSize: "0.01" },
+      );
+      const response = await api.postSignedPolymarketOrder({
+        signed_order: signedOrder as unknown as Record<string, unknown>,
+        condition_id: market.condition_id,
+        token_id: selectedQuote.token_id,
+        side,
+        price,
+        size,
+        order_type: "GTC",
+        post_only: true,
+        defer_exec: false,
+      });
+      onNotice(response.order_id ? `挂单已提交：${shortAddress(response.order_id)}` : "挂单已提交");
+      onOrderSubmitted();
+    } catch (error) {
+      onNotice(`下单失败：${errorMessage(error)}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="polymarket-account-section">
+      <div className="polymarket-account-section-title">创建挂单</div>
+      <div className="polymarket-order-entry">
+        <div className="polymarket-order-entry-controls">
+          <Segmented
+            size="small"
+            value={tokenId ?? undefined}
+            options={market.outcome_quotes.map((quote) => ({ label: quote.name, value: quote.token_id ?? quote.name }))}
+            onChange={(value) => setTokenId(String(value))}
+          />
+          <Segmented
+            size="small"
+            value={side}
+            options={sideOptions}
+            onChange={(value) => setSide(value as "BUY" | "SELL")}
+          />
+        </div>
+        <div className="polymarket-order-entry-inputs">
+          <label>
+            Price
+            <InputNumber
+              min={1}
+              max={99}
+              step={1}
+              value={priceCents}
+              addonAfter="¢"
+              onChange={(value) => setPriceCents(typeof value === "number" ? value : null)}
+            />
+          </label>
+          <label>
+            Size
+            <InputNumber
+              min={0.01}
+              max={closeOnly && side === "SELL" ? selectedPositionSize : undefined}
+              step={1}
+              value={size}
+              placeholder="shares"
+              onChange={(value) => setSize(typeof value === "number" ? value : null)}
+            />
+          </label>
+        </div>
+        <div className="polymarket-order-entry-submit">
+          <div className="polymarket-order-entry-meta">
+            <Checkbox checked disabled>
+              Post only · GTC
+            </Checkbox>
+            <span>
+              {selectedOutcome} / {side} / {priceCents ? `${priceCents}¢` : "-"} / {size ? formatSize(size) : "-"}
+              {closeOnly && side === "SELL" ? ` / max ${formatSize(selectedPositionSize)}` : ""}
+            </span>
+          </div>
+          <Button type="primary" size="small" loading={submitting} disabled={!canSubmit} onClick={handleSubmit}>
+            挂单
+          </Button>
+        </div>
+        {!activeCredential && (
+          <Typography.Text type="secondary">需要先在右上角账户区域连接 MetaMask，并启用匹配的 wallet profile。</Typography.Text>
+        )}
+        {closeOnly && (
+          <Typography.Text type="secondary">
+            当前地区 {tradingRestriction?.country ?? ""} 为 close-only：BUY 已禁用，只能 SELL 已有 shares。
+          </Typography.Text>
+        )}
+      </div>
     </div>
   );
 }
@@ -1139,7 +1393,15 @@ function AccountTradeSection({ trades }: { trades: PolymarketAccountTrade[] }) {
   );
 }
 
-function AccountPositionSection({ positions }: { positions: PolymarketAccountPosition[] }) {
+function AccountPositionSection({
+  market,
+  positions,
+  trades,
+}: {
+  market: PolymarketUpDownMarket;
+  positions: PolymarketAccountPosition[];
+  trades: PolymarketAccountTrade[];
+}) {
   return (
     <div className="polymarket-account-section">
       <div className="polymarket-account-section-title">我的仓位</div>
@@ -1152,26 +1414,29 @@ function AccountPositionSection({ positions }: { positions: PolymarketAccountPos
             <span>Qty</span>
             <span>Avg</span>
             <span>Value</span>
+            <span>Return</span>
           </div>
-          {positions.map((position) => (
-            <div className="polymarket-account-row" key={`${position.condition_id}:${position.asset}:${position.outcome}`}>
-              <span className="polymarket-account-outcome-cell">
-                <span className={outcomePillClassName(position.outcome)}>{position.outcome ?? position.asset ?? "-"}</span>
-              </span>
-              <span>{formatSize(position.size)}</span>
-              <span>{formatCents(position.avg_price)}</span>
-              <span className="polymarket-account-value-cell">
-                <strong>{formatCents(position.current_value)}</strong>
-                <small>
-                  Cost {formatCurrency(positionCost(position))} ·{" "}
-                  <span className={pnlClassName(position.cash_pnl)}>
-                    {formatSignedCurrency(position.cash_pnl)} {formatSignedPercent(position.percent_pnl)}
-                  </span>
-                </small>
-                {position.redeemable && <span className="polymarket-account-badge">可赎回</span>}
-              </span>
-            </div>
-          ))}
+          {positions.map((position) => {
+            const metrics = positionDisplayMetrics(position, market, trades);
+            return (
+              <div className="polymarket-account-row" key={`${position.condition_id}:${position.asset}:${position.outcome}`}>
+                <span className="polymarket-account-outcome-cell">
+                  <span className={outcomePillClassName(position.outcome)}>{position.outcome ?? position.asset ?? "-"}</span>
+                </span>
+                <span>{formatSize(position.size)}</span>
+                <span>{formatCents(metrics.avgPrice)}</span>
+                <span className="polymarket-account-value-cell">
+                  <strong>{formatCurrency(metrics.currentValue)}</strong>
+                  <small>Cost {formatCurrency(metrics.cost)}</small>
+                  {position.redeemable && <span className="polymarket-account-badge">可赎回</span>}
+                </span>
+                <span className={`polymarket-account-return-cell ${pnlClassName(metrics.pnl)}`}>
+                  <strong>{formatSignedCurrency(metrics.pnl)}</strong>
+                  <small>{formatSignedPercent(metrics.percentPnl)}</small>
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1261,6 +1526,7 @@ function OrderBook({ quote }: { quote: PolymarketOutcomeQuote }) {
   if (depth === 0) {
     return <Typography.Text type="secondary">暂无订单簿</Typography.Text>;
   }
+  const visibleDepth = Math.min(depth, POLYMARKET_ORDERBOOK_VISIBLE_ROWS);
   return (
     <div className="polymarket-orderbook">
       <div className="polymarket-orderbook-head">
@@ -1269,7 +1535,7 @@ function OrderBook({ quote }: { quote: PolymarketOutcomeQuote }) {
         <span>Ask</span>
         <span>Size</span>
       </div>
-      {Array.from({ length: depth }).map((_, index) => {
+      {Array.from({ length: visibleDepth }).map((_, index) => {
         const bid = quote.bids[index];
         const ask = quote.asks[index];
         return (
@@ -1307,16 +1573,6 @@ function parsePolymarketMessage(value: string) {
   try {
     const message = JSON.parse(value) as PolymarketWsMessage;
     if (message.type !== "polymarket.btc_up_down.snapshot") return null;
-    return message;
-  } catch {
-    return null;
-  }
-}
-
-function parsePolymarketAccountMessage(value: string) {
-  try {
-    const message = JSON.parse(value) as PolymarketAccountStateWsMessage;
-    if (message.type !== "polymarket.account_state.snapshot") return null;
     return message;
   } catch {
     return null;
@@ -1362,6 +1618,52 @@ function errorMessage(error: unknown) {
   return "操作失败";
 }
 
+function requireEthereumProvider() {
+  if (!window.ethereum) {
+    throw new Error("未检测到 MetaMask，请先安装或打开钱包插件");
+  }
+  return window.ethereum;
+}
+
+async function switchToPolygon(provider: EthereumProvider) {
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: POLYGON_CHAIN_ID }] });
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: number }).code : null;
+    if (code !== 4902) throw error;
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [
+        {
+          chainId: POLYGON_CHAIN_ID,
+          chainName: "Polygon",
+          nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
+          rpcUrls: ["https://polygon-rpc.com"],
+          blockExplorerUrls: ["https://polygonscan.com"],
+        },
+      ],
+    });
+  }
+}
+
+function defaultOrderPriceCents(quote: PolymarketOutcomeQuote | null | undefined, side: "BUY" | "SELL") {
+  if (!quote) return null;
+  const value = side === "BUY" ? quote.best_bid ?? quote.sell_price ?? quote.price : quote.best_ask ?? quote.buy_price ?? quote.price;
+  return value == null ? null : Math.round(value * 100);
+}
+
+function positionSizeForToken(positions: PolymarketAccountPosition[], tokenId: string) {
+  return positions.reduce((total, position) => {
+    if (!position.asset || normalizeId(position.asset) !== normalizeId(tokenId)) return total;
+    return total + (position.size ?? 0);
+  }, 0);
+}
+
+function shortAddress(value: string) {
+  if (value.length <= 14) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 function formatSize(value: number | null) {
   if (value == null) return "-";
   return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
@@ -1392,30 +1694,39 @@ function formatCompact(value: number | null) {
 }
 
 function positionMatchesMarket(position: PolymarketAccountPosition, market: PolymarketUpDownMarket) {
-  if (position.condition_id && market.condition_id && normalizeId(position.condition_id) !== normalizeId(market.condition_id)) {
-    return false;
-  }
   const asset = position.asset;
-  if (!asset) return true;
-  return market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(asset));
+  if (asset && market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(asset))) {
+    return true;
+  }
+  return Boolean(
+    position.condition_id &&
+      market.condition_id &&
+      normalizeId(position.condition_id) === normalizeId(market.condition_id),
+  );
 }
 
 function orderMatchesMarket(order: PolymarketAccountOrder, market: PolymarketUpDownMarket) {
-  if (order.market && market.condition_id && normalizeId(order.market) !== normalizeId(market.condition_id)) {
-    return false;
-  }
   const assetId = order.asset_id;
-  if (!assetId) return true;
-  return market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId));
+  if (assetId && market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId))) {
+    return true;
+  }
+  return Boolean(
+    order.market &&
+      market.condition_id &&
+      normalizeId(order.market) === normalizeId(market.condition_id),
+  );
 }
 
 function tradeMatchesMarket(trade: PolymarketAccountTrade, market: PolymarketUpDownMarket) {
-  if (trade.market && market.condition_id && normalizeId(trade.market) !== normalizeId(market.condition_id)) {
-    return false;
-  }
   const assetId = trade.asset_id;
-  if (!assetId) return true;
-  return market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId));
+  if (assetId && market.outcome_quotes.some((quote) => quote.token_id && normalizeId(quote.token_id) === normalizeId(assetId))) {
+    return true;
+  }
+  return Boolean(
+    trade.market &&
+      market.condition_id &&
+      normalizeId(trade.market) === normalizeId(market.condition_id),
+  );
 }
 
 function normalizeId(value: string) {
@@ -1427,6 +1738,69 @@ function positionCost(position: PolymarketAccountPosition) {
   return position.avg_price * position.size;
 }
 
+function positionDisplayMetrics(
+  position: PolymarketAccountPosition,
+  market: PolymarketUpDownMarket,
+  trades: PolymarketAccountTrade[],
+) {
+  const tradeBasis = positionTradeBasis(position, trades);
+  const avgPrice = position.avg_price && position.avg_price > 0 ? position.avg_price : tradeBasis?.avgPrice ?? null;
+  const livePrice = positionLivePrice(position, market);
+  const currentValue =
+    livePrice != null && position.size != null
+      ? livePrice * position.size
+      : position.current_value;
+  const cost =
+    avgPrice != null && position.size != null
+      ? avgPrice * position.size
+      : tradeBasis?.cost ?? positionCost(position);
+  const pnl =
+    cost != null && currentValue != null
+      ? currentValue - cost
+      : position.cash_pnl;
+  const percentPnl = cost != null && cost > 0 && pnl != null ? pnl / cost : position.percent_pnl;
+  return { avgPrice, cost, currentValue, pnl, percentPnl };
+}
+
+function positionLivePrice(position: PolymarketAccountPosition, market: PolymarketUpDownMarket) {
+  const quote = market.outcome_quotes.find((item) => quoteMatchesPosition(item, position));
+  if (!quote) return position.cur_price;
+  return quote.sell_price ?? quote.best_bid ?? quote.last_trade_price ?? quote.price ?? position.cur_price;
+}
+
+function positionTradeBasis(position: PolymarketAccountPosition, trades: PolymarketAccountTrade[]) {
+  const matchingBuys = trades.filter((trade) => {
+    if ((trade.side ?? "").toUpperCase() !== "BUY") return false;
+    if (trade.price == null || trade.size == null || trade.size <= 0) return false;
+    return tradeMatchesPosition(trade, position);
+  });
+  if (matchingBuys.length === 0) return null;
+  const totalSize = matchingBuys.reduce((sum, trade) => sum + (trade.size ?? 0), 0);
+  if (totalSize <= 0) return null;
+  const totalCost = matchingBuys.reduce((sum, trade) => sum + (trade.price ?? 0) * (trade.size ?? 0), 0);
+  const avgPrice = totalCost / totalSize;
+  const cost = position.size != null && position.size > 0 ? avgPrice * position.size : totalCost;
+  return { avgPrice, cost };
+}
+
+function tradeMatchesPosition(trade: PolymarketAccountTrade, position: PolymarketAccountPosition) {
+  if (trade.asset_id && position.asset && normalizeId(trade.asset_id) === normalizeId(position.asset)) {
+    return true;
+  }
+  const tradeOutcome = (trade.outcome ?? "").toLowerCase();
+  const positionOutcome = (position.outcome ?? "").toLowerCase();
+  return Boolean(tradeOutcome && positionOutcome && tradeOutcome === positionOutcome);
+}
+
+function quoteMatchesPosition(quote: PolymarketOutcomeQuote, position: PolymarketAccountPosition) {
+  if (quote.token_id && position.asset && normalizeId(quote.token_id) === normalizeId(position.asset)) {
+    return true;
+  }
+  const quoteName = quote.name.toLowerCase();
+  const positionOutcome = (position.outcome ?? "").toLowerCase();
+  return Boolean(quoteName && positionOutcome && quoteName === positionOutcome);
+}
+
 function accountStateStatusLabel(state: string) {
   if (state === "running") return "User WS 已连接";
   if (state === "connecting") return "User WS 连接中";
@@ -1434,6 +1808,20 @@ function accountStateStatusLabel(state: string) {
   if (state === "config_missing") return "User WS 未配置";
   if (state === "stopped") return "User WS 已停止";
   return "REST 快照";
+}
+
+function accountStateErrorSummary(error: string) {
+  if (error.includes("partially failed")) {
+    const failedParts = [
+      error.includes("balance:") ? "余额" : null,
+      error.includes("orders:") ? "挂单" : null,
+      error.includes("positions:") ? "仓位" : null,
+    ].filter(Boolean);
+    return failedParts.length > 0
+      ? `${failedParts.join("、")}接口暂时同步失败，已保留可用快照。`
+      : "账户状态部分同步失败，已保留可用快照。";
+  }
+  return "账户状态同步失败。";
 }
 
 function pnlClassName(value: number | null) {

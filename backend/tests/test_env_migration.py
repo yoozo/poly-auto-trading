@@ -28,7 +28,7 @@ def test_migration_moves_non_secret_values_and_keeps_secrets(tmp_path: Path) -> 
                 "SIGNAL_RSI_BONUS_RAW=70:1,80:2",
                 "DATABASE_URL=postgresql+asyncpg://secret",
                 "AUTH_PASSWORD=secret-password",
-                "POLYMARKET_CLOB_API_KEY=key",
+                "POLYMARKET_CREDENTIALS_ENCRYPTION_KEY=secret-key",
                 "UNKNOWN_SECRET=keep-me",
             ]
         ),
@@ -47,7 +47,7 @@ def test_migration_moves_non_secret_values_and_keeps_secrets(tmp_path: Path) -> 
     env_payload = env_path.read_text(encoding="utf-8")
     assert "DATABASE_URL=postgresql+asyncpg://secret" in env_payload
     assert "AUTH_PASSWORD=secret-password" in env_payload
-    assert "POLYMARKET_CLOB_API_KEY=key" in env_payload
+    assert "POLYMARKET_CREDENTIALS_ENCRYPTION_KEY=secret-key" in env_payload
     assert "UNKNOWN_SECRET=keep-me" in env_payload
     assert "APP_ENV=" not in env_payload
     assert "BINANCE_INTERVALS_RAW=" not in env_payload

@@ -47,10 +47,7 @@ polymarket:
                 "DATABASE_URL=postgresql+asyncpg://example",
                 "AUTH_PASSWORD=secret-password",
                 "AUTH_SESSION_SECRET=secret-session",
-                "POLYMARKET_CLOB_API_KEY=key",
-                "POLYMARKET_CLOB_SECRET=secret",
-                "POLYMARKET_CLOB_PASSPHRASE=pass",
-                "POLYMARKET_CLOB_ADDRESS=0x0000000000000000000000000000000000000001",
+                "POLYMARKET_CREDENTIALS_ENCRYPTION_KEY=secret-key",
                 "APP_ENV=env-should-not-win",
             ]
         ),
@@ -89,7 +86,7 @@ polymarket:
     ]
     assert settings.telegram_enabled_default is True
     assert settings.polymarket_account_refresh_seconds == 11
-    assert settings.polymarket_clob_api_key == "key"
+    assert settings.polymarket_credentials_encryption_key == "secret-key"
 
 
 def test_yaml_config_merges_default_file_with_local_overrides(tmp_path: Path) -> None:
@@ -102,7 +99,7 @@ binance:
   intervals:
     - 1m
 polymarket:
-  position_wallet: "0x0000000000000000000000000000000000000001"
+  account_refresh_seconds: 12
 """,
         encoding="utf-8",
     )
@@ -114,4 +111,4 @@ polymarket:
     assert yaml_config.binance.symbol == "BTCUSDT"
     assert yaml_config.binance.intervals == ["1m"]
     assert yaml_config.polymarket.gamma_base_url == "https://gamma-api.polymarket.com"
-    assert yaml_config.polymarket.position_wallet == "0x0000000000000000000000000000000000000001"
+    assert yaml_config.polymarket.account_refresh_seconds == 12

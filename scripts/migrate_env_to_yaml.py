@@ -19,10 +19,7 @@ SENSITIVE_KEYS = {
     "AUTH_SESSION_SECRET",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
-    "POLYMARKET_CLOB_ADDRESS",
-    "POLYMARKET_CLOB_API_KEY",
-    "POLYMARKET_CLOB_SECRET",
-    "POLYMARKET_CLOB_PASSPHRASE",
+    "POLYMARKET_CREDENTIALS_ENCRYPTION_KEY",
 }
 
 
@@ -120,7 +117,6 @@ def env_mappings() -> list[tuple[str, tuple[str, ...], Callable[[str], Any]]]:
         ("POLYMARKET_WS_MARKET_URL", ("polymarket", "ws_market_url"), strip_url),
         ("POLYMARKET_USER_WS_ENABLED", ("polymarket", "user_ws_enabled"), bool_value),
         ("POLYMARKET_WS_USER_URL", ("polymarket", "ws_user_url"), strip_url),
-        ("POLYMARKET_POSITION_WALLET", ("polymarket", "position_wallet"), str),
         ("POLYMARKET_ACCOUNT_REFRESH_SECONDS", ("polymarket", "account_refresh_seconds"), int),
         ("POLYMARKET_MARKET_REFRESH_SECONDS", ("polymarket", "market_refresh_seconds"), int),
         (

@@ -21,6 +21,10 @@ from app.services.polymarket_client import (
     normalize_account_order,
     normalize_account_trade,
 )
+from app.services.polymarket_credentials import (
+    RuntimePolymarketCredentials,
+    resolve_runtime_credentials,
+)
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.service_health import service_health_store
 
@@ -38,6 +42,7 @@ class PolymarketAccountMonitor:
         self._client = PolymarketClient()
         self._tasks: list[asyncio.Task] = []
         self._condition_change_event = asyncio.Event()
+        self._credential_change_event = asyncio.Event()
         self._last_condition_ids: set[str] = set()
 
     async def start(self) -> None:
@@ -47,7 +52,7 @@ class PolymarketAccountMonitor:
         if not settings.polymarket_user_ws_enabled:
             await self.set_ws_state("idle")
             return
-        if not clob_credentials_configured():
+        if not await runtime_clob_credentials_configured():
             await self.set_ws_state("config_missing", "Polymarket CLOB API credentials are not configured")
             return
         self._tasks.append(asyncio.create_task(self.ws_loop(), name="polymarket-account-user-ws"))
@@ -89,15 +94,20 @@ class PolymarketAccountMonitor:
                 await asyncio.sleep(5)
 
     async def refresh_account_snapshot(self) -> str | None:
-        wallet = settings.polymarket_position_wallet.strip().lower()
-        fetches = []
+        credentials = await resolve_runtime_credentials()
+        wallet = credentials.funder_address if credentials else ""
+        await polymarket_account_store.set_account_identity(
+            wallet=wallet,
+            clob_address=credentials.signer_address if credentials else None,
+        )
+        fetches = [("restriction", self._client.fetch_trading_restriction())]
         if wallet:
             fetches.append(("positions", self._client.fetch_positions(wallet=wallet, size_threshold=0)))
-        if clob_credentials_configured():
+        if credentials:
             fetches.extend(
                 [
-                    ("balance", self._client.fetch_balance_allowance()),
-                    ("orders", self._client.fetch_open_orders()),
+                    ("balance", self._client.fetch_balance_allowance(credentials=credentials)),
+                    ("orders", self._client.fetch_open_orders(credentials=credentials)),
                 ]
             )
         if not fetches:
@@ -117,6 +127,8 @@ class PolymarketAccountMonitor:
                 await polymarket_account_store.replace_balance(result)
             elif name == "orders":
                 await polymarket_account_store.replace_orders(result)
+            elif name == "restriction":
+                await polymarket_account_store.replace_trading_restriction(result)
         error = f"Polymarket account fetch partially failed: {'; '.join(errors)}" if errors else None
         await polymarket_account_store.set_error(error)
         return error
@@ -140,23 +152,39 @@ class PolymarketAccountMonitor:
 
     async def _ws_once(self) -> None:
         condition_ids = await self._wait_for_condition_ids()
+        credentials = await resolve_runtime_credentials()
+        if credentials is None:
+            await self.set_ws_state("config_missing", "Polymarket CLOB API credentials are not configured")
+            return
         await self.set_ws_state("connecting")
         async with websockets.connect(settings.polymarket_ws_user_url, ping_interval=None) as websocket:
-            await websocket.send(json.dumps(user_subscription_payload(condition_ids)))
+            await websocket.send(json.dumps(user_subscription_payload(condition_ids, credentials=credentials)))
             await self.set_ws_state("running")
             ping_task = asyncio.create_task(self._ping_loop(websocket), name="polymarket-account-ping")
             condition_task = asyncio.create_task(self._condition_change_event.wait(), name="polymarket-account-condition-change")
+            credential_task = asyncio.create_task(self._credential_change_event.wait(), name="polymarket-account-credential-change")
             receive_task = asyncio.create_task(websocket.recv(), name="polymarket-account-recv")
             try:
                 while True:
                     done, pending = await asyncio.wait(
-                        {condition_task, receive_task},
+                        {condition_task, credential_task, receive_task},
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if credential_task in done:
+                        self._credential_change_event.clear()
+                        raise PolymarketUserSubscriptionChanged
                     if condition_task in done:
                         self._condition_change_event.clear()
                         updated_ids = await polymarket_up_down_store.condition_ids()
-                        await websocket.send(json.dumps(user_subscription_payload(updated_ids, operation="subscribe")))
+                        await websocket.send(
+                            json.dumps(
+                                user_subscription_payload(
+                                    updated_ids,
+                                    credentials=credentials,
+                                    operation="subscribe",
+                                )
+                            )
+                        )
                         condition_task = asyncio.create_task(
                             self._condition_change_event.wait(),
                             name="polymarket-account-condition-change",
@@ -171,8 +199,9 @@ class PolymarketAccountMonitor:
             finally:
                 ping_task.cancel()
                 condition_task.cancel()
+                credential_task.cancel()
                 receive_task.cancel()
-                await cancel_tasks(ping_task, condition_task, receive_task)
+                await cancel_tasks(ping_task, condition_task, credential_task, receive_task)
 
     async def _wait_for_condition_ids(self) -> list[str]:
         while True:
@@ -258,15 +287,23 @@ class PolymarketAccountMonitor:
             metadata={"endpoint": settings.polymarket_ws_user_url},
         )
 
+    def notify_credentials_changed(self) -> None:
+        self._credential_change_event.set()
 
-def user_subscription_payload(condition_ids: list[str], operation: str | None = None) -> dict[str, Any]:
+
+def user_subscription_payload(
+    condition_ids: list[str],
+    *,
+    credentials: RuntimePolymarketCredentials,
+    operation: str | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "user",
         "markets": sorted(set(condition_ids)),
         "auth": {
-            "apiKey": settings.polymarket_clob_api_key,
-            "secret": settings.polymarket_clob_secret,
-            "passphrase": settings.polymarket_clob_passphrase,
+            "apiKey": credentials.api_key,
+            "secret": credentials.api_secret,
+            "passphrase": credentials.api_passphrase,
         },
     }
     if operation:
@@ -323,13 +360,8 @@ def dedupe_account_events(events: list[tuple[str, dict[str, Any]]]) -> list[tupl
     return result
 
 
-def clob_credentials_configured() -> bool:
-    return bool(
-        settings.polymarket_clob_api_key
-        and settings.polymarket_clob_secret
-        and settings.polymarket_clob_passphrase
-        and settings.polymarket_clob_address
-    )
+async def runtime_clob_credentials_configured() -> bool:
+    return await resolve_runtime_credentials() is not None
 
 
 async def cancel_tasks(*tasks: asyncio.Task) -> None:

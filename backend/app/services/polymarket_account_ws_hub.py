@@ -33,8 +33,6 @@ class PolymarketAccountWebSocketHub:
 
     async def broadcast(self, payload: dict[str, Any], condition_id: str | None = None) -> None:
         keys = [normalize_condition(condition_id)]
-        if condition_id is not None:
-            keys.append(None)
         clients: list[tuple[str | None, WebSocket]] = []
         async with self._lock:
             for key in keys:

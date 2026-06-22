@@ -25,7 +25,7 @@ endif
 
 .PHONY: help install install-api install-web dev dev-api dev-web \
 	db-up db-create migrate migrate-down migrate-current migrate-history \
-	lsof poly-event test test-api test-web lint lint-api build build-web check clean clean-api clean-web
+	lsof poly-event import-polymarket-credentials test test-api test-web lint lint-api build build-web check clean clean-api clean-web
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nCommands:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -108,6 +108,9 @@ poly-event: ## Resolve a Polymarket event slug/URL. Usage: copy event URL, then 
 	fi; \
 	printf '%s' "$$payload" \
 		| jq '.markets[] | {question, conditionId, outcomes: (.outcomes | fromjson), clobTokenIds: (.clobTokenIds | fromjson), negRisk, tickSize: .orderPriceMinTickSize}'
+
+import-polymarket-credentials: ## Import Polymarket CLOB credentials. Usage: POLY_CREDENTIAL_PAYLOAD=... make import-polymarket-credentials
+	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -m app.scripts.import_polymarket_credentials
 
 migrate: ## Run Alembic migrations.
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) alembic upgrade head

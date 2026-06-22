@@ -422,10 +422,21 @@ export type PolymarketAccountBalance = {
   raw: Record<string, unknown>;
 };
 
+export type PolymarketTradingRestriction = {
+  blocked: boolean;
+  close_only: boolean;
+  country: string | null;
+  region: string | null;
+  checked_at: string | null;
+  error: string | null;
+  raw: Record<string, unknown>;
+};
+
 export type PolymarketAccountState = {
   wallet: string | null;
   clob_address: string | null;
   balance: PolymarketAccountBalance | null;
+  trading_restriction: PolymarketTradingRestriction | null;
   condition_id: string | null;
   positions: PolymarketAccountPosition[];
   orders: PolymarketAccountOrder[];
@@ -446,6 +457,41 @@ export type PolymarketAccountStateWsMessage = {
 export type PolymarketCancelOrderResponse = {
   canceled: string[];
   not_canceled: Record<string, unknown>;
+  raw: Record<string, unknown>;
+};
+
+export type PolymarketCredentialProfile = {
+  id: string;
+  label: string;
+  signer_address: string;
+  funder_address: string;
+  signature_type: number;
+  api_key_masked: string;
+  active: boolean;
+};
+
+export type PolymarketCredentialListResponse = {
+  active_id: string | null;
+  profiles: PolymarketCredentialProfile[];
+  encryption_configured: boolean;
+};
+
+export type PolymarketSignedOrderRequest = {
+  signed_order: Record<string, unknown>;
+  condition_id?: string | null;
+  token_id: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  order_type: "GTC" | "FOK" | "GTD" | "FAK";
+  post_only: boolean;
+  defer_exec: boolean;
+};
+
+export type PolymarketSignedOrderResponse = {
+  success: boolean | null;
+  order_id: string | null;
+  status: string | null;
   raw: Record<string, unknown>;
 };
 
@@ -477,6 +523,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401) unauthorizedHandler?.();
     throw new Error(detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -600,9 +647,28 @@ export const api = {
     request<PolymarketAccountState>(
       conditionId ? `/api/polymarket/account-state/${encodeURIComponent(conditionId)}` : "/api/polymarket/account-state"
     ),
+  refreshPolymarketAccountState: () =>
+    request<PolymarketAccountState>("/api/polymarket/account-state/refresh", {
+      method: "POST",
+    }),
   cancelPolymarketOrder: (orderId: string) =>
     request<PolymarketCancelOrderResponse>(`/api/polymarket/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: "POST",
+    }),
+  polymarketCredentials: () => request<PolymarketCredentialListResponse>("/api/polymarket/credentials"),
+  activatePolymarketCredential: (credentialId: string) =>
+    request<PolymarketCredentialListResponse>(`/api/polymarket/credentials/${encodeURIComponent(credentialId)}/activate`, {
+      method: "POST",
+    }),
+  deletePolymarketCredential: (credentialId: string) =>
+    request<void>(`/api/polymarket/credentials/${encodeURIComponent(credentialId)}`, {
+      method: "DELETE",
+    }),
+  postSignedPolymarketOrder: (payload: PolymarketSignedOrderRequest) =>
+    request<PolymarketSignedOrderResponse>("/api/polymarket/orders/signed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }),
   polymarketBtcUpDownWsUrl: (interval: PolymarketInterval) => {
     const base = API_BASE_URL || window.location.origin;

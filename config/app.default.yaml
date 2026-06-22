@@ -43,7 +43,6 @@ polymarket:
   ws_market_url: wss://ws-subscriptions-clob.polymarket.com/ws/market
   user_ws_enabled: true
   ws_user_url: wss://ws-subscriptions-clob.polymarket.com/ws/user
-  position_wallet: ""
   # 账户快照 REST 兜底刷新周期：拉 positions、balance/allowance、open orders；代码层最小值为 5 秒。
   account_refresh_seconds: 10
   # BTC Up/Down 市场发现的兜底间隔；真实调度会结合市场开始/结束边界动态提前刷新。

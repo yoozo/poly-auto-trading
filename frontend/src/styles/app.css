@@ -64,17 +64,58 @@ body[data-theme="dark"] {
   color: var(--text-muted, #667085);
 }
 
+.app-account-control {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 .app-account-summary {
   display: grid;
   gap: 1px;
+  max-width: min(360px, 42vw);
   padding: 0 10px;
+  border: 0;
   line-height: 1.15;
+  cursor: default;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.app-account-summary:not(.app-account-summary-guest) {
+  display: flex;
+  max-width: min(560px, 46vw);
+  height: 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-account-summary-guest:hover {
+  background: rgb(15 23 42 / 4%);
 }
 
 .app-account-metrics {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 5px;
+  white-space: nowrap;
+}
+
+.app-account-profile-label {
+  min-width: 0;
+  max-width: 128px;
+  overflow: hidden;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -92,6 +133,48 @@ body[data-theme="dark"] {
   font-variant-numeric: tabular-nums;
 }
 
+.app-account-summary-guest {
+  display: flex;
+  min-width: 0;
+  max-width: none;
+  height: 34px;
+  align-items: center;
+  padding: 0 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app-account-summary-guest .app-account-metrics {
+  width: auto;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.app-account-summary-guest .app-account-meta {
+  display: none;
+}
+
+.app-account-login-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #175cd3;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.app-account-summary-guest .app-account-metric-label::after,
+.app-account-summary-guest .app-account-metrics strong::after {
+  content: "·";
+  margin-left: 6px;
+  color: #c0c7d2;
+  font-weight: 700;
+}
+
 .app-account-separator {
   color: #c0c7d2;
   font-size: 12px;
@@ -100,12 +183,91 @@ body[data-theme="dark"] {
 
 .app-account-meta {
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   color: #98a2b3;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 10px;
   line-height: 1.1;
   text-align: left;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-account-summary:not(.app-account-summary-guest) .app-account-meta {
+  max-width: 150px;
+  font-size: 11px;
+}
+
+.app-account-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.app-account-refresh {
+  width: 28px;
+  height: 26px;
+  color: #7a8594;
+}
+
+.app-account-logout {
+  min-width: 54px;
+  height: 26px;
+  padding: 0 6px;
+  color: #7a8594;
+}
+
+.app-account-popover .ant-popover-inner {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 96px));
+  overflow: auto;
+}
+
+.polymarket-wallet-popover {
+  width: 100%;
+}
+
+.polymarket-wallet-flow {
+  display: grid;
+  gap: 12px;
+}
+
+.polymarket-wallet-flow-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.polymarket-wallet-flow-subtitle {
+  margin-top: 2px;
+  color: var(--text-muted, #667085);
+  font-size: 12px;
+}
+
+.polymarket-wallet-connect,
+.polymarket-wallet-ready,
+.polymarket-wallet-onboarding {
+  display: grid;
+  gap: 10px;
+}
+
+.polymarket-wallet-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border, #e4e7ec);
+  border-radius: 6px;
+  background: var(--panel-subtle, #f8fafc);
+}
+
+.polymarket-wallet-current span {
+  color: var(--text-muted, #667085);
+  font-size: 12px;
 }
 
 .auth-loading,
@@ -178,6 +340,244 @@ body[data-theme="dark"] {
 .page-stack {
   display: grid;
   gap: 16px;
+}
+
+.polymarket-credential-manager {
+  width: 100%;
+}
+
+.polymarket-wallet-quick-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.polymarket-wallet-profile-menu {
+  display: grid;
+  gap: 4px;
+}
+
+.polymarket-wallet-profile-option {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #101828);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.polymarket-wallet-profile-option:hover,
+.polymarket-wallet-profile-option.active {
+  background: rgba(22, 119, 255, 10%);
+}
+
+.polymarket-wallet-profile-option:disabled {
+  cursor: default;
+}
+
+.polymarket-wallet-profile-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-wallet-profile-address {
+  overflow: hidden;
+  color: var(--text-muted, #667085);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-wallet-empty {
+  padding: 8px 10px;
+  color: var(--text-muted, #667085);
+  font-size: 13px;
+}
+
+.polymarket-wallet-quick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.polymarket-wallet-quick-head-simple {
+  display: block;
+}
+
+.polymarket-wallet-active-label {
+  max-width: 250px;
+  overflow: hidden;
+  color: #7a8594;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-wallet-profile-select {
+  width: 100%;
+}
+
+.polymarket-wallet-profile-meta .ant-descriptions-item {
+  padding-bottom: 4px;
+}
+
+.polymarket-credential-generator {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.polymarket-credential-generator-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.polymarket-credential-generator-head .ant-typography {
+  margin: 0;
+}
+
+.polymarket-credential-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.2fr) 140px;
+  align-items: end;
+}
+
+.polymarket-credential-form .ant-form-item {
+  margin-bottom: 0;
+}
+
+.polymarket-credential-signature-input {
+  width: 100%;
+}
+
+.polymarket-credential-command {
+  display: grid;
+  gap: 10px;
+}
+
+.polymarket-credential-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.polymarket-signature-detection {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.polymarket-signature-detection .ant-table-wrapper {
+  overflow-x: auto;
+}
+
+.polymarket-signature-detection .ant-space-vertical {
+  min-width: 0;
+}
+
+.polymarket-credential-command textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.polymarket-credential-command-copy {
+  display: block;
+  width: 100%;
+  max-height: 128px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #f2f4f7;
+  color: #667085;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  user-select: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.polymarket-credential-command-copy:hover,
+.polymarket-credential-command-copy:focus-visible {
+  border-color: #91caff;
+  background: #eef4ff;
+  outline: none;
+}
+
+body[data-theme="dark"] .polymarket-credential-generator {
+  border-color: var(--panel-border, #27313c);
+  background: #141a21;
+}
+
+body[data-theme="dark"] .polymarket-credential-command-copy {
+  border-color: #344054;
+  background: #1f2937;
+  color: #98a2b3;
+}
+
+body[data-theme="dark"] .app-account-summary-guest:hover {
+  background: rgb(255 255 255 / 6%);
+}
+
+body[data-theme="dark"] .app-account-summary-guest {
+  background: transparent;
+}
+
+body[data-theme="dark"] .app-account-login-action {
+  background: transparent;
+  color: #9ec5ff;
+}
+
+.polymarket-wallet-popover .polymarket-credential-generator {
+  padding: 12px;
+}
+
+.polymarket-wallet-popover .polymarket-credential-generator-head {
+  align-items: flex-start;
+}
+
+.polymarket-wallet-popover .polymarket-credential-form {
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.1fr) 90px;
+}
+
+@media (max-width: 900px) {
+  .polymarket-credential-generator-head {
+    flex-direction: column;
+  }
+
+  .polymarket-credential-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .polymarket-wallet-quick-head,
+  .polymarket-wallet-popover .polymarket-credential-generator-head {
+    flex-direction: column;
+  }
+
+  .polymarket-wallet-popover .polymarket-credential-form {
+    grid-template-columns: 1fr;
+  }
 }
 
 .signal-details {
@@ -1574,16 +1974,23 @@ body[data-theme="dark"] {
 }
 
 .polymarket-outcomes {
+  position: sticky;
+  z-index: 5;
+  top: 0;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: 1fr;
+  margin: -2px -2px 0;
+  padding: 2px 2px 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.06);
 }
 
 .polymarket-outcome {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid #d8dee8;
   border-radius: 6px;
   background: #ffffff;
@@ -1629,10 +2036,10 @@ body[data-theme="dark"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 52px;
-  padding: 4px 9px;
+  min-width: 46px;
+  padding: 3px 7px;
   border-radius: 6px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 900;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -1693,14 +2100,14 @@ body[data-theme="dark"] {
 }
 
 .polymarket-orderbook-head {
-  padding: 5px 6px;
+  padding: 4px 6px;
   background: #f8fafc;
   color: #667085;
   font-weight: 600;
 }
 
 .polymarket-orderbook-row {
-  padding: 3px 6px;
+  padding: 2px 6px;
   border-top: 1px solid #f1f3f6;
   color: #344054;
 }
@@ -1723,8 +2130,8 @@ body[data-theme="dark"] {
 .polymarket-account-panel {
   display: grid;
   min-width: 0;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 8px;
   border: 1px solid #eef1f5;
   border-radius: 6px;
   background: #fbfcfe;
@@ -1779,7 +2186,7 @@ body[data-theme="dark"] {
 
 .polymarket-position-table .polymarket-account-table-head,
 .polymarket-position-table .polymarket-account-row {
-  grid-template-columns: minmax(68px, 0.9fr) 44px 54px minmax(150px, 1.6fr);
+  grid-template-columns: minmax(62px, 0.9fr) 42px 46px minmax(86px, 1.2fr) minmax(76px, 1fr);
 }
 
 .polymarket-order-table .polymarket-account-table-head,
@@ -1789,7 +2196,27 @@ body[data-theme="dark"] {
 
 .polymarket-trade-table .polymarket-account-table-head,
 .polymarket-trade-table .polymarket-account-row {
-  grid-template-columns: 44px minmax(58px, 1fr) 48px 56px 72px 70px;
+  grid-template-columns: 36px minmax(54px, 0.9fr) 42px 46px 62px 58px;
+}
+
+.polymarket-trade-table {
+  border-color: #f1f3f6;
+  background: transparent;
+}
+
+.polymarket-trade-table .polymarket-account-table-head {
+  padding: 5px 8px;
+  border-bottom-color: #f1f3f6;
+  background: #fbfcfe;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.polymarket-trade-table .polymarket-account-row {
+  min-height: 34px;
+  padding: 5px 8px;
+  background: #ffffff;
+  font-size: 12px;
 }
 
 .polymarket-account-table-head {
@@ -1803,10 +2230,10 @@ body[data-theme="dark"] {
 }
 
 .polymarket-account-row {
-  min-height: 46px;
-  padding: 8px 10px;
+  min-height: 40px;
+  padding: 6px 8px;
   color: #344054;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .polymarket-account-row + .polymarket-account-row {
@@ -1834,6 +2261,20 @@ body[data-theme="dark"] {
   font-weight: 700;
 }
 
+.polymarket-account-return-cell {
+  align-content: center;
+  justify-items: start;
+}
+
+.polymarket-account-return-cell strong {
+  font-weight: 800;
+}
+
+.polymarket-account-return-cell small {
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .polymarket-account-value-cell small {
   min-width: 0;
   overflow: hidden;
@@ -1856,6 +2297,12 @@ body[data-theme="dark"] {
   background: #eef2f7;
   color: #344054;
   font-weight: 800;
+}
+
+.polymarket-trade-table .polymarket-account-outcome-pill {
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 11px;
 }
 
 .polymarket-account-outcome-pill.up {
@@ -1907,9 +2354,9 @@ body[data-theme="dark"] {
   justify-content: center;
   min-width: 0;
   max-width: 100%;
-  padding: 3px 6px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 5px;
+  font-size: 10px;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1970,6 +2417,21 @@ body[data-theme="dark"] {
 .polymarket-order-entry-submit {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.polymarket-order-entry-meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.polymarket-order-entry-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #98a2b3;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .polymarket-order-entry-submit .ant-checkbox-wrapper {
@@ -2887,6 +3349,10 @@ body[data-theme="dark"] .app-account-meta {
   color: #7f8ea3;
 }
 
+body[data-theme="dark"] .app-account-profile-label {
+  color: #d5dde8;
+}
+
 body[data-theme="dark"] .app-account-metrics strong {
   color: #34d399;
 }
@@ -2899,6 +3365,11 @@ body[data-theme="dark"] .polymarket-outcome,
 body[data-theme="dark"] .polymarket-orderbook {
   border-color: var(--panel-border);
   background: var(--table-bg);
+}
+
+body[data-theme="dark"] .polymarket-outcomes {
+  background: var(--panel-bg);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.28);
 }
 
 body[data-theme="dark"] .polymarket-outcome.up {
@@ -3018,6 +3489,7 @@ body[data-theme="dark"] .polymarket-account-outcome-pill.down {
 body[data-theme="dark"] .polymarket-account-section-title,
 body[data-theme="dark"] .polymarket-account-pnl.neutral,
 body[data-theme="dark"] .polymarket-order-entry-inputs label,
+body[data-theme="dark"] .polymarket-order-entry-meta > span,
 body[data-theme="dark"] .polymarket-order-entry-submit .ant-checkbox-wrapper {
   color: #94a3b8;
 }

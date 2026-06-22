@@ -82,7 +82,6 @@ class PolymarketConfig(BaseModel):
     ws_market_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     user_ws_enabled: bool = True
     ws_user_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
-    position_wallet: str = ""
     account_refresh_seconds: int = 30
     market_refresh_seconds: int = 60
     market_boundary_refresh_window_seconds: int = 3
@@ -117,10 +116,7 @@ class SecretSettings(BaseSettings):
     auth_session_secret: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-    polymarket_clob_address: str = ""
-    polymarket_clob_api_key: str = ""
-    polymarket_clob_secret: str = ""
-    polymarket_clob_passphrase: str = ""
+    polymarket_credentials_encryption_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=DEFAULT_ENV_FILES,
@@ -177,11 +173,7 @@ class Settings:
         self.polymarket_ws_market_url = yaml_config.polymarket.ws_market_url
         self.polymarket_user_ws_enabled = yaml_config.polymarket.user_ws_enabled
         self.polymarket_ws_user_url = yaml_config.polymarket.ws_user_url
-        self.polymarket_position_wallet = yaml_config.polymarket.position_wallet
-        self.polymarket_clob_api_key = secrets.polymarket_clob_api_key
-        self.polymarket_clob_secret = secrets.polymarket_clob_secret
-        self.polymarket_clob_passphrase = secrets.polymarket_clob_passphrase
-        self.polymarket_clob_address = secrets.polymarket_clob_address
+        self.polymarket_credentials_encryption_key = secrets.polymarket_credentials_encryption_key
         self.polymarket_account_refresh_seconds = yaml_config.polymarket.account_refresh_seconds
         self.polymarket_market_refresh_seconds = yaml_config.polymarket.market_refresh_seconds
         self.polymarket_market_boundary_refresh_window_seconds = (

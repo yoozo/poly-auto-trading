@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -106,10 +106,21 @@ class PolymarketAccountBalance(BaseModel):
     raw: dict = Field(default_factory=dict)
 
 
+class PolymarketTradingRestriction(BaseModel):
+    blocked: bool = False
+    close_only: bool = False
+    country: str | None = None
+    region: str | None = None
+    checked_at: datetime | None = None
+    error: str | None = None
+    raw: dict = Field(default_factory=dict)
+
+
 class PolymarketAccountState(BaseModel):
     wallet: str | None
     clob_address: str | None = None
     balance: PolymarketAccountBalance | None = None
+    trading_restriction: PolymarketTradingRestriction | None = None
     condition_id: str | None = None
     positions: list[PolymarketAccountPosition]
     orders: list[PolymarketAccountOrder]
@@ -130,4 +141,39 @@ class PolymarketAccountStateWsMessage(BaseModel):
 class PolymarketCancelOrderResponse(BaseModel):
     canceled: list[str]
     not_canceled: dict
+    raw: dict
+
+
+class PolymarketCredentialProfile(BaseModel):
+    id: str
+    label: str
+    signer_address: str
+    funder_address: str
+    signature_type: int
+    api_key_masked: str
+    active: bool
+
+
+class PolymarketCredentialListResponse(BaseModel):
+    active_id: str | None
+    profiles: list[PolymarketCredentialProfile]
+    encryption_configured: bool
+
+
+class PolymarketSignedOrderRequest(BaseModel):
+    signed_order: dict[str, Any]
+    condition_id: str | None = None
+    token_id: str
+    side: Literal["BUY", "SELL"]
+    price: float
+    size: float
+    order_type: Literal["GTC", "FOK", "GTD", "FAK"] = "GTC"
+    post_only: bool = True
+    defer_exec: bool = False
+
+
+class PolymarketSignedOrderResponse(BaseModel):
+    success: bool | None = None
+    order_id: str | None = None
+    status: str | None = None
     raw: dict
