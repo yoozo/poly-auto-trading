@@ -344,6 +344,73 @@ def test_post_signed_order_rejects_close_only_sell_above_position(monkeypatch: p
     assert "SELL size" in response.json()["detail"]
 
 
+def test_post_signed_market_sell_uses_signed_size_for_close_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_credentials = RuntimePolymarketCredentials(
+        source="db",
+        credential_id="profile-1",
+        signer_address=SIGNER,
+        funder_address=FUNDER,
+        signature_type=3,
+        api_key="api-key-owner",
+        api_secret="api-secret",
+        api_passphrase="api-pass",
+    )
+    asyncio.run(
+        polymarket_account_store.replace_positions(
+            [
+                PolymarketAccountPosition(
+                    condition_id="condition-1",
+                    asset="token-1",
+                    title=None,
+                    slug=None,
+                    event_slug=None,
+                    outcome="Up",
+                    size=0.5,
+                    avg_price=None,
+                    cur_price=None,
+                    current_value=None,
+                    cash_pnl=None,
+                    percent_pnl=None,
+                    redeemable=False,
+                    mergeable=False,
+                    end_date=None,
+                    raw={},
+                )
+            ]
+        )
+    )
+
+    async def fake_resolve_runtime_credentials() -> RuntimePolymarketCredentials:
+        return runtime_credentials
+
+    async def fake_fetch_trading_restriction(self):  # noqa: ANN001
+        return PolymarketTradingRestriction(blocked=True, close_only=True, country="SG")
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket, "resolve_runtime_credentials", fake_resolve_runtime_credentials)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "fetch_trading_restriction", fake_fetch_trading_restriction)
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post(
+        "/api/polymarket/orders/signed",
+        json={
+            "signed_order": make_signed_order(side="SELL", maker_amount="1000000", taker_amount="500000"),
+            "token_id": "token-1",
+            "side": "SELL",
+            "price": 0.5,
+            "size": 0.01,
+            "order_type": "FOK",
+            "post_only": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "SELL size" in response.json()["detail"]
+
+
 def test_post_signed_order_rejects_mismatched_maker(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_credentials = RuntimePolymarketCredentials(
         source="db",

@@ -1188,6 +1188,18 @@ function PolymarketOrderEntry({
   const closeOnly = Boolean(tradingRestriction?.close_only);
   const selectedPositionSize = selectedQuote?.token_id ? positionSizeForToken(positions, selectedQuote.token_id) : 0;
   const marketPrice = marketOrderPrice(selectedQuote, side);
+  const orderEstimate = useMemo(
+    () =>
+      estimateOrderSummary({
+        quote: selectedQuote,
+        side,
+        orderMode,
+        amount,
+        priceCents,
+        marketPrice,
+      }),
+    [amount, marketPrice, orderMode, priceCents, selectedQuote, side],
+  );
   const inputLabel = orderMode === "MARKET" && side === "BUY" ? "Amount" : "Shares";
   const inputSuffix = orderMode === "MARKET" && side === "BUY" ? "USDC" : "shares";
   const maxInput = side === "SELL" ? selectedPositionSize : undefined;
@@ -1202,7 +1214,7 @@ function PolymarketOrderEntry({
       market.accepting_orders &&
       selectedQuote?.token_id &&
       amount &&
-      amount > 0 &&
+      amount >= 1 &&
       (orderMode === "MARKET" || priceCents) &&
       (!closeOnly || side === "SELL") &&
       (side !== "SELL" || amount <= selectedPositionSize),
@@ -1238,7 +1250,7 @@ function PolymarketOrderEntry({
       onNotice("warning", "请输入有效限价", "请输入 1-99¢ 的限价");
       return;
     }
-    if (!amount || amount <= 0) {
+    if (!amount || amount < 1) {
       onNotice("warning", "请输入数量", side === "BUY" && orderMode === "MARKET" ? "请输入买入金额" : "请输入 shares 数量");
       return;
     }
@@ -1376,7 +1388,7 @@ function PolymarketOrderEntry({
           <label>
             {inputLabel}
             <InputNumber
-              min={0.01}
+              min={1}
               max={maxInput}
               step={1}
               value={amount}
@@ -1404,6 +1416,20 @@ function PolymarketOrderEntry({
             ))}
           </div>
         )}
+        <div className="polymarket-order-entry-estimate">
+          <div>
+            <span>{side === "BUY" ? "Total" : "Receive"}</span>
+            <strong>{formatCurrency(orderEstimate.total)}</strong>
+          </div>
+          <div>
+            <span>To win</span>
+            <strong className="polymarket-order-entry-win">{formatCurrency(orderEstimate.toWin)}</strong>
+          </div>
+          <small>
+            Avg. Price {formatCents(orderEstimate.avgPrice)}
+            {orderEstimate.depthLimited ? " · 深度不足，按当前盘口估算" : ""}
+          </small>
+        </div>
         <div className="polymarket-order-entry-submit">
           <div className="polymarket-order-entry-meta">
             <Checkbox checked={orderMode === "LIMIT"} disabled>
@@ -1732,6 +1758,98 @@ function marketOrderPrice(quote: PolymarketOutcomeQuote | null | undefined, side
   return side === "BUY"
     ? quote.buy_price ?? quote.best_ask ?? quote.price ?? quote.last_trade_price
     : quote.sell_price ?? quote.best_bid ?? quote.price ?? quote.last_trade_price;
+}
+
+function estimateOrderSummary({
+  quote,
+  side,
+  orderMode,
+  amount,
+  priceCents,
+  marketPrice,
+}: {
+  quote: PolymarketOutcomeQuote | null;
+  side: "BUY" | "SELL";
+  orderMode: "MARKET" | "LIMIT";
+  amount: number | null;
+  priceCents: number | null;
+  marketPrice: number | null;
+}) {
+  if (!amount || amount < 1) return { total: 0, toWin: 0, avgPrice: null, depthLimited: false };
+  const limitPrice = priceCents ? priceCents / 100 : null;
+  if (orderMode === "LIMIT") {
+    if (!limitPrice || limitPrice <= 0) return { total: 0, toWin: 0, avgPrice: null, depthLimited: false };
+    const grossPayout = side === "BUY" ? amount : 0;
+    return {
+      total: amount * limitPrice,
+      toWin: grossPayout,
+      avgPrice: limitPrice,
+      depthLimited: false,
+    };
+  }
+  if (!quote) return { total: side === "BUY" ? amount : 0, toWin: 0, avgPrice: marketPrice, depthLimited: false };
+  return side === "BUY"
+    ? estimateMarketBuy(amount, quote, marketPrice)
+    : estimateMarketSell(amount, quote, marketPrice);
+}
+
+function estimateMarketBuy(cashAmount: number, quote: PolymarketOutcomeQuote, fallbackPrice: number | null) {
+  let remainingCash = cashAmount;
+  let shares = 0;
+  let spent = 0;
+  const asks = [...quote.asks]
+    .filter((level) => level.price != null && level.price > 0 && level.size != null && level.size > 0)
+    .sort((left, right) => (left.price ?? 0) - (right.price ?? 0));
+  for (const level of asks) {
+    if (remainingCash <= 0) break;
+    const price = level.price ?? 0;
+    const size = level.size ?? 0;
+    const maxCost = price * size;
+    const usedCash = Math.min(remainingCash, maxCost);
+    shares += usedCash / price;
+    spent += usedCash;
+    remainingCash -= usedCash;
+  }
+  if (remainingCash > 0 && fallbackPrice && fallbackPrice > 0) {
+    shares += remainingCash / fallbackPrice;
+    spent += remainingCash;
+    remainingCash = 0;
+  }
+  return {
+    total: spent,
+    toWin: shares,
+    avgPrice: shares > 0 ? spent / shares : fallbackPrice,
+    depthLimited: remainingCash > 0,
+  };
+}
+
+function estimateMarketSell(shareAmount: number, quote: PolymarketOutcomeQuote, fallbackPrice: number | null) {
+  let remainingShares = shareAmount;
+  let soldShares = 0;
+  let proceeds = 0;
+  const bids = [...quote.bids]
+    .filter((level) => level.price != null && level.price > 0 && level.size != null && level.size > 0)
+    .sort((left, right) => (right.price ?? 0) - (left.price ?? 0));
+  for (const level of bids) {
+    if (remainingShares <= 0) break;
+    const price = level.price ?? 0;
+    const size = level.size ?? 0;
+    const usedShares = Math.min(remainingShares, size);
+    proceeds += usedShares * price;
+    soldShares += usedShares;
+    remainingShares -= usedShares;
+  }
+  if (remainingShares > 0 && fallbackPrice && fallbackPrice > 0) {
+    proceeds += remainingShares * fallbackPrice;
+    soldShares += remainingShares;
+    remainingShares = 0;
+  }
+  return {
+    total: proceeds,
+    toWin: 0,
+    avgPrice: soldShares > 0 ? proceeds / soldShares : fallbackPrice,
+    depthLimited: remainingShares > 0,
+  };
 }
 
 function roundInputAmount(value: number) {

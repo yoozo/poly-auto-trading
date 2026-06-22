@@ -466,10 +466,46 @@ async def test_start_marks_user_ws_config_missing_without_clob_credentials(monke
     monkeypatch.setattr(monitor, "set_ws_state", fake_set_ws_state)
 
     await monitor.start()
+    await asyncio.wait_for(wait_for_state(states, "config_missing"), timeout=1)
     await monitor.stop()
 
     assert states[0][0] == "config_missing"
     assert "credentials" in (states[0][1] or "")
+
+
+@pytest.mark.asyncio
+async def test_user_ws_waits_for_credentials_after_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monitor = PolymarketAccountMonitor()
+    credentials_available = False
+    ws_started = asyncio.Event()
+    release_ws = asyncio.Event()
+
+    async def fake_subscription_watch_loop() -> None:
+        await asyncio.Event().wait()
+
+    async def fake_resolve_runtime_credentials() -> RuntimePolymarketCredentials | None:
+        return make_runtime_credentials() if credentials_available else None
+
+    async def fake_ws_once() -> None:
+        ws_started.set()
+        await release_ws.wait()
+
+    monkeypatch.setattr(settings, "polymarket_user_ws_enabled", True)
+    monkeypatch.setattr(
+        "app.services.polymarket_account_monitor.resolve_runtime_credentials",
+        fake_resolve_runtime_credentials,
+    )
+    monkeypatch.setattr(monitor, "subscription_watch_loop", fake_subscription_watch_loop)
+    monkeypatch.setattr(monitor, "_ws_once", fake_ws_once)
+
+    await monitor.start()
+    credentials_available = True
+    monitor.notify_credentials_changed()
+    await asyncio.wait_for(ws_started.wait(), timeout=1)
+    release_ws.set()
+    await monitor.stop()
+
+    assert ws_started.is_set()
 
 
 def test_user_subscription_payload_uses_condition_ids_and_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,6 +521,11 @@ def test_user_subscription_payload_uses_condition_ids_and_auth(monkeypatch: pyte
     assert payload["operation"] == "subscribe"
     assert payload["markets"] == ["0xabc", "0xdef"]
     assert payload["auth"] == {"apiKey": "key", "secret": "secret", "passphrase": "pass"}
+
+
+async def wait_for_state(states: list[tuple[str, str | None]], expected: str) -> None:
+    while not any(state == expected for state, _ in states):
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio

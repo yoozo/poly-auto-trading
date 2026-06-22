@@ -1974,16 +1974,10 @@ body[data-theme="dark"] .app-account-login-action {
 }
 
 .polymarket-outcomes {
-  position: sticky;
-  z-index: 5;
-  top: 0;
   display: grid;
   gap: 8px;
   grid-template-columns: 1fr;
-  margin: -2px -2px 0;
-  padding: 2px 2px 8px;
-  background: #ffffff;
-  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.06);
+  margin: 0;
 }
 
 .polymarket-outcome {
@@ -2565,6 +2559,41 @@ body[data-theme="dark"] .app-account-login-action {
   border-color: #d0d5dd;
   font-weight: 700;
   background: #ffffff;
+}
+
+.polymarket-order-entry-estimate {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.polymarket-order-entry-estimate > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.polymarket-order-entry-estimate span,
+.polymarket-order-entry-estimate small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.polymarket-order-entry-estimate strong {
+  color: #155eef;
+  font-size: 17px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.polymarket-order-entry-estimate .polymarket-order-entry-win {
+  color: #16a34a;
 }
 
 .polymarket-order-entry-submit {
@@ -3674,13 +3703,81 @@ body[data-theme="dark"] .polymarket-order-entry-submit {
   background: rgba(30, 41, 55, 0.74);
 }
 
+body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented,
+body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented {
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented-item,
+body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented-item {
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented-item-selected,
+body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented-item-selected {
+  background: rgba(15, 23, 42, 0.88);
+  color: var(--trade-accent);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-estimate {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(15, 23, 42, 0.48);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-estimate span,
+body[data-theme="dark"] .polymarket-order-entry-estimate small {
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-estimate strong {
+  color: #93c5fd;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-estimate .polymarket-order-entry-win {
+  color: #4ade80;
+}
+
 body[data-theme="dark"] .polymarket-order-entry-inputs {
   border-color: var(--trade-accent-border);
   background: rgba(15, 23, 42, 0.66);
 }
 
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number,
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-group-wrapper .ant-input-number {
+  border-color: #334155;
+  background: #111827;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number:hover,
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-focused {
+  border-color: var(--trade-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--trade-accent) 22%, transparent);
+}
+
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-input-wrap,
+body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-input {
+  background: transparent;
+}
+
 body[data-theme="dark"] .polymarket-order-entry-inputs .ant-input-number-group-addon {
+  border-color: #334155;
+  background: #182232;
   color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn {
+  border-color: #334155;
+  background: #111827;
+  color: #cbd5e1;
+  box-shadow: none;
+}
+
+body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:hover,
+body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:focus-visible {
+  border-color: var(--trade-accent);
+  background: rgba(30, 41, 59, 0.92);
+  color: var(--trade-accent);
 }
 
 body[data-theme="dark"] .polymarket-order-entry-submit .ant-btn-primary:disabled,

@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -286,11 +287,8 @@ async def validate_trading_restriction(request: PolymarketSignedOrderRequest, re
     if request.side == "BUY":
         raise PolymarketInputError("当前地区为 close-only，只允许卖出已有 shares，不允许 BUY")
     available_size = await current_token_position_size(request.token_id)
-    try:
-        request_size = Decimal(str(request.size))
-    except InvalidOperation as exc:
-        raise PolymarketInputError("order size must be numeric") from exc
-    if request_size > available_size:
+    signed_amounts = signed_order_amounts(request)
+    if signed_amounts.size > available_size:
         raise PolymarketInputError(
             f"当前地区为 close-only，SELL size 不能超过当前 token 持仓 {available_size.normalize()}"
         )
@@ -310,7 +308,13 @@ async def current_token_position_size(token_id: str) -> Decimal:
     return total
 
 
-def validate_order_amounts(request: PolymarketSignedOrderRequest) -> None:
+@dataclass(frozen=True)
+class SignedOrderAmounts:
+    size: Decimal
+    price: Decimal
+
+
+def signed_order_amounts(request: PolymarketSignedOrderRequest) -> SignedOrderAmounts:
     order = request.signed_order
     try:
         maker_amount = Decimal(str(order.get("makerAmount")))
@@ -319,6 +323,14 @@ def validate_order_amounts(request: PolymarketSignedOrderRequest) -> None:
         raise PolymarketInputError("signed_order makerAmount/takerAmount must be numeric") from exc
     if maker_amount <= 0 or taker_amount <= 0:
         raise PolymarketInputError("signed_order makerAmount/takerAmount must be positive")
+    unit = Decimal("1000000")
+    if request.side == "BUY":
+        return SignedOrderAmounts(size=taker_amount / unit, price=maker_amount / taker_amount)
+    return SignedOrderAmounts(size=maker_amount / unit, price=taker_amount / maker_amount)
+
+
+def validate_order_amounts(request: PolymarketSignedOrderRequest) -> None:
+    signed_amounts = signed_order_amounts(request)
     if request.order_type in {"FOK", "FAK"}:
         return
     try:
@@ -326,16 +338,9 @@ def validate_order_amounts(request: PolymarketSignedOrderRequest) -> None:
         request_size = Decimal(str(request.size))
     except (InvalidOperation, TypeError) as exc:
         raise PolymarketInputError("order price/size must be numeric") from exc
-    unit = Decimal("1000000")
-    if request.side == "BUY":
-        signed_size = taker_amount / unit
-        signed_price = maker_amount / taker_amount
-    else:
-        signed_size = maker_amount / unit
-        signed_price = taker_amount / maker_amount
-    if abs(signed_size - request_size) > Decimal("0.000001"):
+    if abs(signed_amounts.size - request_size) > Decimal("0.000001"):
         raise PolymarketInputError("signed_order size does not match request size")
-    if abs(signed_price - request_price) > Decimal("0.000001"):
+    if abs(signed_amounts.price - request_price) > Decimal("0.000001"):
         raise PolymarketInputError("signed_order price does not match request price")
 
 

@@ -52,9 +52,6 @@ class PolymarketAccountMonitor:
         if not settings.polymarket_user_ws_enabled:
             await self.set_ws_state("idle")
             return
-        if not await runtime_clob_credentials_configured():
-            await self.set_ws_state("config_missing", "Polymarket CLOB API credentials are not configured")
-            return
         self._tasks.append(asyncio.create_task(self.ws_loop(), name="polymarket-account-user-ws"))
 
     async def stop(self) -> None:
@@ -137,6 +134,13 @@ class PolymarketAccountMonitor:
         backoff = 1.0
         while True:
             try:
+                if await resolve_runtime_credentials() is None:
+                    await self.set_ws_state("config_missing", "Polymarket CLOB API credentials are not configured")
+                    try:
+                        await asyncio.wait_for(self._credential_change_event.wait(), timeout=10)
+                    except TimeoutError:
+                        continue
+                    self._credential_change_event.clear()
                 await self._ws_once()
                 backoff = 1.0
             except asyncio.CancelledError:
@@ -358,10 +362,6 @@ def dedupe_account_events(events: list[tuple[str, dict[str, Any]]]) -> list[tupl
         seen.add(key)
         result.append((event_type, row))
     return result
-
-
-async def runtime_clob_credentials_configured() -> bool:
-    return await resolve_runtime_credentials() is not None
 
 
 async def cancel_tasks(*tasks: asyncio.Task) -> None:
