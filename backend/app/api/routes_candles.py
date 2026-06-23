@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_websocket_auth
 from app.core.config import settings
+from app.db.session import AsyncSessionLocal
 from app.db.session import get_session
 from app.schemas.candle import Candle, Interval
 from app.services.candle_backfill import (
@@ -80,15 +81,29 @@ async def market_websocket(
         return
     normalized_symbol = symbol.upper()
     await market_ws_hub.connect(websocket, normalized_symbol, interval)
-    initial_payload = market_signal_pipeline.latest_market_payload(normalized_symbol, interval)
+    initial_payload = await initial_market_payload(normalized_symbol, interval)
     if initial_payload is not None:
-        # WS 新连接先补一帧内存态，避免前端等下一次 Binance tick 才看到当前未收盘 K 线。
+        # WS 新连接先补一帧快照，避免前端等下一次 Binance tick 才看到 K 线。
         await websocket.send_json(initial_payload)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         await market_ws_hub.disconnect(websocket, normalized_symbol, interval)
+
+
+async def initial_market_payload(symbol: str, interval: Interval) -> dict[str, object] | None:
+    live_payload = market_signal_pipeline.latest_market_payload(symbol, interval)
+    if live_payload is not None:
+        return live_payload
+    async with AsyncSessionLocal() as session:
+        cached = await list_candles(session, symbol=symbol, interval=interval, limit=settings.candle_history_limit)
+    # live window 冷启动时用 DB 最近窗口兜底，让 WS 建连后立即有首帧；后续 Binance WS 会覆盖未收盘 K 线。
+    return market_signal_pipeline.market_payload_from_candles(
+        symbol,
+        interval,
+        cached,
+    )
 
 
 def merge_live_candles(cached: list[Candle], live_candles: list[Candle], limit: int) -> list[Candle]:

@@ -293,6 +293,71 @@ def test_candles_limit_mode_live_candle_replaces_same_open_time(monkeypatch) -> 
     assert body[-1]["is_closed"] is False
 
 
+@pytest.mark.asyncio
+async def test_initial_market_payload_prefers_live_window(monkeypatch) -> None:
+    live_candle = make_candle(20).model_copy(update={"is_closed": False})
+    calls = {"db": 0}
+
+    class FakeMarketSignalPipeline:
+        def latest_market_payload(self, symbol, interval):  # noqa: ANN001
+            return {"type": "market.candle", "symbol": symbol, "interval": interval, "candle": {"open_time": "live"}}
+
+        def market_payload_from_candles(self, symbol, interval, candles):  # noqa: ANN001
+            return {"type": "market.candle", "symbol": symbol, "interval": interval, "candle": live_candle.model_dump(mode="json")}
+
+    async def fake_list_candles(session, symbol, interval, limit):
+        calls["db"] += 1
+        return [make_candle(1)]
+
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", FakeMarketSignalPipeline())
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
+
+    payload = await routes_candles.initial_market_payload("BTCUSDT", "1m")
+
+    assert payload == {"type": "market.candle", "symbol": "BTCUSDT", "interval": "1m", "candle": {"open_time": "live"}}
+    assert calls["db"] == 0
+
+
+@pytest.mark.asyncio
+async def test_initial_market_payload_falls_back_to_database_snapshot(monkeypatch) -> None:
+    cached = [make_candle(index) for index in range(40)]
+
+    class FakeSessionLocal:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeMarketSignalPipeline:
+        def latest_market_payload(self, symbol, interval):  # noqa: ANN001
+            return None
+
+        def market_payload_from_candles(self, symbol, interval, candles):  # noqa: ANN001
+            return {
+                "type": "market.candle",
+                "symbol": symbol,
+                "interval": interval,
+                "candle": candles[-1].model_dump(mode="json"),
+            }
+
+    async def fake_list_candles(session, symbol, interval, limit):
+        return cached[-limit:]
+
+    monkeypatch.setattr(routes_candles, "AsyncSessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", FakeMarketSignalPipeline())
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
+
+    payload = await routes_candles.initial_market_payload("BTCUSDT", "1m")
+
+    assert payload is not None
+    assert payload["type"] == "market.candle"
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["interval"] == "1m"
+    assert payload["candle"]["open_time"] == "2026-01-01T00:39:00Z"  # type: ignore[index]
+    assert set(payload) == {"type", "symbol", "interval", "candle"}
+
+
 def test_candles_limit_mode_returns_short_database_window(monkeypatch) -> None:
     cached = [make_candle(index) for index in range(10)]
 

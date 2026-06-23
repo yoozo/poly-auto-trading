@@ -1733,7 +1733,6 @@ type MarketWsMessage = {
   symbol: string;
   interval: CandleInterval;
   candle: MarketCandle | null;
-  indicator: MarketIndicatorPoint | null;
 };
 
 function parseMarketMessage(value: string) {

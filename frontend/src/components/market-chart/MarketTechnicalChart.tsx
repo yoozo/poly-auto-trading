@@ -202,6 +202,7 @@ export default function MarketTechnicalChart({
   const lastMainWidthRef = useRef(0);
   const rsiScaleInitializedRef = useRef(false);
   const diffScaleInitializedRef = useRef(false);
+  const userRequestedHistoryRef = useRef(false);
 
   const intervalRef = useRef(interval);
   const countdownTargetMsRef = useRef<number | null>(countdownTargetMs);
@@ -424,6 +425,7 @@ export default function MarketTechnicalChart({
     lastCrosshairTimeRef.current = null;
     rsiScaleInitializedRef.current = false;
     diffScaleInitializedRef.current = false;
+    userRequestedHistoryRef.current = false;
     clearChartDataState();
     mainChartRef.current?.clearCrosshairPosition();
     rsiChartRef.current?.clearCrosshairPosition();
@@ -690,9 +692,13 @@ export default function MarketTechnicalChart({
   function bindChartDom(element: HTMLDivElement) {
     const onPointerDown = () => {
       draggingRef.current = true;
+      userRequestedHistoryRef.current = true;
       initialRangeGuardUntilRef.current = 0;
       lastCrosshairTimeRef.current = null;
       hideTooltip();
+    };
+    const onWheel = () => {
+      userRequestedHistoryRef.current = true;
     };
     const onPointerUp = () => {
       draggingRef.current = false;
@@ -728,6 +734,7 @@ export default function MarketTechnicalChart({
     };
 
     element.addEventListener("pointerdown", onPointerDown, { passive: true });
+    element.addEventListener("wheel", onWheel, { passive: true });
     element.addEventListener("mousemove", onMouseMove, { passive: true });
     element.addEventListener("mouseleave", onMouseLeave);
     element.addEventListener("dblclick", onDoubleClick);
@@ -737,6 +744,7 @@ export default function MarketTechnicalChart({
 
     return () => {
       element.removeEventListener("pointerdown", onPointerDown);
+      element.removeEventListener("wheel", onWheel);
       element.removeEventListener("mousemove", onMouseMove);
       element.removeEventListener("mouseleave", onMouseLeave);
       element.removeEventListener("dblclick", onDoubleClick);
@@ -837,6 +845,8 @@ export default function MarketTechnicalChart({
     if (!range || !loadMore || isLoadingMoreRef.current || loadMoreQueuedRef.current || !candlesRef.current.length) {
       return;
     }
+    // 初始/focus range 是程序化设置的，靠近左侧不代表用户要翻历史；只有用户拖拽/滚轮后才补历史。
+    if (!userRequestedHistoryRef.current) return;
     if (range.from > LOAD_MORE_THRESHOLD) return;
     const first = candlesRef.current[0];
     const currentInterval = intervalRef.current;

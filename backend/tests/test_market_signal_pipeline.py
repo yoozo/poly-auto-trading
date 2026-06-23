@@ -50,8 +50,7 @@ def test_latest_market_payload_uses_live_window_snapshot() -> None:
     assert payload["symbol"] == "BTCUSDT"
     assert payload["interval"] == "1m"
     assert payload["candle"]["open_time"] == "2026-01-01T00:39:00Z"  # type: ignore[index]
-    assert payload["indicator"] is not None
-    assert payload["signal_input"]["factors"]["sources"] == ["live_window_snapshot"]  # type: ignore[index]
+    assert set(payload) == {"type", "symbol", "interval", "candle"}
 
 
 @pytest.mark.asyncio
