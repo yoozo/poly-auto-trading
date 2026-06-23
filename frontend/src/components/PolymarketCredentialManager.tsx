@@ -25,6 +25,8 @@ import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletCo
 
 const POLYGON_CHAIN_ID = "0x89";
 const CLOB_HOST = "https://clob.polymarket.com";
+const IMPORT_PROFILE_POLL_MS = 2500;
+const IMPORT_PROFILE_POLL_TIMEOUT_MS = 120_000;
 const SIGNATURE_TYPE_OPTIONS = [
   { value: 0, label: "EOA" },
   { value: 1, label: "POLY_PROXY" },
@@ -81,11 +83,14 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
   const [detecting, setDetecting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [deriveFailed, setDeriveFailed] = useState(false);
+  const [pendingImportSigner, setPendingImportSigner] = useState<string | null>(null);
+  const [pendingImportStartedAt, setPendingImportStartedAt] = useState<number | null>(null);
   const profilesQuery = useQuery({
     queryKey: ["polymarket-credentials"],
     queryFn: api.polymarketCredentials,
     enabled: variant !== "popover" || Boolean(connectedAddress),
     refetchOnWindowFocus: true,
+    refetchInterval: pendingImportSigner ? IMPORT_PROFILE_POLL_MS : false,
   });
   const activeProfile = useMemo(
     () => profilesQuery.data?.profiles.find((item) => item.id === profilesQuery.data?.active_id) ?? null,
@@ -132,6 +137,37 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
     if (activeMatches || matchingProfiles.length === 0) return;
     activateMutation.mutate(matchingProfiles[0].id);
   }, [activeProfile?.id, activeProfile?.signer_address, activateMutation, connectedAddress, matchingProfiles]);
+
+  useEffect(() => {
+    if (!pendingImportSigner || !pendingImportStartedAt) return;
+    const importedProfile = (profilesQuery.data?.profiles ?? []).find(
+      (profile) => normalizeAddress(profile.signer_address) === normalizeAddress(pendingImportSigner),
+    );
+    if (importedProfile) {
+      setPendingImportSigner(null);
+      setPendingImportStartedAt(null);
+      setGenerated(null);
+      setDetection(null);
+      setDeriveFailed(false);
+      messageApi.success("已检测到服务器导入的 wallet profile，正在自动启用");
+      if (profilesQuery.data?.active_id !== importedProfile.id && !activateMutation.isPending) {
+        activateMutation.mutate(importedProfile.id);
+      }
+      return;
+    }
+    if (Date.now() - pendingImportStartedAt > IMPORT_PROFILE_POLL_TIMEOUT_MS) {
+      setPendingImportSigner(null);
+      setPendingImportStartedAt(null);
+      messageApi.warning("还没有检测到新 wallet profile。请确认服务器导入命令已执行成功，再点击刷新。");
+    }
+  }, [
+    activateMutation,
+    messageApi,
+    pendingImportSigner,
+    pendingImportStartedAt,
+    profilesQuery.data?.active_id,
+    profilesQuery.data?.profiles,
+  ]);
 
   const runDetection = async ({
     provider,
@@ -260,6 +296,9 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
         apiKey: sourceDetection.credentials.key,
         command,
       });
+      setPendingImportSigner(sourceDetection.signerAddress);
+      setPendingImportStartedAt(Date.now());
+      queryClient.invalidateQueries({ queryKey: ["polymarket-credentials"] });
       messageApi.success("已生成导入命令，请在服务器终端手动执行");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "生成导入命令失败");
@@ -298,6 +337,8 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
         setGenerated(null);
         setDetection(null);
         setDeriveFailed(false);
+        setPendingImportSigner(null);
+        setPendingImportStartedAt(null);
       }}
     />
   );
