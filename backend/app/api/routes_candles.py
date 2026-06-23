@@ -14,6 +14,7 @@ from app.services.candle_backfill import (
 )
 from app.services.candle_store import list_candles, list_candles_between
 from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
+from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.market_ws_hub import market_ws_hub
 
 router = APIRouter(tags=["candles"])
@@ -64,7 +65,9 @@ async def candles(
         end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
         return await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
     await candle_sync_service.ensure_latest_window(session, symbol=symbol, interval=interval, limit=limit)
-    return await list_candles(session, symbol=symbol, interval=interval, limit=limit)
+    cached = await list_candles(session, symbol=symbol, interval=interval, limit=limit)
+    live_candles = market_signal_pipeline.get_live_candles(symbol, interval, limit=limit)
+    return merge_live_candles(cached, live_candles, limit)
 
 
 @router.websocket("/ws/market")
@@ -77,8 +80,20 @@ async def market_websocket(
         return
     normalized_symbol = symbol.upper()
     await market_ws_hub.connect(websocket, normalized_symbol, interval)
+    initial_payload = market_signal_pipeline.latest_market_payload(normalized_symbol, interval)
+    if initial_payload is not None:
+        # WS 新连接先补一帧内存态，避免前端等下一次 Binance tick 才看到当前未收盘 K 线。
+        await websocket.send_json(initial_payload)
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         await market_ws_hub.disconnect(websocket, normalized_symbol, interval)
+
+
+def merge_live_candles(cached: list[Candle], live_candles: list[Candle], limit: int) -> list[Candle]:
+    # DB 只保存已闭合 K 线；latest 接口在出口合并内存态，首屏可直接带出当前未收盘 K 线。
+    by_open_time = {candle.open_time: candle for candle in cached}
+    for candle in live_candles:
+        by_open_time[candle.open_time] = candle
+    return sorted(by_open_time.values(), key=lambda candle: candle.open_time)[-limit:]

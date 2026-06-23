@@ -20,9 +20,18 @@ class NoopCandleSyncService:
         return None
 
 
+class EmptyMarketSignalPipeline:
+    def get_live_candles(self, symbol, interval, limit=None):  # noqa: ANN001
+        return []
+
+    def latest_market_payload(self, symbol, interval):  # noqa: ANN001
+        return None
+
+
 @pytest.fixture(autouse=True)
 def noop_candle_sync(monkeypatch):
     monkeypatch.setattr(routes_candles, "candle_sync_service", NoopCandleSyncService())
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", EmptyMarketSignalPipeline())
 
 
 def make_candle(index: int) -> Candle:
@@ -231,6 +240,57 @@ def test_candles_limit_mode_syncs_latest_window_before_reading(monkeypatch) -> N
     assert response.status_code == 200
     assert len(response.json()) == 300
     assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 300}
+
+
+def test_candles_limit_mode_merges_live_open_candle(monkeypatch) -> None:
+    cached = [make_candle(index) for index in range(300)]
+    live_candle = make_candle(300).model_copy(update={"high": 556, "close": 555, "is_closed": False})
+
+    async def fake_list_candles(session, symbol, interval, limit):
+        return cached[-limit:]
+
+    class FakeMarketSignalPipeline:
+        def get_live_candles(self, symbol, interval, limit=None):  # noqa: ANN001
+            return [live_candle]
+
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", FakeMarketSignalPipeline())
+
+    client = make_client()
+    response = client.get("/api/candles?symbol=BTCUSDT&interval=1m&limit=300")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 300
+    assert body[-1]["open_time"] == "2026-01-01T05:00:00Z"
+    assert body[-1]["close"] == 555
+    assert body[-1]["is_closed"] is False
+    assert body[0]["open_time"] == "2026-01-01T00:01:00Z"
+
+
+def test_candles_limit_mode_live_candle_replaces_same_open_time(monkeypatch) -> None:
+    cached = [make_candle(index) for index in range(300)]
+    live_candle = cached[-1].model_copy(update={"high": 778, "close": 777, "is_closed": False})
+
+    async def fake_list_candles(session, symbol, interval, limit):
+        return cached[-limit:]
+
+    class FakeMarketSignalPipeline:
+        def get_live_candles(self, symbol, interval, limit=None):  # noqa: ANN001
+            return [live_candle]
+
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", FakeMarketSignalPipeline())
+
+    client = make_client()
+    response = client.get("/api/candles?symbol=BTCUSDT&interval=1m&limit=300")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 300
+    assert body[-1]["open_time"] == "2026-01-01T04:59:00Z"
+    assert body[-1]["close"] == 777
+    assert body[-1]["is_closed"] is False
 
 
 def test_candles_limit_mode_returns_short_database_window(monkeypatch) -> None:

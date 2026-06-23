@@ -39,6 +39,21 @@ def test_build_signal_input_preserves_event_source_and_indicator_context() -> No
     assert signal_input.factors["technical_indicators"] is not None
 
 
+def test_latest_market_payload_uses_live_window_snapshot() -> None:
+    pipeline = MarketSignalPipeline()
+    pipeline.replace_live_candles("BTCUSDT", "1m", [make_candle(index) for index in range(40)])
+
+    payload = pipeline.latest_market_payload("BTCUSDT", "1m")
+
+    assert payload is not None
+    assert payload["type"] == "market.candle"
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["interval"] == "1m"
+    assert payload["candle"]["open_time"] == "2026-01-01T00:39:00Z"  # type: ignore[index]
+    assert payload["indicator"] is not None
+    assert payload["signal_input"]["factors"]["sources"] == ["live_window_snapshot"]  # type: ignore[index]
+
+
 @pytest.mark.asyncio
 async def test_handle_market_event_merges_candle_window_then_dispatches(monkeypatch) -> None:
     dispatched = []

@@ -53,6 +53,21 @@ class MarketSignalPipeline:
         key = (symbol.upper(), interval)
         self._live_candles[key] = candles[-settings.candle_history_limit :]
 
+    def get_live_candles(self, symbol: str, interval: str, limit: int | None = None) -> list[Candle]:
+        key = (symbol.upper(), interval)
+        candles = self._live_candles.get(key, [])
+        return list(candles[-limit:] if limit is not None else candles)
+
+    def latest_market_payload(self, symbol: str, interval: str) -> dict[str, object] | None:
+        candles = self.get_live_candles(symbol, interval)
+        if not candles:
+            return None
+        signal_input = self.build_signal_input(
+            MarketDataEvent(source="live_window_snapshot", candle=candles[-1]),
+            candles,
+        )
+        return self._serialize_market_update(signal_input)
+
     def _merge_live_candle(self, candle: Candle) -> list[Candle]:
         # 同一根未收盘 K 线会被多次推送，用 open_time 去重并保留最新值。
         key = (candle.symbol.upper(), candle.interval)
@@ -81,19 +96,23 @@ class MarketSignalPipeline:
     async def _broadcast_market_update(self, signal_input: SignalInput) -> None:
         # 兼容旧前端字段 candle/indicator，同时额外输出完整 signal_input。
         candle = signal_input.candle
-        indicator = signal_input.indicator
         await market_ws_hub.broadcast(
             candle.symbol,
             candle.interval,
-            {
-                "type": "market.candle",
-                "symbol": candle.symbol,
-                "interval": candle.interval,
-                "candle": candle.model_dump(mode="json"),
-                "indicator": indicator.model_dump(mode="json") if indicator else None,
-                "signal_input": signal_input.model_dump(mode="json"),
-            },
+            self._serialize_market_update(signal_input),
         )
+
+    def _serialize_market_update(self, signal_input: SignalInput) -> dict[str, object]:
+        candle = signal_input.candle
+        indicator = signal_input.indicator
+        return {
+            "type": "market.candle",
+            "symbol": candle.symbol,
+            "interval": candle.interval,
+            "candle": candle.model_dump(mode="json"),
+            "indicator": indicator.model_dump(mode="json") if indicator else None,
+            "signal_input": signal_input.model_dump(mode="json"),
+        }
 
 
 market_signal_pipeline = MarketSignalPipeline()
