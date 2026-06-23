@@ -1984,10 +1984,32 @@ body[data-theme="dark"] .app-account-login-action {
   display: grid;
   gap: 6px;
   min-width: 0;
+  width: 100%;
   padding: 8px;
   border: 1px solid #d8dee8;
   border-radius: 6px;
   background: #ffffff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.polymarket-outcome:not(:disabled):hover,
+.polymarket-outcome:not(:disabled):focus-visible {
+  border-color: rgba(21, 94, 239, 0.42);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.polymarket-outcome:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .polymarket-outcome.up {
@@ -2385,6 +2407,83 @@ body[data-theme="dark"] .app-account-login-action {
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
 }
 
+.polymarket-trade-modal .ant-modal-content {
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.polymarket-trade-modal .ant-modal-close {
+  top: 18px;
+  right: 18px;
+}
+
+.polymarket-trade-modal.up .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(231, 246, 238, 0.94) 0%, rgba(255, 255, 255, 0.98) 48%),
+    #ffffff;
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
+.polymarket-trade-modal.down .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(255, 241, 239, 0.96) 0%, rgba(255, 255, 255, 0.98) 48%),
+    #ffffff;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.polymarket-trade-modal:has(.polymarket-order-entry.up) .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(231, 246, 238, 0.94) 0%, rgba(255, 255, 255, 0.98) 48%),
+    #ffffff;
+  border-color: rgba(16, 185, 129, 0.28);
+}
+
+.polymarket-trade-modal:has(.polymarket-order-entry.down) .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(255, 241, 239, 0.96) 0%, rgba(255, 255, 255, 0.98) 48%),
+    #ffffff;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.polymarket-trade-modal .ant-modal-body .polymarket-account-section {
+  gap: 0;
+}
+
+.polymarket-trade-modal .polymarket-order-entry {
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.polymarket-trade-modal .polymarket-order-entry-head {
+  align-items: center;
+  padding-right: 64px;
+}
+
+.polymarket-trade-modal .polymarket-order-entry-head > div {
+  gap: 4px;
+}
+
+.polymarket-trade-modal .polymarket-order-entry-head span {
+  font-size: 16px;
+}
+
+.polymarket-trade-modal .polymarket-order-entry-head small {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.polymarket-trade-modal .polymarket-order-entry-head strong {
+  min-width: 96px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.04);
+  font-size: 16px;
+  font-weight: 900;
+  text-align: center;
+}
+
 .polymarket-order-entry.buy,
 .polymarket-order-entry.up {
   --trade-accent: #067647;
@@ -2461,42 +2560,54 @@ body[data-theme="dark"] .app-account-login-action {
 }
 
 .polymarket-order-entry-controls {
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 4px;
-  border-radius: 7px;
-  background: rgba(241, 245, 249, 0.88);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .polymarket-order-entry-controls .ant-segmented,
 .polymarket-outcome-selector .ant-segmented {
-  background: transparent;
+  width: 100%;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.92);
+}
+
+.polymarket-order-entry-controls .ant-segmented-group,
+.polymarket-outcome-selector .ant-segmented-group {
+  width: 100%;
+  gap: 3px;
+}
+
+.polymarket-order-entry-controls .ant-segmented-item,
+.polymarket-outcome-selector .ant-segmented-item {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.polymarket-order-entry-controls .ant-segmented-item-label,
+.polymarket-outcome-selector .ant-segmented-item-label {
+  min-height: 26px;
+  padding-inline: 8px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .polymarket-order-entry-controls .ant-segmented-item-selected,
 .polymarket-outcome-selector .ant-segmented-item-selected {
   color: var(--trade-accent);
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 1px 5px rgba(15, 23, 42, 0.16);
 }
 
 .polymarket-outcome-selector {
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  padding: 4px;
-  border-radius: 7px;
-  background: rgba(241, 245, 249, 0.72);
-}
-
-.polymarket-outcome-selector .ant-segmented {
-  width: 100%;
-}
-
-.polymarket-outcome-selector .ant-segmented-group {
-  width: 100%;
-  gap: 4px;
-}
-
-.polymarket-outcome-selector .ant-segmented-item {
-  flex: 1;
+  padding: 0;
 }
 
 .polymarket-outcome-selector .ant-typography {
@@ -3593,6 +3704,12 @@ body[data-theme="dark"] .polymarket-outcome.down {
   background: rgba(185, 28, 28, 0.08);
 }
 
+body[data-theme="dark"] .polymarket-outcome:not(:disabled):hover,
+body[data-theme="dark"] .polymarket-outcome:not(:disabled):focus-visible {
+  border-color: rgba(96, 165, 250, 0.62);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.32);
+}
+
 body[data-theme="dark"] .polymarket-quote-grid {
   color: var(--text-muted);
 }
@@ -3674,6 +3791,40 @@ body[data-theme="dark"] .polymarket-order-entry {
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
 }
 
+body[data-theme="dark"] .polymarket-trade-modal .polymarket-order-entry {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-theme="dark"] .polymarket-trade-modal.up .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(6, 78, 59, 0.46) 0%, rgba(15, 23, 42, 0.98) 52%),
+    #0f172a;
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+body[data-theme="dark"] .polymarket-trade-modal.down .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(127, 29, 29, 0.46) 0%, rgba(15, 23, 42, 0.98) 52%),
+    #0f172a;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+body[data-theme="dark"] .polymarket-trade-modal:has(.polymarket-order-entry.up) .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(6, 78, 59, 0.46) 0%, rgba(15, 23, 42, 0.98) 52%),
+    #0f172a;
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+body[data-theme="dark"] .polymarket-trade-modal:has(.polymarket-order-entry.down) .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(127, 29, 29, 0.46) 0%, rgba(15, 23, 42, 0.98) 52%),
+    #0f172a;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
 body[data-theme="dark"] .polymarket-order-entry.buy,
 body[data-theme="dark"] .polymarket-order-entry.up {
   --trade-accent: #34d399;
@@ -3697,14 +3848,13 @@ body[data-theme="dark"] .polymarket-order-entry-head small {
   color: #94a3b8;
 }
 
-body[data-theme="dark"] .polymarket-order-entry-controls,
-body[data-theme="dark"] .polymarket-outcome-selector,
 body[data-theme="dark"] .polymarket-order-entry-submit {
   background: rgba(30, 41, 55, 0.74);
 }
 
 body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented,
 body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented {
+  background: rgba(30, 41, 55, 0.78);
   color: #cbd5e1;
 }
 

@@ -68,6 +68,13 @@ const POLYGON_CHAIN_ID = "0x89";
 const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
 const DEFAULT_ORDER_AMOUNT = 5;
+
+type TradeDraft = {
+  marketId: string;
+  tokenId: string;
+  side: "BUY" | "SELL";
+  nonce: number;
+};
 // React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
 const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
 const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
@@ -943,6 +950,7 @@ function PolymarketBtcPanel({
     () => buildMarketRailModel(markets, activeMarket?.id, selectedMarketId),
     [activeMarket?.id, markets, selectedMarketId]
   );
+  const [tradeDraft, setTradeDraft] = useState<TradeDraft | null>(null);
   const moreMenuItems = useMemo<MenuProps["items"]>(
     () =>
       railModel.moreMarkets.map((market) => ({
@@ -1033,11 +1041,18 @@ function PolymarketBtcPanel({
         <div className="polymarket-market">
           <div className="polymarket-outcomes">
             {activeMarket.outcome_quotes.map((quote) => (
-              <OutcomeQuoteCard key={`${activeMarket.id}:${quote.name}`} quote={quote} />
+              <OutcomeQuoteCard
+                key={`${activeMarket.id}:${quote.name}`}
+                marketId={activeMarket.id}
+                quote={quote}
+                onStartTrade={setTradeDraft}
+              />
             ))}
           </div>
           <AccountStatePanel
             market={activeMarket}
+            tradeDraft={tradeDraft}
+            onCloseTrade={() => setTradeDraft(null)}
             accountState={accountState}
             error={accountStateError}
             walletConnected={walletConnected}
@@ -1051,12 +1066,16 @@ function PolymarketBtcPanel({
 
 function AccountStatePanel({
   market,
+  tradeDraft,
+  onCloseTrade,
   accountState,
   error,
   walletConnected,
   walletProfileReady,
 }: {
   market: PolymarketUpDownMarket;
+  tradeDraft: TradeDraft | null;
+  onCloseTrade: () => void;
   accountState: PolymarketAccountState;
   error: string | null;
   walletConnected: boolean;
@@ -1092,6 +1111,11 @@ function AccountStatePanel({
   const activeCredential =
     credentialsQuery.data?.profiles.find((profile) => profile.id === credentialsQuery.data?.active_id) ?? null;
   const accountStateQueryKey = ["polymarket-account-state", "global", activeCredential?.id ?? "none"];
+  const tradeModalOpen = Boolean(tradeDraft?.marketId === market.id);
+  const tradeDraftQuote = tradeDraft
+    ? market.outcome_quotes.find((quote) => quote.token_id === tradeDraft.tokenId)
+    : null;
+  const tradeModalTone = tradeDraftQuote?.name.toLowerCase() === "down" ? "down" : "up";
   const cancelOrderMutation = useMutation({
     mutationFn: api.cancelPolymarketOrder,
     onMutate: (orderId: string) => {
@@ -1108,9 +1132,34 @@ function AccountStatePanel({
       setCancelingOrderId(null);
     },
   });
+  const tradeModal = (
+    <Modal
+      className={`polymarket-trade-modal ${tradeModalTone}`}
+      open={tradeModalOpen}
+      footer={null}
+      destroyOnHidden
+      onCancel={onCloseTrade}
+    >
+      <PolymarketOrderEntry
+        market={market}
+        tradeDraft={tradeDraft}
+        positions={positions}
+        tradingRestriction={accountState.trading_restriction}
+        activeCredential={activeCredential}
+        onNotice={showTradeNotice}
+        onOrderSubmitted={() => {
+          queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
+          queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
+          onCloseTrade();
+        }}
+      />
+    </Modal>
+  );
   if (!walletConnected) {
     return (
       <div className="polymarket-account-panel polymarket-account-panel-guest">
+        {notificationContextHolder}
+        {tradeModal}
         <div className="polymarket-account-head">
           <Typography.Text strong>游客模式</Typography.Text>
           <Typography.Text type="secondary">未连接钱包</Typography.Text>
@@ -1122,6 +1171,8 @@ function AccountStatePanel({
   if (!walletProfileReady) {
     return (
       <div className="polymarket-account-panel polymarket-account-panel-guest">
+        {notificationContextHolder}
+        {tradeModal}
         <div className="polymarket-account-head">
           <Typography.Text strong>钱包已连接</Typography.Text>
           <Typography.Text type="secondary">未启用 profile</Typography.Text>
@@ -1139,17 +1190,7 @@ function AccountStatePanel({
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
       {accountState.error && <Typography.Text type="secondary">{accountStateErrorSummary(accountState.error)}</Typography.Text>}
-      <PolymarketOrderEntry
-        market={market}
-        positions={positions}
-        tradingRestriction={accountState.trading_restriction}
-        activeCredential={activeCredential}
-        onNotice={showTradeNotice}
-        onOrderSubmitted={() => {
-          queryClient.invalidateQueries({ queryKey: accountStateQueryKey });
-          queryClient.invalidateQueries({ queryKey: ["polymarket-account-state"] });
-        }}
-      />
+      {tradeModal}
       <AccountPositionSection market={market} positions={positions} trades={trades} />
       <AccountOrderSection
         orders={orders}
@@ -1163,6 +1204,7 @@ function AccountStatePanel({
 
 function PolymarketOrderEntry({
   market,
+  tradeDraft,
   positions,
   tradingRestriction,
   activeCredential,
@@ -1170,6 +1212,7 @@ function PolymarketOrderEntry({
   onOrderSubmitted,
 }: {
   market: PolymarketUpDownMarket;
+  tradeDraft: TradeDraft | null;
   positions: PolymarketAccountPosition[];
   tradingRestriction: PolymarketAccountState["trading_restriction"];
   activeCredential: PolymarketCredentialProfile | null;
@@ -1224,6 +1267,16 @@ function PolymarketOrderEntry({
     const nextTokenId = market.outcome_quotes.find((quote) => quote.token_id)?.token_id ?? null;
     setTokenId(nextTokenId);
   }, [market.id]);
+
+  useEffect(() => {
+    if (!tradeDraft || tradeDraft.marketId !== market.id) return;
+    setTokenId(tradeDraft.tokenId);
+    setSide(tradeDraft.side);
+    setOrderMode("MARKET");
+    const quote = market.outcome_quotes.find((item) => item.token_id === tradeDraft.tokenId);
+    setPriceCents(defaultOrderPriceCents(quote, tradeDraft.side));
+    setAmount(DEFAULT_ORDER_AMOUNT);
+  }, [market.id, tradeDraft?.nonce]);
 
   useEffect(() => {
     setPriceCents(defaultOrderPriceCents(selectedQuote, side));
@@ -1595,10 +1648,35 @@ function AccountOrderSection({
   );
 }
 
-function OutcomeQuoteCard({ quote }: { quote: PolymarketOutcomeQuote }) {
+function OutcomeQuoteCard({
+  marketId,
+  quote,
+  onStartTrade,
+}: {
+  marketId: string;
+  quote: PolymarketOutcomeQuote;
+  onStartTrade: (draft: TradeDraft) => void;
+}) {
   const displayPrice = formatCents(quote.buy_price ?? quote.best_ask ?? quote.price);
+  const canStartTrade = Boolean(quote.token_id);
+  const outcomeTone = quote.name.toLowerCase() === "up" ? "up" : "down";
   return (
-    <div className={`polymarket-outcome ${quote.name.toLowerCase() === "up" ? "up" : "down"}`}>
+    <button
+      type="button"
+      className={`polymarket-outcome ${outcomeTone}`}
+      disabled={!canStartTrade}
+      onClick={() => {
+        if (!quote.token_id) return;
+        onStartTrade({
+          marketId,
+          tokenId: quote.token_id,
+          side: "BUY",
+          nonce: Date.now(),
+        });
+      }}
+      aria-label={`交易 ${quote.name}`}
+      data-testid={`polymarket-trade-${outcomeTone}`}
+    >
       <div className="polymarket-outcome-title">
         <span>{quote.name}</span>
         <strong className="polymarket-outcome-price">{displayPrice}</strong>
@@ -1618,7 +1696,7 @@ function OutcomeQuoteCard({ quote }: { quote: PolymarketOutcomeQuote }) {
         </span>
       </div>
       <OrderBook quote={quote} />
-    </div>
+    </button>
   );
 }
 
