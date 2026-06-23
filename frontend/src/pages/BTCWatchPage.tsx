@@ -164,7 +164,6 @@ export default function BTCWatchPage() {
   const {
     data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS,
     error: polymarketError,
-    isFetched: polymarketSnapshotFetched,
   } = useQuery({
     queryKey: ["polymarket-btc-up-down", polymarketInterval],
     queryFn: () => api.polymarketBtcUpDown(polymarketInterval, 12),
@@ -230,12 +229,6 @@ export default function BTCWatchPage() {
           candleInterval: interval,
         })
       : null;
-  const candleSnapshotEnabled = Boolean(
-    timeJumpFocus ||
-      selectedPolymarket ||
-      polymarketError ||
-      (polymarketSnapshotFetched && polymarketSnapshot.length === 0 && polymarketMarkets.length === 0)
-  );
   const candleSnapshotQuery = useMemo(() => {
     if (timeJumpFocus || polymarketChartFocusAnchorMs === null || !Number.isFinite(polymarketChartFocusAnchorMs)) {
       return {
@@ -259,10 +252,11 @@ export default function BTCWatchPage() {
         api.candlesRange(interval, warmupStartMs, endMs, limit + INDICATOR_WARMUP_BARS, { signal }),
     };
   }, [initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
+  const candleSnapshotModeRef = useRef<"latest" | "focus">(candleSnapshotQuery.mode);
   const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
     queryKey: candleSnapshotQuery.queryKey,
     queryFn: ({ signal }) => candleSnapshotQuery.queryFn(signal),
-    enabled: candleSnapshotEnabled,
+    enabled: true,
     // K 线实时增量由 WS 维护；REST 只负责初始窗口/切换周期，避免浏览器聚焦时补打重复快照。
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -279,6 +273,10 @@ export default function BTCWatchPage() {
   useEffect(() => {
     if (error) setIsSwitchingInterval(false);
   }, [error]);
+
+  useEffect(() => {
+    candleSnapshotModeRef.current = candleSnapshotQuery.mode;
+  }, [candleSnapshotQuery.mode]);
 
   useEffect(() => {
     if (chartDataReady) return;
@@ -583,12 +581,12 @@ export default function BTCWatchPage() {
         if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
         if (historicalJumpViewRef.current) return;
         const candle = message.candle;
-        if (!candleSnapshotReadyRef.current) {
-          // 切换周期后的第一帧必须由 REST 快照决定窗口宽度；WS 单根 K 线先缓冲，避免先锚到错误位置再跳回。
-          if (candle) pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
-          return;
-        }
         if (candle) {
+          if (!candleSnapshotReadyRef.current && candleSnapshotModeRef.current === "focus") {
+            // focus 模式必须先等 REST 窗口确定定位；latest 模式则允许 WS 未收盘 K 线立即上屏。
+            pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
+            return;
+          }
           setCandles((current) => mergeCandles(current, [candle]));
         }
       };
