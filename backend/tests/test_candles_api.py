@@ -293,6 +293,16 @@ def test_candles_limit_mode_live_candle_replaces_same_open_time(monkeypatch) -> 
     assert body[-1]["is_closed"] is False
 
 
+def test_parse_market_subscribe_message_accepts_valid_interval() -> None:
+    assert routes_candles.parse_market_subscribe_message('{"type":"market.subscribe","interval":"5m"}') == "5m"
+
+
+def test_parse_market_subscribe_message_rejects_invalid_payload() -> None:
+    assert routes_candles.parse_market_subscribe_message("not-json") is None
+    assert routes_candles.parse_market_subscribe_message('{"type":"noop","interval":"5m"}') is None
+    assert routes_candles.parse_market_subscribe_message('{"type":"market.subscribe","interval":"2m"}') is None
+
+
 @pytest.mark.asyncio
 async def test_initial_market_payload_prefers_live_window(monkeypatch) -> None:
     live_candle = make_candle(20).model_copy(update={"is_closed": False})

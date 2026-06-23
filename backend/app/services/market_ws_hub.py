@@ -18,18 +18,45 @@ class MarketWebSocketHub:
 
     async def connect(self, websocket: WebSocket, symbol: str, interval: str) -> None:
         await websocket.accept()
+        await self.subscribe(websocket, symbol, [interval])
+
+    async def subscribe(self, websocket: WebSocket, symbol: str, intervals: list[str]) -> None:
+        normalized_symbol = symbol.upper()
         async with self._lock:
-            self._clients[(symbol.upper(), interval)].add(websocket)
+            for interval in intervals:
+                self._clients[(normalized_symbol, interval)].add(websocket)
+
+    async def replace_subscription(
+        self,
+        websocket: WebSocket,
+        symbol: str,
+        previous_interval: str | None,
+        next_interval: str,
+    ) -> None:
+        normalized_symbol = symbol.upper()
+        async with self._lock:
+            if previous_interval is not None:
+                previous_key = (normalized_symbol, previous_interval)
+                previous_clients = self._clients.get(previous_key)
+                if previous_clients:
+                    previous_clients.discard(websocket)
+                    if not previous_clients:
+                        self._clients.pop(previous_key, None)
+            self._clients[(normalized_symbol, next_interval)].add(websocket)
 
     async def disconnect(self, websocket: WebSocket, symbol: str, interval: str) -> None:
+        await self.disconnect_many(websocket, symbol, [interval])
+
+    async def disconnect_many(self, websocket: WebSocket, symbol: str, intervals: list[str]) -> None:
         async with self._lock:
-            key = (symbol.upper(), interval)
-            clients = self._clients.get(key)
-            if not clients:
-                return
-            clients.discard(websocket)
-            if not clients:
-                self._clients.pop(key, None)
+            for interval in intervals:
+                key = (symbol.upper(), interval)
+                clients = self._clients.get(key)
+                if not clients:
+                    continue
+                clients.discard(websocket)
+                if not clients:
+                    self._clients.pop(key, None)
 
     async def broadcast(self, symbol: str, interval: str, payload: dict[str, Any]) -> None:
         key = (symbol.upper(), interval)

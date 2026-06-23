@@ -21,6 +21,16 @@ class PolymarketWebSocketHub:
         async with self._lock:
             self._clients[interval].add(websocket)
 
+    async def replace_subscription(self, websocket: WebSocket, previous_interval: str | None, next_interval: str) -> None:
+        async with self._lock:
+            if previous_interval is not None:
+                previous_clients = self._clients.get(previous_interval)
+                if previous_clients:
+                    previous_clients.discard(websocket)
+                    if not previous_clients:
+                        self._clients.pop(previous_interval, None)
+            self._clients[next_interval].add(websocket)
+
     async def disconnect(self, websocket: WebSocket, interval: str) -> None:
         async with self._lock:
             clients = self._clients.get(interval)

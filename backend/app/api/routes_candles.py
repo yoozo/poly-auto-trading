@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+import json
+from typing import cast, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +21,7 @@ from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.market_ws_hub import market_ws_hub
 
 router = APIRouter(tags=["candles"])
+VALID_INTERVALS = set(get_args(Interval))
 
 @router.get("/candles/backfill", response_model=CandleBackfillStatus)
 async def candle_backfill_status() -> CandleBackfillStatus:
@@ -80,16 +83,44 @@ async def market_websocket(
     if not await require_websocket_auth(websocket):
         return
     normalized_symbol = symbol.upper()
-    await market_ws_hub.connect(websocket, normalized_symbol, interval)
-    initial_payload = await initial_market_payload(normalized_symbol, interval)
-    if initial_payload is not None:
-        # WS 新连接先补一帧快照，避免前端等下一次 Binance tick 才看到 K 线。
-        await websocket.send_json(initial_payload)
+    current_interval: Interval = interval
+    await market_ws_hub.connect(websocket, normalized_symbol, current_interval)
+    await send_initial_market_payload(websocket, normalized_symbol, current_interval)
     try:
         while True:
-            await websocket.receive_text()
+            raw_message = await websocket.receive_text()
+            next_interval = parse_market_subscribe_message(raw_message)
+            if next_interval is None:
+                continue
+            if next_interval == current_interval:
+                await send_initial_market_payload(websocket, normalized_symbol, current_interval)
+                continue
+            # 同一条 WS 连接只订阅一个周期；切换周期时替换 hub 注册并立刻补发新周期首帧。
+            await market_ws_hub.replace_subscription(websocket, normalized_symbol, current_interval, next_interval)
+            current_interval = next_interval
+            await send_initial_market_payload(websocket, normalized_symbol, current_interval)
     except WebSocketDisconnect:
-        await market_ws_hub.disconnect(websocket, normalized_symbol, interval)
+        await market_ws_hub.disconnect(websocket, normalized_symbol, current_interval)
+
+
+def parse_market_subscribe_message(raw_message: str) -> Interval | None:
+    try:
+        payload = json.loads(raw_message)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "market.subscribe":
+        return None
+    interval = payload.get("interval")
+    if not isinstance(interval, str) or interval not in VALID_INTERVALS:
+        return None
+    return cast(Interval, interval)
+
+
+async def send_initial_market_payload(websocket: WebSocket, symbol: str, interval: Interval) -> None:
+    initial_payload = await initial_market_payload(symbol, interval)
+    if initial_payload is not None:
+        # WS 新连接或订阅切换后先补一帧快照，避免前端等下一次 Binance tick 才看到 K 线。
+        await websocket.send_json(initial_payload)
 
 
 async def initial_market_payload(symbol: str, interval: Interval) -> dict[str, object] | None:

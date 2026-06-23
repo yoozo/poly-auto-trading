@@ -145,6 +145,11 @@ export default function BTCWatchPage() {
   const candleSnapshotReadyRef = useRef(false);
   const historicalJumpViewRef = useRef(false);
   const pendingLiveCandlesRef = useRef<MarketCandle[]>([]);
+  const marketSocketRef = useRef<WebSocket | null>(null);
+  const marketSocketSubscribedIntervalRef = useRef<CandleInterval | null>(null);
+  const activePolymarketIntervalRef = useRef<PolymarketInterval>(polymarketInterval);
+  const polymarketSocketRef = useRef<WebSocket | null>(null);
+  const polymarketSocketSubscribedIntervalRef = useRef<PolymarketInterval | null>(null);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(WIDE_LAYOUT_QUERY);
@@ -295,6 +300,7 @@ export default function BTCWatchPage() {
   }, [showRsi]);
 
   useEffect(() => {
+    activePolymarketIntervalRef.current = polymarketInterval;
     localStorage.setItem(POLY_INTERVAL_KEY, polymarketInterval);
     setSelectedPolymarketId(null);
     setAutoSwitchPolymarket(true);
@@ -335,13 +341,23 @@ export default function BTCWatchPage() {
 
     const connect = () => {
       if (closedByEffect) return;
-      socket = new WebSocket(api.polymarketBtcUpDownWsUrl(polymarketInterval));
+      const initialInterval = polymarketInterval;
+      socket = new WebSocket(api.polymarketBtcUpDownWsUrl(initialInterval));
+      polymarketSocketRef.current = socket;
+      polymarketSocketSubscribedIntervalRef.current = initialInterval;
+      socket.onopen = () => {
+        subscribePolymarketSocket(activePolymarketIntervalRef.current);
+      };
       socket.onmessage = (event) => {
         const message = parsePolymarketMessage(event.data);
-        if (!message || message.interval !== polymarketInterval) return;
+        if (!isValidPolymarketMessage(message, activePolymarketIntervalRef.current)) return;
         setPolymarketMarkets(message.markets);
       };
       socket.onclose = () => {
+        if (polymarketSocketRef.current === socket) {
+          polymarketSocketRef.current = null;
+          polymarketSocketSubscribedIntervalRef.current = null;
+        }
         if (closedByEffect) return;
         reconnectTimer = window.setTimeout(connect, 1000);
       };
@@ -353,8 +369,16 @@ export default function BTCWatchPage() {
       closedByEffect = true;
       if (connectTimer) window.clearTimeout(connectTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (polymarketSocketRef.current === socket) {
+        polymarketSocketRef.current = null;
+        polymarketSocketSubscribedIntervalRef.current = null;
+      }
       socket?.close();
     };
+  }, []);
+
+  useEffect(() => {
+    subscribePolymarketSocket(polymarketInterval);
   }, [polymarketInterval]);
 
   useEffect(() => {
@@ -562,44 +586,43 @@ export default function BTCWatchPage() {
     let connectTimer = 0;
     let reconnectTimer = 0;
     let closedByEffect = false;
-    const streamInterval = interval;
-    const requestEpoch = dataEpochRef.current;
 
     const connect = () => {
       // WebSocket 只负责实时增量；初始窗口和向前翻页仍由 REST 接口补齐。
-      if (requestEpoch !== dataEpochRef.current) return;
       setStreamStatus("connecting");
-      socket = new WebSocket(api.marketWsUrl(streamInterval));
+      const initialInterval = activeIntervalRef.current;
+      socket = new WebSocket(api.marketWsUrl(initialInterval));
+      marketSocketRef.current = socket;
+      marketSocketSubscribedIntervalRef.current = initialInterval;
       socket.onopen = () => {
-        if (requestEpoch !== dataEpochRef.current) return;
         setStreamStatus("connected");
+        subscribeMarketSocket(activeIntervalRef.current);
       };
       socket.onmessage = (event) => {
-        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
         setStreamStatus("connected");
         const message = parseMarketMessage(event.data);
-        if (!message || message.symbol !== "BTCUSDT" || message.interval !== streamInterval) return;
+        if (!isValidMarketMessage(message, activeIntervalRef.current)) return;
         if (historicalJumpViewRef.current) return;
         const candle = message.candle;
-        if (candle) {
-          if (!candleSnapshotReadyRef.current && candleSnapshotModeRef.current === "focus") {
-            // focus 模式必须先等 REST 窗口确定定位；latest 模式则允许 WS 未收盘 K 线立即上屏。
-            pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
-            return;
-          }
-          setCandles((current) => mergeCandles(current, [candle]));
+        if (!candleSnapshotReadyRef.current && candleSnapshotModeRef.current === "focus") {
+          // focus 模式必须先等 REST 窗口确定定位；latest 模式则允许 WS 未收盘 K 线立即上屏。
+          pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
+          return;
         }
+        setCandles((current) => mergeCandles(current, [candle]));
       };
       socket.onerror = () => {
-        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
         setStreamStatus("reconnecting");
       };
       socket.onclose = () => {
+        if (marketSocketRef.current === socket) {
+          marketSocketRef.current = null;
+          marketSocketSubscribedIntervalRef.current = null;
+        }
         if (closedByEffect) {
           setStreamStatus("closed");
           return;
         }
-        if (requestEpoch !== dataEpochRef.current || streamInterval !== activeIntervalRef.current) return;
         setStreamStatus("reconnecting");
         reconnectTimer = window.setTimeout(connect, 1000);
       };
@@ -611,9 +634,33 @@ export default function BTCWatchPage() {
       closedByEffect = true;
       if (connectTimer) window.clearTimeout(connectTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (marketSocketRef.current === socket) {
+        marketSocketRef.current = null;
+        marketSocketSubscribedIntervalRef.current = null;
+      }
       socket?.close();
     };
+  }, []);
+
+  useEffect(() => {
+    subscribeMarketSocket(interval);
   }, [interval]);
+
+  function subscribeMarketSocket(nextInterval: CandleInterval) {
+    const socket = marketSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (marketSocketSubscribedIntervalRef.current === nextInterval) return;
+    socket.send(JSON.stringify({ type: "market.subscribe", interval: nextInterval }));
+    marketSocketSubscribedIntervalRef.current = nextInterval;
+  }
+
+  function subscribePolymarketSocket(nextInterval: PolymarketInterval) {
+    const socket = polymarketSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (polymarketSocketSubscribedIntervalRef.current === nextInterval) return;
+    socket.send(JSON.stringify({ type: "polymarket.btc_up_down.subscribe", interval: nextInterval }));
+    polymarketSocketSubscribedIntervalRef.current = nextInterval;
+  }
 
   const loadMore = useCallback(
     async (startMs: number, endMs: number) => {
@@ -1745,6 +1792,21 @@ function parseMarketMessage(value: string) {
   }
 }
 
+function isValidMarketMessage(message: MarketWsMessage | null, activeInterval: CandleInterval): message is MarketWsMessage & { candle: MarketCandle } {
+  if (!message || message.symbol !== "BTCUSDT" || message.interval !== activeInterval) return false;
+  const candle = message.candle;
+  if (!candle || candle.symbol !== message.symbol || candle.interval !== message.interval) return false;
+  const openTime = new Date(candle.open_time).getTime();
+  const closeTime = new Date(candle.close_time).getTime();
+  const open = Number(candle.open);
+  const high = Number(candle.high);
+  const low = Number(candle.low);
+  const close = Number(candle.close);
+  if (![openTime, closeTime, open, high, low, close].every(Number.isFinite)) return false;
+  if (openTime <= 0 || closeTime <= openTime) return false;
+  return high >= Math.max(open, close, low) && low <= Math.min(open, close, high);
+}
+
 function parsePolymarketMessage(value: string) {
   try {
     const message = JSON.parse(value) as PolymarketWsMessage;
@@ -1753,6 +1815,11 @@ function parsePolymarketMessage(value: string) {
   } catch {
     return null;
   }
+}
+
+function isValidPolymarketMessage(message: PolymarketWsMessage | null, activeInterval: PolymarketInterval): message is PolymarketWsMessage {
+  if (!message || message.interval !== activeInterval || !Array.isArray(message.markets)) return false;
+  return message.markets.every((market) => market.interval === activeInterval && typeof market.id === "string" && market.id.length > 0);
 }
 
 function withIndicatorWarmupStart(startMs: number, interval: CandleInterval) {

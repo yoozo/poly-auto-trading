@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import settings
+from app.api import routes_candles
 from app.db.session import get_session
 from app.main import create_app
 from conftest import TEST_AUTH_PASSWORD
@@ -82,7 +83,11 @@ def test_websocket_requires_session() -> None:
             pass
 
 
-def test_websocket_accepts_authenticated_session() -> None:
+def test_websocket_accepts_authenticated_session(monkeypatch) -> None:
+    async def fake_initial_market_payload(symbol, interval):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(routes_candles, "initial_market_payload", fake_initial_market_payload)
     client = make_client()
     assert client.post("/api/auth/login", json={"password": TEST_AUTH_PASSWORD}).status_code == 200
 

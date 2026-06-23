@@ -1,4 +1,5 @@
 import logging
+import json
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -37,6 +38,7 @@ from app.services.polymarket_ws_hub import polymarket_ws_hub
 
 router = APIRouter(tags=["polymarket"])
 logger = logging.getLogger(__name__)
+POLYMARKET_BTC_UP_DOWN_INTERVALS = {"5m", "15m", "1h", "4h"}
 
 
 @router.get("/polymarket/btc-up-down", response_model=list[PolymarketUpDownMarket])
@@ -208,20 +210,46 @@ async def btc_up_down_websocket(
 ) -> None:
     if not await require_websocket_auth(websocket):
         return
-    await polymarket_ws_hub.connect(websocket, interval)
+    current_interval = interval
+    await polymarket_ws_hub.connect(websocket, current_interval)
     try:
-        markets = await polymarket_up_down_store.list_markets(interval, limit=12)
-        await websocket.send_json(
-            {
-                "type": "polymarket.btc_up_down.snapshot",
-                "interval": interval,
-                "markets": jsonable_encoder(markets),
-            }
-        )
+        await send_btc_up_down_snapshot(websocket, current_interval)
         while True:
-            await websocket.receive_text()
+            raw_message = await websocket.receive_text()
+            next_interval = parse_btc_up_down_subscribe_message(raw_message)
+            if next_interval is None:
+                continue
+            if next_interval == current_interval:
+                await send_btc_up_down_snapshot(websocket, current_interval)
+                continue
+            # 同一条 Polymarket WS 只订阅一个 market 周期，切换时替换注册并补发新周期快照。
+            await polymarket_ws_hub.replace_subscription(websocket, current_interval, next_interval)
+            current_interval = next_interval
+            await send_btc_up_down_snapshot(websocket, current_interval)
     except WebSocketDisconnect:
-        await polymarket_ws_hub.disconnect(websocket, interval)
+        await polymarket_ws_hub.disconnect(websocket, current_interval)
+
+
+def parse_btc_up_down_subscribe_message(raw_message: str) -> str | None:
+    try:
+        payload = json.loads(raw_message)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "polymarket.btc_up_down.subscribe":
+        return None
+    interval = payload.get("interval")
+    return interval if isinstance(interval, str) and interval in POLYMARKET_BTC_UP_DOWN_INTERVALS else None
+
+
+async def send_btc_up_down_snapshot(websocket: WebSocket, interval: str) -> None:
+    markets = await polymarket_up_down_store.list_markets(interval, limit=12)
+    await websocket.send_json(
+        {
+            "type": "polymarket.btc_up_down.snapshot",
+            "interval": interval,
+            "markets": jsonable_encoder(markets),
+        }
+    )
 
 
 @router.websocket("/ws/polymarket/account-state")

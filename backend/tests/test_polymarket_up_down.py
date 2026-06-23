@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from polymarket import TransportError
 
 from app.main import create_app
+from app.api import routes_polymarket
 from conftest import login_test_client
 from app.services.polymarket_client import (
     PolymarketClient,
@@ -29,6 +30,20 @@ def test_filters_btc_5m_series() -> None:
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-hourly", "title": "x"}, interval="1h")
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-4h", "title": "x"}, interval="4h")
     assert not is_btc_up_down_event({"seriesSlug": "eth-up-or-down-5m", "title": "x"}, interval="5m")
+
+
+def test_parse_btc_up_down_subscribe_message_accepts_valid_interval() -> None:
+    assert routes_polymarket.parse_btc_up_down_subscribe_message(
+        '{"type":"polymarket.btc_up_down.subscribe","interval":"15m"}'
+    ) == "15m"
+
+
+def test_parse_btc_up_down_subscribe_message_rejects_invalid_payload() -> None:
+    assert routes_polymarket.parse_btc_up_down_subscribe_message("not-json") is None
+    assert routes_polymarket.parse_btc_up_down_subscribe_message('{"type":"noop","interval":"15m"}') is None
+    assert routes_polymarket.parse_btc_up_down_subscribe_message(
+        '{"type":"polymarket.btc_up_down.subscribe","interval":"1m"}'
+    ) is None
 
 
 def test_polymarket_sdk_retryable_error_detects_wrapped_httpx_connect_error() -> None:
