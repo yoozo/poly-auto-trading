@@ -262,58 +262,60 @@ export default function App() {
         }
       }}
     >
-      {authStatus !== "authenticated" ? (
-        authContent
-      ) : (
-      <ProLayout
-        title="Poly Auto"
-        logo={false}
-        route={route}
-        location={{ pathname: pathname === "/reports/market-detail" ? "/reports" : pathname }}
-        collapsed={siderCollapsed}
-        breakpoint={false}
-        onCollapse={(collapsed) => {
-          setSiderCollapsed(collapsed);
-          localStorage.setItem(SIDER_COLLAPSED_KEY, collapsed ? "1" : "0");
-        }}
-        menuItemRender={(item, dom) => (
-          <button
-            className="menu-link"
-            type="button"
-            onClick={() => navigate((item.path || "/btc-watch") as RouteKey)}
+      <div className={`app-shell app-shell-${themeMode}`} data-theme={themeMode}>
+        {authStatus !== "authenticated" ? (
+          authContent
+        ) : (
+          <ProLayout
+            title="Poly Auto"
+            logo={false}
+            route={route}
+            location={{ pathname: pathname === "/reports/market-detail" ? "/reports" : pathname }}
+            collapsed={siderCollapsed}
+            breakpoint={false}
+            onCollapse={(collapsed) => {
+              setSiderCollapsed(collapsed);
+              localStorage.setItem(SIDER_COLLAPSED_KEY, collapsed ? "1" : "0");
+            }}
+            menuItemRender={(item, dom) => (
+              <button
+                className="menu-link"
+                type="button"
+                onClick={() => navigate((item.path || "/btc-watch") as RouteKey)}
+              >
+                {dom}
+              </button>
+            )}
+            actionsRender={() => [
+              <AccountHeaderSummary
+                key="account"
+                accountState={accountState}
+                activeProfile={activeWalletMatches ? activeWalletProfile : null}
+                connectedAddress={walletConnection.address}
+              />,
+              <Button
+                key="theme"
+                type="text"
+                icon={<MoonOutlined />}
+                onClick={() => setThemeMode((value) => (value === "dark" ? "light" : "dark"))}
+              >
+                {themeMode === "dark" ? "浅色" : "深色"}
+              </Button>,
+              <Button key="logout" type="text" icon={<LogoutOutlined />} onClick={handleLogout}>
+                退出
+              </Button>
+            ]}
+            layout="mix"
+            contentStyle={{ padding: 0 }}
           >
-            {dom}
-          </button>
+            <PageContainer className={pageContainerClassName} title={pageTitle}>
+              <Suspense fallback={<div className="route-loading"><Spin /> 加载中...</div>}>
+                {renderPage(pathname, searchParams, navigate)}
+              </Suspense>
+            </PageContainer>
+          </ProLayout>
         )}
-        actionsRender={() => [
-          <AccountHeaderSummary
-            key="account"
-            accountState={accountState}
-            activeProfile={activeWalletMatches ? activeWalletProfile : null}
-            connectedAddress={walletConnection.address}
-          />,
-          <Button
-            key="theme"
-            type="text"
-            icon={<MoonOutlined />}
-            onClick={() => setThemeMode((value) => (value === "dark" ? "light" : "dark"))}
-          >
-            {themeMode === "dark" ? "浅色" : "深色"}
-          </Button>,
-          <Button key="logout" type="text" icon={<LogoutOutlined />} onClick={handleLogout}>
-            退出
-          </Button>
-        ]}
-        layout="mix"
-        contentStyle={{ padding: 0 }}
-      >
-        <PageContainer className={pageContainerClassName} title={pageTitle}>
-          <Suspense fallback={<div className="route-loading"><Spin /> 加载中...</div>}>
-            {renderPage(pathname, searchParams, navigate)}
-          </Suspense>
-        </PageContainer>
-      </ProLayout>
-      )}
+      </div>
     </ConfigProvider>
   );
 }

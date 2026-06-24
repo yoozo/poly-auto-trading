@@ -5,6 +5,11 @@ body,
   margin: 0;
 }
 
+.app-shell {
+  min-height: 100vh;
+  background: var(--app-bg, #f4f6fa);
+}
+
 body {
   background: var(--app-bg, #f4f6fa);
 }
@@ -3781,6 +3786,13 @@ body[data-theme="dark"] .polymarket-order-entry {
   color: #cbd5e1;
 }
 
+body[data-theme="dark"] .polymarket-account-panel,
+.app-shell-dark .polymarket-account-panel {
+  background:
+    linear-gradient(180deg, rgba(17, 24, 39, 0.98) 0%, rgba(15, 23, 32, 0.98) 100%),
+    #101720;
+}
+
 body[data-theme="dark"] .polymarket-order-entry {
   --trade-accent: #60a5fa;
   --trade-accent-soft: rgba(96, 165, 250, 0.12);
@@ -3937,13 +3949,118 @@ body[data-theme="dark"] .polymarket-order-entry-submit .ant-btn-primary.ant-btn-
   color: #64748b;
 }
 
-body[data-theme="dark"] .polymarket-account-row {
+body[data-theme="dark"] .polymarket-account-row,
+.app-shell-dark .polymarket-account-row {
+  background: #111a25;
   color: #d7e0ea;
 }
 
+body[data-theme="dark"] .polymarket-trade-table,
+.app-shell-dark .polymarket-trade-table {
+  border-color: #334155;
+  background: #0f1722;
+}
+
+body[data-theme="dark"] .polymarket-trade-table .polymarket-account-table-head,
+.app-shell-dark .polymarket-trade-table .polymarket-account-table-head {
+  border-bottom-color: #334155;
+  background: #182231;
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-trade-table .polymarket-account-row,
+.app-shell-dark .polymarket-trade-table .polymarket-account-row {
+  background: #111a25;
+}
+
+body[data-theme="dark"] .polymarket-trade-table .polymarket-account-row:nth-child(2n + 1),
+.app-shell-dark .polymarket-trade-table .polymarket-account-row:nth-child(2n + 1) {
+  background: #131e2b;
+}
+
 body[data-theme="dark"] .polymarket-account-row + .polymarket-account-row,
-body[data-theme="dark"] .polymarket-account-table-head {
+.app-shell-dark .polymarket-account-row + .polymarket-account-row,
+body[data-theme="dark"] .polymarket-account-table-head,
+.app-shell-dark .polymarket-account-table-head {
   border-color: #263244;
+}
+
+body[data-theme="dark"] .polymarket-account-table-head,
+body[data-theme="dark"] .polymarket-account-value-cell small,
+.app-shell-dark .polymarket-account-table-head,
+.app-shell-dark .polymarket-account-value-cell small {
+  color: #7f8ea3;
+}
+
+body[data-theme="dark"] .polymarket-account-value-cell strong,
+.app-shell-dark .polymarket-account-value-cell strong {
+  color: #f8fafc;
+}
+
+body[data-theme="dark"] .polymarket-account-outcome-pill,
+.app-shell-dark .polymarket-account-outcome-pill {
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: #263244;
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-account-outcome-pill.up,
+.app-shell-dark .polymarket-account-outcome-pill.up {
+  border-color: rgba(52, 211, 153, 0.22);
+  background: rgba(16, 185, 129, 0.14);
+  color: #6ee7b7;
+}
+
+body[data-theme="dark"] .polymarket-account-outcome-pill.down,
+.app-shell-dark .polymarket-account-outcome-pill.down {
+  border-color: rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
+}
+
+body[data-theme="dark"] .polymarket-account-section-title,
+body[data-theme="dark"] .polymarket-account-pnl.neutral,
+body[data-theme="dark"] .polymarket-order-entry-inputs label,
+body[data-theme="dark"] .polymarket-order-entry-meta > span,
+body[data-theme="dark"] .polymarket-order-entry-submit .ant-checkbox-wrapper,
+.app-shell-dark .polymarket-account-section-title,
+.app-shell-dark .polymarket-account-pnl.neutral,
+.app-shell-dark .polymarket-order-entry-inputs label,
+.app-shell-dark .polymarket-order-entry-meta > span,
+.app-shell-dark .polymarket-order-entry-submit .ant-checkbox-wrapper {
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-account-side,
+.app-shell-dark .polymarket-account-side {
+  color: #f8fafc;
+}
+
+body[data-theme="dark"] .polymarket-account-badge,
+.app-shell-dark .polymarket-account-badge {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.pending,
+.app-shell-dark .polymarket-account-trade-status.pending {
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fbbf24;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.confirmed,
+.app-shell-dark .polymarket-account-trade-status.confirmed {
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  background: rgba(16, 185, 129, 0.14);
+  color: #6ee7b7;
+}
+
+body[data-theme="dark"] .polymarket-account-trade-status.refresh_failed,
+.app-shell-dark .polymarket-account-trade-status.refresh_failed {
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
 }
 
 body[data-theme="dark"] .polymarket-account-table-head,
@@ -3956,16 +4073,19 @@ body[data-theme="dark"] .polymarket-account-value-cell strong {
 }
 
 body[data-theme="dark"] .polymarket-account-outcome-pill {
+  border: 1px solid rgba(148, 163, 184, 0.12);
   background: #263244;
   color: #cbd5e1;
 }
 
 body[data-theme="dark"] .polymarket-account-outcome-pill.up {
+  border-color: rgba(52, 211, 153, 0.22);
   background: rgba(16, 185, 129, 0.14);
   color: #6ee7b7;
 }
 
 body[data-theme="dark"] .polymarket-account-outcome-pill.down {
+  border-color: rgba(248, 113, 113, 0.22);
   background: rgba(248, 113, 113, 0.14);
   color: #fca5a5;
 }
@@ -3988,16 +4108,19 @@ body[data-theme="dark"] .polymarket-account-badge {
 }
 
 body[data-theme="dark"] .polymarket-account-trade-status.pending {
+  border: 1px solid rgba(251, 191, 36, 0.22);
   background: rgba(245, 158, 11, 0.14);
   color: #fbbf24;
 }
 
 body[data-theme="dark"] .polymarket-account-trade-status.confirmed {
-  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  background: rgba(16, 185, 129, 0.14);
   color: #6ee7b7;
 }
 
 body[data-theme="dark"] .polymarket-account-trade-status.refresh_failed {
+  border: 1px solid rgba(248, 113, 113, 0.22);
   background: rgba(248, 113, 113, 0.14);
   color: #fca5a5;
 }
