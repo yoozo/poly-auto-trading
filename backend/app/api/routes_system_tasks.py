@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -59,7 +60,23 @@ async def system_tasks(symbol: str = settings.binance_symbol) -> list[SystemTask
             .limit(20)
         )
         tasks = list(rows.all())
-        return [await serialize_system_task(session, task) for task in tasks]
+        steps_by_task_id = await load_steps_by_task_id(session, [task.id for task in tasks])
+        candle_ranges_by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
+        for task in tasks:
+            if task.task_type != "kline_backfill" or task.symbol in candle_ranges_by_symbol:
+                continue
+            # 任务列表会被前端轮询；同一 symbol 的 K 线覆盖范围只聚合一次，避免重复扫 candles 大表。
+            candle_ranges_by_symbol[task.symbol] = await list_candle_ranges(session, task.symbol)
+        return [
+            build_system_task_status(
+                task,
+                steps_by_task_id.get(task.id, []),
+                candle_ranges=candle_ranges_by_symbol.get(task.symbol, {})
+                if task.task_type == "kline_backfill"
+                else {},
+            )
+            for task in tasks
+        ]
 
 
 @router.get("/system-tasks/latest", response_model=SystemTaskStatus)
@@ -75,7 +92,9 @@ async def latest_system_task(
 
 
 @router.post("/system-tasks/{task_type}/start", response_model=SystemTaskStatus)
-async def start_system_task(task_type: SystemTaskType, symbol: str = settings.binance_symbol) -> SystemTaskStatus:
+async def start_system_task(
+    task_type: SystemTaskType, symbol: str = settings.binance_symbol
+) -> SystemTaskStatus:
     if task_type == "kline_backfill":
         status = await candle_backfill_runner.start_all(symbol=symbol)
     elif task_type == "indicator_backfill":
@@ -85,7 +104,12 @@ async def start_system_task(task_type: SystemTaskType, symbol: str = settings.bi
     async with AsyncSessionLocal() as session:
         task = await latest_task(session, task_type=task_type, symbol=status.symbol.upper())
         if task is None:
-            return SystemTaskStatus(task_type=task_type, symbol=status.symbol, status=status.state, message=status.message)
+            return SystemTaskStatus(
+                task_type=task_type,
+                symbol=status.symbol,
+                status=status.state,
+                message=status.message,
+            )
         return await serialize_system_task(session, task)
 
 
@@ -104,6 +128,35 @@ async def serialize_system_task(session, task: SystemTask) -> SystemTaskStatus:
         .where(SystemTaskStep.task_id == task.id)
         .order_by(SystemTaskStep.id.asc())
     )
+    steps = list(step_rows.all())
+    ranges = (
+        await list_candle_ranges(session, task.symbol) if task.task_type == "kline_backfill" else {}
+    )
+    return build_system_task_status(task, steps, candle_ranges=ranges)
+
+
+async def load_steps_by_task_id(
+    session, task_ids: Sequence[int]
+) -> dict[int, list[SystemTaskStep]]:
+    if not task_ids:
+        return {}
+    step_rows = await session.scalars(
+        select(SystemTaskStep)
+        .where(SystemTaskStep.task_id.in_(task_ids))
+        .order_by(SystemTaskStep.task_id.asc(), SystemTaskStep.id.asc())
+    )
+    grouped: dict[int, list[SystemTaskStep]] = defaultdict(list)
+    for step in step_rows.all():
+        grouped[step.task_id].append(step)
+    return grouped
+
+
+def build_system_task_status(
+    task: SystemTask,
+    step_rows: Sequence[SystemTaskStep],
+    *,
+    candle_ranges: dict[str, dict[str, Any]] | None = None,
+) -> SystemTaskStatus:
     steps = [
         SystemTaskStepStatus(
             id=step.id,
@@ -119,9 +172,8 @@ async def serialize_system_task(session, task: SystemTask) -> SystemTaskStatus:
             started_at=step.started_at,
             finished_at=step.finished_at,
         )
-        for step in step_rows.all()
+        for step in step_rows
     ]
-    ranges = await list_candle_ranges(session, task.symbol) if task.task_type == "kline_backfill" else {}
     return SystemTaskStatus(
         id=task.id,
         task_type=task.task_type,  # type: ignore[arg-type]
@@ -134,5 +186,5 @@ async def serialize_system_task(session, task: SystemTask) -> SystemTaskStatus:
         finished_at=task.finished_at,
         metadata=task.task_metadata or {},
         steps=steps,
-        candle_ranges=ranges,
+        candle_ranges=candle_ranges or {},
     )
