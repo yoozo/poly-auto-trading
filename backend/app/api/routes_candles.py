@@ -78,6 +78,9 @@ async def market_websocket(
     try:
         while True:
             raw_message = await websocket.receive_text()
+            # 浏览器不能发 WebSocket 协议层 ping；应用层 ping 用于前端诊断客户到后端的 WS RTT。
+            if await send_market_pong(websocket, raw_message):
+                continue
             client_message = parse_market_ws_message(raw_message)
             if client_message is None:
                 continue
@@ -129,6 +132,22 @@ def parse_market_ws_message(raw_message: str) -> MarketWsClientMessage | None:
     if not isinstance(interval, str) or interval not in VALID_INTERVALS:
         return None
     return {"type": "market.subscribe", "interval": cast(Interval, interval)}
+
+
+async def send_market_pong(websocket: WebSocket, raw_message: str) -> bool:
+    try:
+        payload = json.loads(raw_message)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict) or payload.get("type") != "market.ping":
+        return False
+    await websocket.send_json(
+        {
+            "type": "market.pong",
+            "request_id": payload.get("request_id"),
+        }
+    )
+    return True
 
 
 def parse_market_candles_request(payload: dict[str, object]) -> MarketCandlesRequestMessage:

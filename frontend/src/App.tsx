@@ -22,6 +22,7 @@ import {
   type PolymarketAccountStateWsMessage,
   type PolymarketCredentialProfile
 } from "./api/client";
+import { PerformanceMonitorTooltip } from "./components/PerformanceMonitorTooltip";
 import { PolymarketCredentialManager } from "./components/PolymarketCredentialManager";
 import { connectWallet, disconnectWallet, useWalletConnection } from "./hooks/useWalletConnection";
 
@@ -313,6 +314,7 @@ export default function App() {
                 {renderPage(pathname, searchParams, navigate)}
               </Suspense>
             </PageContainer>
+            <PerformanceMonitorTooltip />
           </ProLayout>
         )}
       </div>

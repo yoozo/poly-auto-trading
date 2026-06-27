@@ -320,6 +320,26 @@ def test_parse_market_subscribe_message_rejects_invalid_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_market_pong_echoes_request_id() -> None:
+    websocket = RecordingJsonWebSocket()
+
+    handled = await routes_candles.send_market_pong(websocket, '{"type":"market.ping","request_id":"latency-1"}')
+
+    assert handled is True
+    assert websocket.messages == [{"type": "market.pong", "request_id": "latency-1"}]
+
+
+@pytest.mark.asyncio
+async def test_send_market_pong_ignores_non_ping() -> None:
+    websocket = RecordingJsonWebSocket()
+
+    handled = await routes_candles.send_market_pong(websocket, '{"type":"market.subscribe","interval":"1m"}')
+
+    assert handled is False
+    assert websocket.messages == []
+
+
+@pytest.mark.asyncio
 async def test_market_ws_candles_latest_request_syncs_and_merges_live_candle(monkeypatch) -> None:
     calls = {}
     cached = [make_candle(index) for index in range(300)]

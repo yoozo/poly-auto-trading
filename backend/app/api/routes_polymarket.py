@@ -235,6 +235,9 @@ async def btc_up_down_websocket(
         await send_btc_up_down_snapshot(websocket, current_interval)
         while True:
             raw_message = await websocket.receive_text()
+            # 浏览器不能发 WebSocket 协议层 ping，这里提供应用层 ping/pong 供前端测后端回包 RTT。
+            if await send_btc_up_down_pong(websocket, raw_message):
+                continue
             next_interval = parse_btc_up_down_subscribe_message(raw_message)
             if next_interval is None:
                 continue
@@ -258,6 +261,22 @@ def parse_btc_up_down_subscribe_message(raw_message: str) -> str | None:
         return None
     interval = payload.get("interval")
     return interval if isinstance(interval, str) and interval in POLYMARKET_BTC_UP_DOWN_INTERVALS else None
+
+
+async def send_btc_up_down_pong(websocket: WebSocket, raw_message: str) -> bool:
+    try:
+        payload = json.loads(raw_message)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict) or payload.get("type") != "polymarket.btc_up_down.ping":
+        return False
+    await websocket.send_json(
+        {
+            "type": "polymarket.btc_up_down.pong",
+            "request_id": payload.get("request_id"),
+        }
+    )
+    return True
 
 
 async def send_btc_up_down_snapshot(websocket: WebSocket, interval: str) -> None:

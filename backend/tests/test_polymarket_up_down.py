@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpcore
 import httpx
@@ -24,6 +25,14 @@ from app.services.polymarket_client import (
 )
 
 
+class RecordingWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        self.sent.append(payload)
+
+
 def test_filters_btc_5m_series() -> None:
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-5m", "title": "x"}, interval="5m")
     assert is_btc_up_down_event({"seriesSlug": "btc-up-or-down-15m", "title": "x"}, interval="15m")
@@ -44,6 +53,32 @@ def test_parse_btc_up_down_subscribe_message_rejects_invalid_payload() -> None:
     assert routes_polymarket.parse_btc_up_down_subscribe_message(
         '{"type":"polymarket.btc_up_down.subscribe","interval":"1m"}'
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_send_btc_up_down_pong_echoes_request_id() -> None:
+    websocket = RecordingWebSocket()
+
+    handled = await routes_polymarket.send_btc_up_down_pong(
+        websocket,
+        '{"type":"polymarket.btc_up_down.ping","request_id":"latency-1"}',
+    )
+
+    assert handled is True
+    assert websocket.sent == [{"type": "polymarket.btc_up_down.pong", "request_id": "latency-1"}]
+
+
+@pytest.mark.asyncio
+async def test_send_btc_up_down_pong_ignores_non_ping() -> None:
+    websocket = RecordingWebSocket()
+
+    handled = await routes_polymarket.send_btc_up_down_pong(
+        websocket,
+        '{"type":"polymarket.btc_up_down.subscribe","interval":"5m"}',
+    )
+
+    assert handled is False
+    assert websocket.sent == []
 
 
 def test_polymarket_sdk_retryable_error_detects_wrapped_httpx_connect_error() -> None:

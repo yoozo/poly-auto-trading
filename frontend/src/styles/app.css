@@ -69,6 +69,145 @@ body[data-theme="dark"] {
   color: var(--text-muted, #667085);
 }
 
+.performance-metric {
+  min-height: 170px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.performance-tooltip-trigger {
+  position: fixed;
+  top: 21px;
+  left: 126px;
+  z-index: 110;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(208 213 221 / 78%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 78%);
+  box-shadow: 0 2px 8px rgb(15 23 42 / 10%);
+  cursor: default;
+}
+
+.performance-tooltip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #98a2b3;
+}
+
+.performance-tooltip-trigger-success .performance-tooltip-dot {
+  background: #52c41a;
+}
+
+.performance-tooltip-trigger-processing .performance-tooltip-dot {
+  background: #1677ff;
+}
+
+.performance-tooltip-trigger-error .performance-tooltip-dot {
+  background: #ff4d4f;
+}
+
+.performance-tooltip-content {
+  width: 268px;
+}
+
+.performance-tooltip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.performance-tooltip-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.performance-tooltip-row {
+  display: grid;
+  grid-template-columns: 58px 76px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.performance-tooltip-row span {
+  color: rgb(255 255 255 / 72%);
+}
+
+.performance-tooltip-row strong {
+  color: #fff;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.performance-tooltip-row em {
+  overflow: hidden;
+  color: rgb(255 255 255 / 62%);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.performance-metric-running {
+  border-color: #91caff;
+}
+
+.performance-metric-ok {
+  border-color: #b7eb8f;
+}
+
+.performance-metric-error {
+  border-color: #ffccc7;
+}
+
+.performance-metric-head {
+  display: flex;
+  min-height: 44px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  color: #101828;
+  font-weight: 700;
+}
+
+.performance-metric-meta {
+  min-height: 22px;
+  margin-top: 10px;
+}
+
+.performance-metric-note {
+  margin: 14px 0 0;
+}
+
+body[data-theme="dark"] .performance-metric {
+  border-color: var(--panel-border, #27313c);
+  background: var(--panel-bg, #151b22);
+}
+
+body[data-theme="dark"] .performance-metric-head {
+  color: var(--text-strong, #e6edf3);
+}
+
+body[data-theme="dark"] .performance-tooltip-trigger {
+  border-color: var(--panel-border, #27313c);
+  background: rgb(21 27 34 / 82%);
+}
+
+@media (max-width: 1000px) {
+  .performance-tooltip-trigger {
+    left: 112px;
+  }
+}
+
 .app-account-control {
   display: flex;
   height: 40px;
