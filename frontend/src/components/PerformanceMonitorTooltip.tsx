@@ -106,7 +106,12 @@ export function PerformanceMonitorTooltip() {
   if (!enabled) return null;
 
   return (
-    <Tooltip placement="bottomLeft" mouseEnterDelay={0.2} title={<PerformanceTooltipContent results={results} running={running} />}>
+    <Tooltip
+      overlayClassName="performance-tooltip-overlay"
+      placement="bottomLeft"
+      mouseEnterDelay={0.2}
+      title={<PerformanceTooltipContent results={results} running={running} />}
+    >
       <button
         className={`performance-tooltip-trigger performance-tooltip-trigger-${status}`}
         type="button"

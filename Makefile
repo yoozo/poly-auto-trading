@@ -16,6 +16,10 @@ API_HOST ?= 127.0.0.1
 API_PORT ?= 8000
 WEB_HOST ?= 0.0.0.0
 WEB_PORT ?= 5173
+DEPLOY_HOST ?=
+DEPLOY_DIR ?=
+DEPLOY_BRANCH ?=
+DEPLOY_SSH_OPTS ?=
 POLYMARKET_EVENT_INPUT := $(or $(SLUG),$(word 2,$(MAKECMDGOALS)))
 
 ifneq ($(filter poly-event,$(MAKECMDGOALS)),)
@@ -25,7 +29,7 @@ endif
 
 .PHONY: help install install-api install-web dev dev-api dev-web \
 	db-up db-create migrate migrate-down migrate-current migrate-history \
-	lsof poly-event import-polymarket-credentials test test-api test-web lint lint-api build build-web check clean clean-api clean-web
+	lsof poly-event import-polymarket-credentials deploy test test-api test-web lint lint-api build build-web check clean clean-api clean-web
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nCommands:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -111,6 +115,19 @@ poly-event: ## Resolve a Polymarket event slug/URL. Usage: copy event URL, then 
 
 import-polymarket-credentials: ## Import Polymarket CLOB credentials. Usage: POLY_CREDENTIAL_PAYLOAD=... make import-polymarket-credentials
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) python -m app.scripts.import_polymarket_credentials
+
+deploy: ## Pull latest code on remote host. Usage: make deploy DEPLOY_HOST=user@host DEPLOY_DIR=/path/to/app [DEPLOY_BRANCH=main]
+	@set -a; \
+	[ ! -f .env ] || . ./.env; \
+	[ ! -f .env.local ] || . ./.env.local; \
+	set +a; \
+	[ -z "$(DEPLOY_HOST)" ] || DEPLOY_HOST="$(DEPLOY_HOST)"; \
+	[ -z "$(DEPLOY_DIR)" ] || DEPLOY_DIR="$(DEPLOY_DIR)"; \
+	[ -z "$(DEPLOY_BRANCH)" ] || DEPLOY_BRANCH="$(DEPLOY_BRANCH)"; \
+	[ -z "$(DEPLOY_SSH_OPTS)" ] || DEPLOY_SSH_OPTS="$(DEPLOY_SSH_OPTS)"; \
+	test -n "$${DEPLOY_HOST:-}" || (echo "DEPLOY_HOST is required. Example: make deploy DEPLOY_HOST=user@host DEPLOY_DIR=/path/to/app" >&2; exit 2); \
+	test -n "$${DEPLOY_DIR:-}" || (echo "DEPLOY_DIR is required. Example: make deploy DEPLOY_HOST=user@host DEPLOY_DIR=/path/to/app" >&2; exit 2); \
+	ssh $${DEPLOY_SSH_OPTS:-} "$$DEPLOY_HOST" 'set -eu; cd "'"$$DEPLOY_DIR"'"; branch="'"$${DEPLOY_BRANCH:-}"'"; if [ -n "$$branch" ]; then git fetch origin "$$branch"; git checkout "$$branch"; git pull --ff-only origin "$$branch"; else git pull --ff-only; fi'
 
 migrate: ## Run Alembic migrations.
 	cd $(BACKEND_DIR) && uv run --cache-dir $(UV_CACHE) alembic upgrade head

@@ -125,8 +125,18 @@ body[data-theme="dark"] {
   background: #ff4d4f;
 }
 
+.performance-tooltip-overlay {
+  max-width: min(360px, calc(100vw - 24px));
+}
+
+.performance-tooltip-overlay .ant-tooltip-inner {
+  width: min(360px, calc(100vw - 24px));
+  padding: 12px;
+}
+
 .performance-tooltip-content {
-  width: 268px;
+  width: 100%;
+  min-width: 0;
 }
 
 .performance-tooltip-head {
@@ -139,25 +149,32 @@ body[data-theme="dark"] {
 
 .performance-tooltip-grid {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .performance-tooltip-row {
   display: grid;
-  grid-template-columns: 58px 76px 1fr;
+  grid-template-columns: 88px 96px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  min-width: 0;
   font-size: 12px;
 }
 
 .performance-tooltip-row span {
+  min-width: 0;
   color: rgb(255 255 255 / 72%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .performance-tooltip-row strong {
   color: #fff;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .performance-tooltip-row .performance-tooltip-latency-success {
