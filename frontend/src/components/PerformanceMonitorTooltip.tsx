@@ -107,7 +107,7 @@ export function PerformanceMonitorTooltip() {
 
   return (
     <Tooltip
-      overlayClassName="performance-tooltip-overlay"
+      classNames={{ root: "performance-tooltip-overlay" }}
       placement="bottomLeft"
       mouseEnterDelay={0.2}
       title={<PerformanceTooltipContent results={results} running={running} />}
