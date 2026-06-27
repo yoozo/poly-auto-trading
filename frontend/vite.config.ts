@@ -31,7 +31,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    allowedHosts: ["poly-auto.yoozo.xyz"],
+    allowedHosts: ["auto-poly.yoozo.xyz"],
     proxy: {
       "/api": {
         target: "http://localhost:8000",
