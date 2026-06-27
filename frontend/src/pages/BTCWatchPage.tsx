@@ -69,6 +69,7 @@ const POLYGON_CHAIN_ID = "0x89";
 const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
 const DEFAULT_ORDER_AMOUNT = 5;
+const SHARE_INPUT_DECIMALS = 4;
 
 type TradeDraft = {
   marketId: string;
@@ -1695,6 +1696,7 @@ function PolymarketOrderEntry({
               min={1}
               max={maxInput}
               step={1}
+              precision={inputSuffix === "shares" ? SHARE_INPUT_DECIMALS : 2}
               value={amount}
               addonAfter={inputSuffix}
               placeholder={side === "BUY" && orderMode === "MARKET" ? "USDC" : "shares"}
@@ -1705,7 +1707,7 @@ function PolymarketOrderEntry({
         {side === "SELL" && (
           <div className="polymarket-order-entry-presets">
             {[0.25, 0.5, 0.75, 1].map((ratio) => (
-              <Button key={ratio} size="small" onClick={() => setAmount(roundInputAmount(selectedPositionSize * ratio))}>
+              <Button key={ratio} size="small" onClick={() => setAmount(sellPresetAmount(selectedPositionSize, ratio))}>
                 {ratio === 1 ? "Max" : `${Math.round(ratio * 100)}%`}
               </Button>
             ))}
@@ -2252,6 +2254,12 @@ function estimateMarketSell(shareAmount: number, quote: PolymarketOutcomeQuote, 
 
 function roundInputAmount(value: number) {
   return Math.max(0, Math.round(value * 100) / 100);
+}
+
+function sellPresetAmount(positionSize: number, ratio: number) {
+  if (ratio >= 1) return positionSize;
+  const scale = 10 ** SHARE_INPUT_DECIMALS;
+  return Math.max(0, Math.min(positionSize, Math.floor(positionSize * ratio * scale) / scale));
 }
 
 function positionSizeForToken(positions: PolymarketAccountPosition[], tokenId: string) {
