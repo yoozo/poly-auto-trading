@@ -132,11 +132,23 @@ body[data-theme="dark"] {
 .performance-tooltip-overlay .ant-tooltip-inner {
   width: min(360px, calc(100vw - 24px));
   padding: 12px;
+  color: rgb(255 255 255 / 88%);
+  background: rgb(31 31 31 / 94%);
+}
+
+.performance-tooltip-overlay .ant-tooltip-arrow::before {
+  background: rgb(31 31 31 / 94%);
 }
 
 .performance-tooltip-content {
   width: 100%;
   min-width: 0;
+  color: rgb(255 255 255 / 88%);
+}
+
+.performance-tooltip-content .ant-typography,
+.performance-tooltip-content .ant-badge-status-text {
+  color: rgb(255 255 255 / 88%);
 }
 
 .performance-tooltip-head {
