@@ -2805,24 +2805,6 @@ body[data-theme="dark"] .app-account-login-action {
   box-shadow: 0 1px 5px rgba(15, 23, 42, 0.16);
 }
 
-.polymarket-switch-outcome-button.ant-btn {
-  width: 100%;
-  min-width: 0;
-  height: 34px;
-  border-color: var(--trade-accent-border);
-  background: var(--trade-accent-soft);
-  color: var(--trade-accent);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.polymarket-switch-outcome-button.ant-btn > span:not(.anticon) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .polymarket-outcome-selector {
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
@@ -4079,8 +4061,7 @@ body[data-theme="dark"] .polymarket-order-entry-submit {
 }
 
 body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented,
-body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented,
-body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn {
+body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented {
   background: rgba(30, 41, 55, 0.78);
   color: #cbd5e1;
 }
@@ -4151,9 +4132,7 @@ body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn {
 }
 
 body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:hover,
-body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:focus-visible,
-body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn:hover,
-body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn:focus-visible {
+body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:focus-visible {
   border-color: var(--trade-accent);
   background: rgba(30, 41, 59, 0.92);
   color: var(--trade-accent);

@@ -1,4 +1,4 @@
-import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined, SwapOutlined } from "@ant-design/icons";
+import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
 import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Spin, Typography, notification } from "antd";
 import type { MenuProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -1477,8 +1477,6 @@ function PolymarketOrderEntry({
   const [submitting, setSubmitting] = useState(false);
   const selectedQuote = market.outcome_quotes.find((quote) => quote.token_id === tokenId) ?? market.outcome_quotes[0] ?? null;
   const selectedOutcome = selectedQuote?.name ?? "-";
-  const switchOutcomeQuote =
-    market.outcome_quotes.find((quote) => quote.token_id && quote.token_id !== selectedQuote?.token_id) ?? null;
   const closeOnly = Boolean(tradingRestriction?.close_only);
   const selectedPositionSize = selectedQuote?.token_id ? positionSizeForToken(positions, selectedQuote.token_id) : 0;
   const marketPrice = marketOrderPrice(selectedQuote, side);
@@ -1663,18 +1661,6 @@ function PolymarketOrderEntry({
             ]}
             onChange={(value) => setOrderMode(value as "MARKET" | "LIMIT")}
           />
-          <Button
-            className="polymarket-switch-outcome-button"
-            size="small"
-            icon={<SwapOutlined />}
-            disabled={!switchOutcomeQuote?.token_id}
-            onClick={() => {
-              if (!switchOutcomeQuote?.token_id) return;
-              setTokenId(switchOutcomeQuote.token_id);
-            }}
-          >
-            切换投标 {switchOutcomeQuote?.name ?? ""}
-          </Button>
         </div>
         <div className="polymarket-outcome-selector">
           <Segmented
