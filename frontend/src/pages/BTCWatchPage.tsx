@@ -1,4 +1,4 @@
-import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined } from "@ant-design/icons";
+import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined, SwapOutlined } from "@ant-design/icons";
 import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Typography, notification } from "antd";
 import type { MenuProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +9,8 @@ import { polygon } from "viem/chains";
 import {
   api,
   type CandleInterval,
+  type MarketCandlesRequest,
+  type MarketWsMessage,
   type PolymarketAccountOrder,
   type PolymarketAccountPosition,
   type PolymarketAccountState,
@@ -75,8 +77,6 @@ type TradeDraft = {
   side: "BUY" | "SELL";
   nonce: number;
 };
-// React Query 加载期需要稳定空数组，避免 effect 依赖因内联 [] 新引用反复触发 setState。
-const EMPTY_MARKET_CANDLES: MarketCandle[] = [];
 const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
 const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
   wallet: null,
@@ -95,7 +95,6 @@ const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
 };
 
 export default function BTCWatchPage() {
-  const queryClient = useQueryClient();
   const walletConnection = useWalletConnection();
   const walletConnected = Boolean(walletConnection.address);
   const [interval, setInterval] = useState<CandleInterval>(() => {
@@ -105,6 +104,7 @@ export default function BTCWatchPage() {
   const [showBollinger, setShowBollinger] = useState(() => localStorage.getItem(BOLL_KEY) !== "0");
   const [showRsi, setShowRsi] = useState(() => localStorage.getItem(RSI_KEY) !== "0");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
+  const [marketSocketOpenNonce, setMarketSocketOpenNonce] = useState(0);
   const [candles, setCandles] = useState<MarketCandle[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isSwitchingInterval, setIsSwitchingInterval] = useState(false);
@@ -147,6 +147,9 @@ export default function BTCWatchPage() {
   const pendingLiveCandlesRef = useRef<MarketCandle[]>([]);
   const marketSocketRef = useRef<WebSocket | null>(null);
   const marketSocketSubscribedIntervalRef = useRef<CandleInterval | null>(null);
+  const marketCandlesRequestSeqRef = useRef(0);
+  const pendingMarketCandlesRef = useRef<Map<string, PendingMarketCandlesRequest>>(new Map());
+  const marketSocketOpenWaitersRef = useRef<MarketSocketOpenWaiter[]>([]);
   const activePolymarketIntervalRef = useRef<PolymarketInterval>(polymarketInterval);
   const polymarketSocketRef = useRef<WebSocket | null>(null);
   const polymarketSocketSubscribedIntervalRef = useRef<PolymarketInterval | null>(null);
@@ -238,8 +241,10 @@ export default function BTCWatchPage() {
     if (timeJumpFocus || polymarketChartFocusAnchorMs === null || !Number.isFinite(polymarketChartFocusAnchorMs)) {
       return {
         mode: "latest" as const,
-        queryKey: ["candles", interval, "latest"] as const,
-        queryFn: (signal: AbortSignal) => api.candles(interval, 300 + INDICATOR_WARMUP_BARS, { signal }),
+        interval,
+        limit: 300 + INDICATOR_WARMUP_BARS,
+        startMs: undefined,
+        endMs: undefined,
       };
     }
 
@@ -252,20 +257,14 @@ export default function BTCWatchPage() {
 
     return {
       mode: "focus" as const,
-      queryKey: ["candles", interval, "focus", warmupStartMs, endMs, limit + INDICATOR_WARMUP_BARS] as const,
-      queryFn: (signal: AbortSignal) =>
-        api.candlesRange(interval, warmupStartMs, endMs, limit + INDICATOR_WARMUP_BARS, { signal }),
+      interval,
+      limit: limit + INDICATOR_WARMUP_BARS,
+      startMs: warmupStartMs,
+      endMs,
     };
   }, [initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
   const candleSnapshotModeRef = useRef<"latest" | "focus">(candleSnapshotQuery.mode);
-  const { data: latestCandles = EMPTY_MARKET_CANDLES, dataUpdatedAt: latestCandlesUpdatedAt, error } = useQuery({
-    queryKey: candleSnapshotQuery.queryKey,
-    queryFn: ({ signal }) => candleSnapshotQuery.queryFn(signal),
-    enabled: true,
-    // K 线实时增量由 WS 维护；REST 只负责初始窗口/切换周期，避免浏览器聚焦时补打重复快照。
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
+  const [candleSnapshotError, setCandleSnapshotError] = useState<string | null>(null);
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
@@ -276,12 +275,43 @@ export default function BTCWatchPage() {
   }, [interval]);
 
   useEffect(() => {
-    if (error) setIsSwitchingInterval(false);
-  }, [error]);
+    if (candleSnapshotError) setIsSwitchingInterval(false);
+  }, [candleSnapshotError]);
 
   useEffect(() => {
     candleSnapshotModeRef.current = candleSnapshotQuery.mode;
   }, [candleSnapshotQuery.mode]);
+
+  useEffect(() => {
+    const requestEpoch = dataEpochRef.current;
+    const requestInterval = candleSnapshotQuery.interval;
+    if (historicalJumpViewRef.current) return;
+    if (marketSocketOpenNonce <= 0) return;
+    setCandleSnapshotError(null);
+
+    void (async () => {
+      try {
+        const snapshotCandles = await requestMarketCandles({
+          interval: requestInterval,
+          limit: candleSnapshotQuery.limit,
+          startMs: candleSnapshotQuery.startMs,
+          endMs: candleSnapshotQuery.endMs,
+        });
+        if (requestEpoch !== dataEpochRef.current || requestInterval !== activeIntervalRef.current) return;
+        candleSnapshotReadyRef.current = true;
+        const pendingLiveCandles = pendingLiveCandlesRef.current;
+        pendingLiveCandlesRef.current = [];
+        setCandles((current) => {
+          if (requestEpoch !== dataEpochRef.current) return current;
+          return mergeCandles(current, [...snapshotCandles, ...pendingLiveCandles]);
+        });
+        setIsSwitchingInterval(false);
+      } catch (error) {
+        if (requestEpoch !== dataEpochRef.current || requestInterval !== activeIntervalRef.current) return;
+        setCandleSnapshotError(errorMessage(error));
+      }
+    })();
+  }, [candleSnapshotQuery, marketSocketOpenNonce]);
 
   useEffect(() => {
     if (chartDataReady) return;
@@ -436,12 +466,12 @@ export default function BTCWatchPage() {
     // Polymarket 展示窗口可能和 API 的 eventStartTime 有几分钟偏移；基准线统一取派生窗口起点的 1m K open。
     void (async () => {
       try {
-        const rows = await api.candlesRange(
-          "1m",
-          Math.max(0, baselineStartMs),
-          baselineStartMs + 5 * ONE_MINUTE_MS,
-          6
-        );
+        const rows = await requestMarketCandles({
+          interval: "1m",
+          startMs: Math.max(0, baselineStartMs),
+          endMs: baselineStartMs + 5 * ONE_MINUTE_MS,
+          limit: 6,
+        });
         if (cancelled || activeComparisonKeyRef.current !== comparisonKey) return;
         const targetCandle = candleAtOpenTime(rows, baselineStartMs);
         if (!targetCandle || !Number.isFinite(targetCandle.open)) {
@@ -536,7 +566,12 @@ export default function BTCWatchPage() {
     void (async () => {
       try {
         const focusCandlesResult = await Promise.resolve(
-          api.candlesRange(requestInterval, withIndicatorWarmupStart(startMs, requestInterval), endMs, limit + INDICATOR_WARMUP_BARS)
+          requestMarketCandles({
+            interval: requestInterval,
+            startMs: withIndicatorWarmupStart(startMs, requestInterval),
+            endMs,
+            limit: limit + INDICATOR_WARMUP_BARS,
+          })
         )
           .then((value) => ({ status: "fulfilled" as const, value }))
           .catch((reason) => ({ status: "rejected" as const, reason }));
@@ -565,23 +600,6 @@ export default function BTCWatchPage() {
   }, [activeCandles, candleSnapshotQuery.mode, chartFocusKey, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
 
   useEffect(() => {
-    const requestEpoch = dataEpochRef.current;
-    if (historicalJumpViewRef.current) return;
-    // 切回曾经看过的周期时 React Query 会先吐旧缓存；定位只允许使用本次切换后完成的快照。
-    if (latestCandlesUpdatedAt < intervalActivatedAtRef.current) {
-      return;
-    }
-    candleSnapshotReadyRef.current = true;
-    const pendingLiveCandles = pendingLiveCandlesRef.current;
-    pendingLiveCandlesRef.current = [];
-    setCandles((current) => {
-      if (requestEpoch !== dataEpochRef.current) return current;
-      return mergeCandles(current, [...latestCandles, ...pendingLiveCandles]);
-    });
-    setIsSwitchingInterval(false);
-  }, [latestCandles, latestCandlesUpdatedAt]);
-
-  useEffect(() => {
     let socket: WebSocket | null = null;
     let connectTimer = 0;
     let reconnectTimer = 0;
@@ -596,16 +614,23 @@ export default function BTCWatchPage() {
       marketSocketSubscribedIntervalRef.current = initialInterval;
       socket.onopen = () => {
         setStreamStatus("connected");
+        setMarketSocketOpenNonce((value) => value + 1);
+        resolveMarketSocketOpenWaiters();
         subscribeMarketSocket(activeIntervalRef.current);
       };
       socket.onmessage = (event) => {
         setStreamStatus("connected");
         const message = parseMarketMessage(event.data);
-        if (!isValidMarketMessage(message, activeIntervalRef.current)) return;
+        if (!message) return;
+        if (message.type === "market.candles.snapshot" || message.type === "market.candles.error") {
+          resolveMarketCandlesResponse(message);
+          return;
+        }
+        if (!isValidMarketCandleMessage(message, activeIntervalRef.current)) return;
         if (historicalJumpViewRef.current) return;
         const candle = message.candle;
-        if (!candleSnapshotReadyRef.current && candleSnapshotModeRef.current === "focus") {
-          // focus 模式必须先等 REST 窗口确定定位；latest 模式则允许 WS 未收盘 K 线立即上屏。
+        if (!candleSnapshotReadyRef.current) {
+          // 首帧 snapshot 会补齐 DB 最近闭合 K 线；在它完成前直接画 live candle 会暴露 DB 落后造成的时间断档。
           pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
           return;
         }
@@ -619,6 +644,8 @@ export default function BTCWatchPage() {
           marketSocketRef.current = null;
           marketSocketSubscribedIntervalRef.current = null;
         }
+        rejectMarketSocketOpenWaiters(new Error("market websocket closed"));
+        rejectPendingMarketCandles(new Error("market websocket closed"));
         if (closedByEffect) {
           setStreamStatus("closed");
           return;
@@ -638,9 +665,105 @@ export default function BTCWatchPage() {
         marketSocketRef.current = null;
         marketSocketSubscribedIntervalRef.current = null;
       }
+      rejectMarketSocketOpenWaiters(new Error("market websocket closed"));
+      rejectPendingMarketCandles(new Error("market websocket closed"));
       socket?.close();
     };
   }, []);
+
+  function waitForMarketSocketOpen(timeoutMs = 5000) {
+    const socket = marketSocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const waiter: MarketSocketOpenWaiter = {
+        resolve,
+        reject,
+        timeoutId: window.setTimeout(() => {
+          marketSocketOpenWaitersRef.current = marketSocketOpenWaitersRef.current.filter((item) => item !== waiter);
+          reject(new Error("market websocket connect timeout"));
+        }, timeoutMs),
+      };
+      marketSocketOpenWaitersRef.current.push(waiter);
+    });
+  }
+
+  function resolveMarketSocketOpenWaiters() {
+    const waiters = marketSocketOpenWaitersRef.current;
+    marketSocketOpenWaitersRef.current = [];
+    waiters.forEach((waiter) => {
+      window.clearTimeout(waiter.timeoutId);
+      waiter.resolve();
+    });
+  }
+
+  function rejectMarketSocketOpenWaiters(error: Error) {
+    const waiters = marketSocketOpenWaitersRef.current;
+    marketSocketOpenWaitersRef.current = [];
+    waiters.forEach((waiter) => {
+      window.clearTimeout(waiter.timeoutId);
+      waiter.reject(error);
+    });
+  }
+
+  async function requestMarketCandles({
+    interval,
+    limit,
+    startMs,
+    endMs,
+  }: {
+    interval: CandleInterval;
+    limit: number;
+    startMs?: number;
+    endMs?: number;
+  }) {
+    await waitForMarketSocketOpen();
+    const socket = marketSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error("market websocket is not connected");
+    const requestId = `market-candles:${Date.now()}:${++marketCandlesRequestSeqRef.current}`;
+    const payload: MarketCandlesRequest = {
+      type: "market.candles.request",
+      request_id: requestId,
+      symbol: "BTCUSDT",
+      interval,
+      limit,
+      ...(startMs !== undefined && endMs !== undefined ? { start_ms: startMs, end_ms: endMs } : {}),
+    };
+
+    return new Promise<MarketCandle[]>((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        pendingMarketCandlesRef.current.delete(requestId);
+        reject(new Error("market candles request timeout"));
+      }, 10000);
+      pendingMarketCandlesRef.current.set(requestId, { resolve, reject, timeoutId });
+      // candles 快照与实时 K 线共用 market WS，减少 BTC watch 首屏额外 HTTP IO。
+      socket.send(JSON.stringify(payload));
+    });
+  }
+
+  function resolveMarketCandlesResponse(message: Extract<MarketWsMessage, { type: "market.candles.snapshot" | "market.candles.error" }>) {
+    const pending = pendingMarketCandlesRef.current.get(message.request_id);
+    if (!pending) return;
+    pendingMarketCandlesRef.current.delete(message.request_id);
+    window.clearTimeout(pending.timeoutId);
+    if (message.type === "market.candles.error") {
+      pending.reject(new Error(message.message || "market candles request failed"));
+      return;
+    }
+    if (!isValidMarketCandlesSnapshot(message)) {
+      pending.reject(new Error("invalid market candles snapshot"));
+      return;
+    }
+    pending.resolve(message.candles);
+  }
+
+  function rejectPendingMarketCandles(error: Error) {
+    const pendingRequests = Array.from(pendingMarketCandlesRef.current.values());
+    pendingMarketCandlesRef.current.clear();
+    pendingRequests.forEach((pending) => {
+      window.clearTimeout(pending.timeoutId);
+      pending.reject(error);
+    });
+  }
 
   useEffect(() => {
     subscribeMarketSocket(interval);
@@ -668,7 +791,12 @@ export default function BTCWatchPage() {
       try {
         // 指标由前端基于 candle 计算，历史翻页只需要多取 warmup K 线。
         const requestEpoch = dataEpochRef.current;
-        const older = await api.candlesRange(interval, withIndicatorWarmupStart(startMs, interval), endMs);
+        const older = await requestMarketCandles({
+          interval,
+          startMs: withIndicatorWarmupStart(startMs, interval),
+          endMs,
+          limit: 1000,
+        });
         if (requestEpoch !== dataEpochRef.current || interval !== activeIntervalRef.current) {
           return;
         }
@@ -683,7 +811,7 @@ export default function BTCWatchPage() {
   const switchCandleInterval = useCallback(
     (nextInterval: CandleInterval) => {
       if (nextInterval === activeIntervalRef.current) return;
-      // 必须在 setState 前同步推进 epoch；否则切回旧周期时，React Query 的旧缓存可能先参与图表重锚。
+      // 必须在 setState 前同步推进 epoch；否则旧周期的 WS 响应可能先参与图表重锚。
       activeIntervalRef.current = nextInterval;
       intervalActivatedAtRef.current = Date.now();
       dataEpochRef.current += 1;
@@ -692,8 +820,7 @@ export default function BTCWatchPage() {
       pendingLiveCandlesRef.current = [];
       marketFocusDataRequestKeyRef.current = null;
       setPolymarketFocusNowMs(Date.now());
-      // 切换目标周期时丢弃旧快照，强制首屏定位只基于本次切换后的 REST/WS 数据。
-      queryClient.removeQueries({ queryKey: ["candles", nextInterval], exact: true });
+      // 切换目标周期时丢弃旧快照，强制首屏定位只基于本次切换后的 WS 数据。
       setCandles([]);
       setChartDataReady(false);
       setChartEpoch((epoch) => epoch + 1);
@@ -701,7 +828,7 @@ export default function BTCWatchPage() {
       setIsSwitchingInterval(true);
       setInterval(nextInterval);
     },
-    [queryClient]
+    []
   );
 
   const handlePolymarketIntervalChange = useCallback((nextInterval: PolymarketInterval) => {
@@ -769,12 +896,12 @@ export default function BTCWatchPage() {
     setTimeJumpError(null);
     try {
       // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近和指标 warmup 所需的 candle。
-      const jumpCandles = await api.candlesRange(
-        jumpInterval,
-        withIndicatorWarmupStart(startMs, jumpInterval),
+      const jumpCandles = await requestMarketCandles({
+        interval: jumpInterval,
+        startMs: withIndicatorWarmupStart(startMs, jumpInterval),
         endMs,
-        limit + INDICATOR_WARMUP_BARS
-      );
+        limit: limit + INDICATOR_WARMUP_BARS,
+      });
       if (requestEpoch !== dataEpochRef.current || jumpInterval !== activeIntervalRef.current) return;
       if (jumpCandles.length <= 0) {
         setTimeJumpError("该时间附近暂无 K 线");
@@ -787,7 +914,7 @@ export default function BTCWatchPage() {
       setTimeJumpFocus({ timeMs: targetMs, nonce: Date.now() });
       setTimeJumpModalOpen(false);
     } catch (error) {
-      setTimeJumpError(error instanceof Error ? error.message : "跳转失败");
+      setTimeJumpError(errorMessage(error) || "跳转失败");
     } finally {
       setIsJumpingTime(false);
     }
@@ -845,7 +972,7 @@ export default function BTCWatchPage() {
           </Typography.Text>
         )}
         {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
-        {error instanceof Error && <Typography.Text type="danger">{error.message}</Typography.Text>}
+        {candleSnapshotError && <Typography.Text type="danger">{candleSnapshotError}</Typography.Text>}
       </div>
       <Button
         className="watch-fullscreen-button"
@@ -1273,6 +1400,8 @@ function PolymarketOrderEntry({
   const [submitting, setSubmitting] = useState(false);
   const selectedQuote = market.outcome_quotes.find((quote) => quote.token_id === tokenId) ?? market.outcome_quotes[0] ?? null;
   const selectedOutcome = selectedQuote?.name ?? "-";
+  const switchOutcomeQuote =
+    market.outcome_quotes.find((quote) => quote.token_id && quote.token_id !== selectedQuote?.token_id) ?? null;
   const closeOnly = Boolean(tradingRestriction?.close_only);
   const selectedPositionSize = selectedQuote?.token_id ? positionSizeForToken(positions, selectedQuote.token_id) : 0;
   const marketPrice = marketOrderPrice(selectedQuote, side);
@@ -1457,6 +1586,18 @@ function PolymarketOrderEntry({
             ]}
             onChange={(value) => setOrderMode(value as "MARKET" | "LIMIT")}
           />
+          <Button
+            className="polymarket-switch-outcome-button"
+            size="small"
+            icon={<SwapOutlined />}
+            disabled={!switchOutcomeQuote?.token_id}
+            onClick={() => {
+              if (!switchOutcomeQuote?.token_id) return;
+              setTokenId(switchOutcomeQuote.token_id);
+            }}
+          >
+            切换投标 {switchOutcomeQuote?.name ?? ""}
+          </Button>
         </div>
         <div className="polymarket-outcome-selector">
           <Segmented
@@ -1775,27 +1916,46 @@ function OrderBook({ quote }: { quote: PolymarketOutcomeQuote }) {
   );
 }
 
-type MarketWsMessage = {
-  type: "market.candle";
-  symbol: string;
-  interval: CandleInterval;
-  candle: MarketCandle | null;
+type PendingMarketCandlesRequest = {
+  resolve: (candles: MarketCandle[]) => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
+};
+
+type MarketSocketOpenWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timeoutId: number;
 };
 
 function parseMarketMessage(value: string) {
   try {
     const message = JSON.parse(value) as MarketWsMessage;
-    if (message.type !== "market.candle") return null;
+    if (!["market.candle", "market.candles.snapshot", "market.candles.error"].includes(message.type)) return null;
     return message;
   } catch {
     return null;
   }
 }
 
-function isValidMarketMessage(message: MarketWsMessage | null, activeInterval: CandleInterval): message is MarketWsMessage & { candle: MarketCandle } {
-  if (!message || message.symbol !== "BTCUSDT" || message.interval !== activeInterval) return false;
+function isValidMarketCandleMessage(
+  message: MarketWsMessage | null,
+  activeInterval: CandleInterval
+): message is Extract<MarketWsMessage, { type: "market.candle" }> & { candle: MarketCandle } {
+  if (!message || message.type !== "market.candle" || message.symbol !== "BTCUSDT" || message.interval !== activeInterval) return false;
   const candle = message.candle;
-  if (!candle || candle.symbol !== message.symbol || candle.interval !== message.interval) return false;
+  return isValidMarketCandle(candle, message.symbol, message.interval);
+}
+
+function isValidMarketCandlesSnapshot(
+  message: Extract<MarketWsMessage, { type: "market.candles.snapshot" }>
+): message is Extract<MarketWsMessage, { type: "market.candles.snapshot" }> & { candles: MarketCandle[] } {
+  if (message.symbol !== "BTCUSDT" || !Array.isArray(message.candles)) return false;
+  return message.candles.every((candle) => isValidMarketCandle(candle, message.symbol, message.interval));
+}
+
+function isValidMarketCandle(candle: MarketCandle | null, symbol: string, interval: CandleInterval) {
+  if (!candle || candle.symbol !== symbol || candle.interval !== interval) return false;
   const openTime = new Date(candle.open_time).getTime();
   const closeTime = new Date(candle.close_time).getTime();
   const open = Number(candle.open);

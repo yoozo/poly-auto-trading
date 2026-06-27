@@ -15,6 +15,7 @@ from app.schemas.polymarket import (
     PolymarketCancelOrderResponse,
     PolymarketCredentialListResponse,
     PolymarketCredentialProfile,
+    PolymarketCredentialUpdateRequest,
     PolymarketSignedOrderRequest,
     PolymarketSignedOrderResponse,
     PolymarketUpDownMarket,
@@ -32,6 +33,7 @@ from app.services.polymarket_credentials import (
     list_credential_profiles,
     resolve_runtime_credentials,
     set_active_credential_id,
+    update_credential_label,
 )
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
@@ -124,6 +126,23 @@ async def activate_polymarket_credential(
         await session.commit()
         polymarket_account_monitor.notify_credentials_changed()
         await refresh_account_state_after_order()
+        return await polymarket_credentials(session)
+    except PolymarketCredentialError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/polymarket/credentials/{credential_id}", response_model=PolymarketCredentialListResponse)
+async def update_polymarket_credential(
+    credential_id: str,
+    request: PolymarketCredentialUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+) -> PolymarketCredentialListResponse:
+    if not credentials_encryption_configured():
+        raise HTTPException(status_code=400, detail="POLYMARKET_CREDENTIALS_ENCRYPTION_KEY is not configured")
+    try:
+        await update_credential_label(session, credential_id, request.label)
+        await session.commit()
         return await polymarket_credentials(session)
     except PolymarketCredentialError as exc:
         await session.rollback()

@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   InputNumber,
+  List,
   Popconfirm,
   Space,
   Table,
@@ -118,6 +119,15 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["polymarket-credentials"] });
       messageApi.success("已删除 wallet profile");
+    },
+    onError: (error: Error) => messageApi.error(error.message),
+  });
+  const updateLabelMutation = useMutation({
+    mutationFn: ({ id, label }: { id: string; label: string }) => api.updatePolymarketCredential(id, { label }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["polymarket-credentials"], data);
+      queryClient.invalidateQueries({ queryKey: ["polymarket-credentials"] });
+      messageApi.success("已更新 wallet profile label");
     },
     onError: (error: Error) => messageApi.error(error.message),
   });
@@ -328,6 +338,7 @@ export function PolymarketCredentialManager({ variant = "card" }: PolymarketCred
       variant={variant}
       onActivate={(id) => activateMutation.mutate(id)}
       onDelete={(id) => deleteMutation.mutate(id)}
+      onRename={(id, label) => updateLabelMutation.mutate({ id, label })}
       onDetect={handleDetect}
       onGenerate={handleGenerate}
       onUseDetection={handleUseDetection}
@@ -397,6 +408,7 @@ function PolymarketCredentialContent({
   variant,
   onActivate,
   onDelete,
+  onRename,
   onDetect,
   onGenerate,
   onUseDetection,
@@ -423,6 +435,7 @@ function PolymarketCredentialContent({
   variant: "card" | "popover";
   onActivate: (id: string) => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, label: string) => void;
   onDetect: (action?: ApiCredentialAction) => void;
   onGenerate: (values: CredentialFormValues) => void;
   onUseDetection: (row: SignatureDetectionRow) => void;
@@ -461,6 +474,7 @@ function PolymarketCredentialContent({
           profilesFetching={profilesFetching}
           activatePending={activatePending}
           onActivate={onActivate}
+          onRename={onRename}
           onClearGenerated={onClearGenerated}
           onDetect={onDetect}
           onGenerate={onGenerate}
@@ -479,6 +493,7 @@ function PolymarketCredentialContent({
             deletePending={deletePending}
             deleteVariables={deleteVariables}
             onActivate={onActivate}
+            onRename={onRename}
             onDelete={onDelete}
           />
         </>
@@ -518,6 +533,7 @@ function HeaderWalletWorkflow({
   profilesFetching,
   activatePending,
   onActivate,
+  onRename,
   onClearGenerated,
   onDetect,
   onGenerate,
@@ -538,6 +554,7 @@ function HeaderWalletWorkflow({
   profilesFetching: boolean;
   activatePending: boolean;
   onActivate: (id: string) => void;
+  onRename: (id: string, label: string) => void;
   onClearGenerated: () => void;
   onDetect: (action?: ApiCredentialAction) => void;
   onGenerate: (values: CredentialFormValues) => void;
@@ -549,15 +566,12 @@ function HeaderWalletWorkflow({
     <div className="polymarket-wallet-flow">
       <div className="polymarket-wallet-flow-head">
         <div>
-          <Typography.Text strong>Wallet Profile</Typography.Text>
           <div className="polymarket-wallet-flow-subtitle">
             {connectedAddress ? `MetaMask ${shortAddress(connectedAddress)}` : "连接 MetaMask 后开始"}
           </div>
         </div>
         <Space size={6}>
-          <Button size="small" icon={<ReloadOutlined />} loading={profilesFetching} onClick={onRefreshProfiles}>
-            刷新
-          </Button>
+          <Button size="small" type="text" icon={<ReloadOutlined />} loading={profilesFetching} onClick={onRefreshProfiles} />
         </Space>
       </div>
 
@@ -573,6 +587,7 @@ function HeaderWalletWorkflow({
             profilesFetching={profilesFetching}
             activatePending={activatePending}
             onActivate={onActivate}
+            onRename={onRename}
           />
         </div>
       ) : (
@@ -604,33 +619,52 @@ function CompactProfileSwitcher({
   profilesFetching,
   activatePending,
   onActivate,
+  onRename,
 }: {
   activeProfile: PolymarketCredentialProfile | null;
   profiles: PolymarketCredentialProfile[];
   profilesFetching: boolean;
   activatePending: boolean;
   onActivate: (id: string) => void;
+  onRename: (id: string, label: string) => void;
 }) {
   return (
     <div className="polymarket-wallet-quick-panel">
       {profiles.length > 0 ? (
-        <div className="polymarket-wallet-profile-menu" aria-busy={profilesFetching || activatePending}>
-          {profiles.map((profile) => {
+        <List
+          className="polymarket-wallet-profile-list"
+          size="small"
+          loading={profilesFetching}
+          dataSource={profiles}
+          renderItem={(profile) => {
             const active = profile.id === activeProfile?.id;
             return (
-              <button
-                key={profile.id}
-                type="button"
-                className={active ? "polymarket-wallet-profile-option active" : "polymarket-wallet-profile-option"}
-                disabled={activatePending || active}
-                onClick={() => onActivate(profile.id)}
+              <List.Item
+                className={active ? "polymarket-wallet-profile-item active" : "polymarket-wallet-profile-item"}
+                actions={[
+                  active ? (
+                    <Tag color="success" key="active">当前</Tag>
+                  ) : (
+                    <Button
+                      key="activate"
+                      size="small"
+                      type="link"
+                      loading={activatePending}
+                      onClick={() => onActivate(profile.id)}
+                    >
+                      启用
+                    </Button>
+                  ),
+                ]}
               >
-                <span className="polymarket-wallet-profile-name">{profile.label}</span>
-                <span className="polymarket-wallet-profile-address">{shortAddress(profile.funder_address)}</span>
-              </button>
+                <List.Item.Meta
+                  title={<EditableProfileLabel profile={profile} onRename={onRename} />}
+                  description={<Typography.Text type="secondary">{shortAddress(profile.funder_address)}</Typography.Text>}
+                />
+              </List.Item>
             );
-          })}
-        </div>
+          }}
+        />
       ) : (
         <div className="polymarket-wallet-empty">{profilesFetching ? "加载中" : "暂无 wallet profile"}</div>
       )}
@@ -646,6 +680,7 @@ function CredentialProfileTable({
   deletePending,
   deleteVariables,
   onActivate,
+  onRename,
   onDelete,
 }: {
   profiles: PolymarketCredentialProfile[];
@@ -655,6 +690,7 @@ function CredentialProfileTable({
   deletePending: boolean;
   deleteVariables: string | undefined;
   onActivate: (id: string) => void;
+  onRename: (id: string, label: string) => void;
   onDelete: (id: string) => void;
 }) {
   return (
@@ -671,7 +707,7 @@ function CredentialProfileTable({
           dataIndex: "label",
           render: (value: string, record) => (
             <Space size={6}>
-              <Typography.Text strong>{value}</Typography.Text>
+              <EditableProfileLabel profile={record} label={value} onRename={onRename} />
               {record.active && <Tag color="success">active</Tag>}
             </Space>
           ),
@@ -1137,6 +1173,34 @@ function shortAddress(value: string) {
   if (!value) return "-";
   if (value.length <= 14) return value;
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function EditableProfileLabel({
+  profile,
+  label = profile.label,
+  onRename,
+}: {
+  profile: PolymarketCredentialProfile;
+  label?: string;
+  onRename: (id: string, label: string) => void;
+}) {
+  return (
+    <Typography.Text
+      strong
+      className="polymarket-wallet-profile-name"
+      editable={{
+        tooltip: "修改 label",
+        triggerType: ["icon"],
+        onChange: (value) => {
+          const normalizedLabel = value.trim();
+          if (!normalizedLabel || normalizedLabel === profile.label) return;
+          onRename(profile.id, normalizedLabel);
+        },
+      }}
+    >
+      {label}
+    </Typography.Text>
+  );
 }
 
 function shortApiKey(value: string) {

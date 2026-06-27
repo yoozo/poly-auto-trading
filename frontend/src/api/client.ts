@@ -12,6 +12,37 @@ export type Candle = {
 };
 
 export type CandleInterval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "12h" | "1d" | "1w";
+export type MarketCandlesRequest = {
+  type: "market.candles.request";
+  request_id: string;
+  symbol: string;
+  interval: CandleInterval;
+  limit: number;
+  start_ms?: number;
+  end_ms?: number;
+};
+export type MarketCandlesSnapshot = {
+  type: "market.candles.snapshot";
+  request_id: string;
+  symbol: string;
+  interval: CandleInterval;
+  mode: "latest" | "range";
+  candles: Candle[];
+};
+export type MarketCandlesError = {
+  type: "market.candles.error";
+  request_id: string;
+  message: string;
+};
+export type MarketWsMessage =
+  | {
+      type: "market.candle";
+      symbol: string;
+      interval: CandleInterval;
+      candle: Candle | null;
+    }
+  | MarketCandlesSnapshot
+  | MarketCandlesError;
 export type CandleRange = {
   count: number;
   min_open_time: string | null;
@@ -659,6 +690,12 @@ export const api = {
   activatePolymarketCredential: (credentialId: string) =>
     request<PolymarketCredentialListResponse>(`/api/polymarket/credentials/${encodeURIComponent(credentialId)}/activate`, {
       method: "POST",
+    }),
+  updatePolymarketCredential: (credentialId: string, payload: { label: string }) =>
+    request<PolymarketCredentialListResponse>(`/api/polymarket/credentials/${encodeURIComponent(credentialId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }),
   deletePolymarketCredential: (credentialId: string) =>
     request<void>(`/api/polymarket/credentials/${encodeURIComponent(credentialId)}`, {

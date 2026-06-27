@@ -438,7 +438,7 @@ function AccountHeaderSummary({
         : `${shortAccountLabel} · 等待同步`
     : "Account not configured";
   const accountSummary = (
-    <div className="app-account-summary">
+    <button className="app-account-summary" type="button" onClick={() => setPopoverOpen((value) => !value)}>
       <span className="app-account-profile-label" title={profileLabel}>
         {profileLabel}
       </span>
@@ -450,17 +450,15 @@ function AccountHeaderSummary({
         <strong>{formatCurrency(cash)}</strong>
       </div>
       <span className="app-account-meta" title={accountState.error ?? undefined}>{metaText}</span>
-    </div>
+    </button>
   );
-  const accountSummaryNode = activeProfile ? (
-    accountSummary
-  ) : (
+  const accountSummaryNode = (
     <Popover
       trigger={[]}
       open={popoverOpen}
       onOpenChange={setPopoverOpen}
       placement="bottomRight"
-      overlayClassName="app-account-popover"
+      overlayClassName={activeProfile ? "app-account-popover app-account-popover-compact" : "app-account-popover"}
       content={<PolymarketCredentialManager variant="popover" />}
     >
       {accountSummary}

@@ -99,8 +99,11 @@ body[data-theme="dark"] {
   height: 34px;
   align-items: center;
   gap: 8px;
+  cursor: pointer;
 }
 
+.app-account-summary:not(.app-account-summary-guest):hover,
+.app-account-summary:not(.app-account-summary-guest):focus-visible,
 .app-account-summary-guest:hover {
   background: rgb(15 23 42 / 4%);
 }
@@ -230,26 +233,36 @@ body[data-theme="dark"] {
   overflow: auto;
 }
 
+.app-account-popover-compact .ant-popover-inner {
+  width: min(420px, calc(100vw - 24px));
+}
+
+.app-account-popover-compact .ant-popover-inner-content {
+  padding: 10px 12px;
+}
+
 .polymarket-wallet-popover {
   width: 100%;
 }
 
 .polymarket-wallet-flow {
   display: grid;
-  gap: 12px;
+  gap: 8px;
 }
 
 .polymarket-wallet-flow-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .polymarket-wallet-flow-subtitle {
-  margin-top: 2px;
+  overflow: hidden;
   color: var(--text-muted, #667085);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .polymarket-wallet-connect,
@@ -353,51 +366,32 @@ body[data-theme="dark"] {
 
 .polymarket-wallet-quick-panel {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
-.polymarket-wallet-profile-menu {
-  display: grid;
-  gap: 4px;
-}
-
-.polymarket-wallet-profile-option {
-  display: grid;
-  width: 100%;
-  gap: 2px;
+.polymarket-wallet-profile-list .ant-list-item {
   padding: 8px 10px;
-  border: 0;
   border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary, #101828);
-  cursor: pointer;
-  font: inherit;
-  line-height: 1.25;
-  text-align: left;
+  border-block-end: 0;
 }
 
-.polymarket-wallet-profile-option:hover,
-.polymarket-wallet-profile-option.active {
+.polymarket-wallet-profile-list .ant-list-item:hover,
+.polymarket-wallet-profile-list .ant-list-item.active {
   background: rgba(22, 119, 255, 10%);
 }
 
-.polymarket-wallet-profile-option:disabled {
-  cursor: default;
+.polymarket-wallet-profile-list .ant-list-item-meta {
+  min-width: 0;
 }
 
 .polymarket-wallet-profile-name {
   overflow: hidden;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.polymarket-wallet-profile-address {
-  overflow: hidden;
-  color: var(--text-muted, #667085);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.polymarket-wallet-profile-list .ant-list-item-action {
+  margin-inline-start: 8px;
 }
 
 .polymarket-wallet-empty {
@@ -2565,7 +2559,7 @@ body[data-theme="dark"] .app-account-login-action {
 }
 
 .polymarket-order-entry-controls {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2607,6 +2601,24 @@ body[data-theme="dark"] .app-account-login-action {
 .polymarket-outcome-selector .ant-segmented-item-selected {
   color: var(--trade-accent);
   box-shadow: 0 1px 5px rgba(15, 23, 42, 0.16);
+}
+
+.polymarket-switch-outcome-button.ant-btn {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border-color: var(--trade-accent-border);
+  background: var(--trade-accent-soft);
+  color: var(--trade-accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.polymarket-switch-outcome-button.ant-btn > span:not(.anticon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .polymarket-outcome-selector {
@@ -3865,7 +3877,8 @@ body[data-theme="dark"] .polymarket-order-entry-submit {
 }
 
 body[data-theme="dark"] .polymarket-order-entry-controls .ant-segmented,
-body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented {
+body[data-theme="dark"] .polymarket-outcome-selector .ant-segmented,
+body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn {
   background: rgba(30, 41, 55, 0.78);
   color: #cbd5e1;
 }
@@ -3936,7 +3949,9 @@ body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn {
 }
 
 body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:hover,
-body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:focus-visible {
+body[data-theme="dark"] .polymarket-order-entry-presets .ant-btn:focus-visible,
+body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn:hover,
+body[data-theme="dark"] .polymarket-switch-outcome-button.ant-btn:focus-visible {
   border-color: var(--trade-accent);
   background: rgba(30, 41, 59, 0.92);
   color: var(--trade-accent);

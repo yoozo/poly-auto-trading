@@ -1339,14 +1339,25 @@ export default function MarketTechnicalChart({
     ) {
       return initialVisibleRange();
     }
-    if (currentBars >= minVisibleBars) return range;
-
     const center = (range.from + range.to) / 2;
     const half = minVisibleBars / 2;
-    return {
-      from: (center - half) as Logical,
-      to: (center + half) as Logical
-    };
+    const normalizedRange =
+      currentBars >= minVisibleBars
+        ? range
+        : {
+            from: (center - half) as Logical,
+            to: (center + half) as Logical
+          };
+    const normalizedBars = normalizedRange.to - normalizedRange.from;
+    if (!Number.isFinite(normalizedBars)) return normalizedRange;
+    if (normalizedRange.from < -0.5) {
+      // lightweight-charts 允许拖到 whitespace；左侧空白过大会让 K 线像“断开”，这里固定第一根 K 的左边界。
+      return {
+        from: -0.5 as Logical,
+        to: (-0.5 + normalizedBars) as Logical
+      };
+    }
+    return normalizedRange;
   }
 
   function minimumVisibleBars() {

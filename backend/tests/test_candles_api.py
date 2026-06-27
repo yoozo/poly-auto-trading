@@ -28,6 +28,22 @@ class EmptyMarketSignalPipeline:
         return None
 
 
+class RecordingJsonWebSocket:
+    def __init__(self) -> None:
+        self.messages = []
+
+    async def send_json(self, payload):  # noqa: ANN001
+        self.messages.append(payload)
+
+
+class FakeSessionLocal:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
 @pytest.fixture(autouse=True)
 def noop_candle_sync(monkeypatch):
     monkeypatch.setattr(routes_candles, "candle_sync_service", NoopCandleSyncService())
@@ -301,6 +317,159 @@ def test_parse_market_subscribe_message_rejects_invalid_payload() -> None:
     assert routes_candles.parse_market_subscribe_message("not-json") is None
     assert routes_candles.parse_market_subscribe_message('{"type":"noop","interval":"5m"}') is None
     assert routes_candles.parse_market_subscribe_message('{"type":"market.subscribe","interval":"2m"}') is None
+
+
+@pytest.mark.asyncio
+async def test_market_ws_candles_latest_request_syncs_and_merges_live_candle(monkeypatch) -> None:
+    calls = {}
+    cached = [make_candle(index) for index in range(300)]
+    live_candle = make_candle(300).model_copy(update={"close": 555, "high": 556, "is_closed": False})
+    websocket = RecordingJsonWebSocket()
+
+    class FakeCandleSyncService:
+        async def ensure_latest_window(self, session, *, symbol, interval, limit):
+            calls["sync"] = {"symbol": symbol, "interval": interval, "limit": limit}
+
+    class FakeMarketSignalPipeline:
+        def get_live_candles(self, symbol, interval, limit=None):  # noqa: ANN001
+            return [live_candle]
+
+    async def fake_list_candles(session, symbol, interval, limit):
+        return cached[-limit:]
+
+    monkeypatch.setattr(routes_candles, "AsyncSessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(routes_candles, "candle_sync_service", FakeCandleSyncService())
+    monkeypatch.setattr(routes_candles, "market_signal_pipeline", FakeMarketSignalPipeline())
+    monkeypatch.setattr(routes_candles, "list_candles", fake_list_candles)
+
+    await routes_candles.send_candles_snapshot(
+        websocket,  # type: ignore[arg-type]
+        {
+            "type": "market.candles.request",
+            "request_id": "latest-1",
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "limit": 300,
+            "start_ms": None,
+            "end_ms": None,
+        },
+    )
+
+    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 300}
+    payload = websocket.messages[-1]
+    assert payload["type"] == "market.candles.snapshot"
+    assert payload["request_id"] == "latest-1"
+    assert payload["mode"] == "latest"
+    assert len(payload["candles"]) == 300
+    assert payload["candles"][-1]["open_time"] == "2026-01-01T05:00:00Z"
+    assert payload["candles"][-1]["close"] == 555
+    assert payload["candles"][-1]["is_closed"] is False
+
+
+@pytest.mark.asyncio
+async def test_market_ws_candles_range_request_syncs_and_reads_database(monkeypatch) -> None:
+    calls = {}
+    cached = [make_candle(0), make_candle(1)]
+    websocket = RecordingJsonWebSocket()
+
+    class FakeCandleSyncService:
+        async def ensure_range(self, session, *, symbol, interval, start_ms, end_ms):
+            calls["sync"] = {
+                "symbol": symbol,
+                "interval": interval,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+            }
+
+    async def fake_list_between(session, symbol, interval, start, end):
+        calls["between"] = {"symbol": symbol, "interval": interval, "start": start, "end": end}
+        return cached
+
+    monkeypatch.setattr(routes_candles, "AsyncSessionLocal", FakeSessionLocal)
+    monkeypatch.setattr(routes_candles, "candle_sync_service", FakeCandleSyncService())
+    monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
+
+    await routes_candles.send_candles_snapshot(
+        websocket,  # type: ignore[arg-type]
+        {
+            "type": "market.candles.request",
+            "request_id": "range-1",
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "limit": 1000,
+            "start_ms": 1767225600000,
+            "end_ms": 1767229200000,
+        },
+    )
+
+    assert calls["sync"] == {
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "start_ms": 1767225600000,
+        "end_ms": 1767229200000,
+    }
+    payload = websocket.messages[-1]
+    assert payload["type"] == "market.candles.snapshot"
+    assert payload["request_id"] == "range-1"
+    assert payload["mode"] == "range"
+    assert [item["open_time"] for item in payload["candles"]] == [
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:01:00Z",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_market_ws_candles_request_returns_validation_errors() -> None:
+    websocket = RecordingJsonWebSocket()
+
+    await routes_candles.send_candles_snapshot(
+        websocket,  # type: ignore[arg-type]
+        {
+            "type": "market.candles.request",
+            "request_id": "bad-interval",
+            "symbol": "BTCUSDT",
+            "interval": "2m",
+            "limit": 300,
+            "start_ms": None,
+            "end_ms": None,
+        },
+    )
+    await routes_candles.send_candles_snapshot(
+        websocket,  # type: ignore[arg-type]
+        {
+            "type": "market.candles.request",
+            "request_id": "bad-limit",
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "limit": 0,
+            "start_ms": None,
+            "end_ms": None,
+        },
+    )
+    await routes_candles.send_candles_snapshot(
+        websocket,  # type: ignore[arg-type]
+        {
+            "type": "market.candles.request",
+            "request_id": "bad-range",
+            "symbol": "BTCUSDT",
+            "interval": "1m",
+            "limit": 300,
+            "start_ms": 1767229200000,
+            "end_ms": 1767225600000,
+        },
+    )
+
+    assert [message["type"] for message in websocket.messages] == [
+        "market.candles.error",
+        "market.candles.error",
+        "market.candles.error",
+    ]
+    assert websocket.messages[0]["request_id"] == "bad-interval"
+    assert "interval" in websocket.messages[0]["message"]
+    assert websocket.messages[1]["request_id"] == "bad-limit"
+    assert "limit" in websocket.messages[1]["message"]
+    assert websocket.messages[2]["request_id"] == "bad-range"
+    assert "start_ms" in websocket.messages[2]["message"]
 
 
 @pytest.mark.asyncio

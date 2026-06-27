@@ -160,6 +160,10 @@ class PolymarketCredentialListResponse(BaseModel):
     encryption_configured: bool
 
 
+class PolymarketCredentialUpdateRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+
+
 class PolymarketSignedOrderRequest(BaseModel):
     signed_order: dict[str, Any]
     condition_id: str | None = None

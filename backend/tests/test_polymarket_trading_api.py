@@ -57,12 +57,16 @@ def test_credentials_api_lists_activates_and_rejects_active_delete(monkeypatch: 
     login_test_client(client)
 
     list_response = client.get("/api/polymarket/credentials")
+    update_response = client.patch(f"/api/polymarket/credentials/{profile_id}", json={"label": "Renamed"})
     activate_response = client.post(f"/api/polymarket/credentials/{profile_id}/activate")
     delete_response = client.delete(f"/api/polymarket/credentials/{profile_id}")
 
     assert list_response.status_code == 200
     assert list_response.json()["profiles"][0]["funder_address"] == FUNDER
     assert "secret" not in str(list_response.json())
+    assert update_response.status_code == 200
+    assert update_response.json()["profiles"][0]["label"] == "Renamed"
+    assert "secret" not in str(update_response.json())
     assert activate_response.status_code == 200
     assert activate_response.json()["active_id"] == profile_id
     assert delete_response.status_code == 400

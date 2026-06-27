@@ -204,6 +204,23 @@ async def list_credential_profiles(session: AsyncSession) -> list[PolymarketCred
     return [profile_from_model(row, active_id=active_id, fernet=fernet) for row in result]
 
 
+async def update_credential_label(
+    session: AsyncSession,
+    credential_id: str,
+    label: str,
+) -> PolymarketCredentialProfile:
+    credential = await session.get(PolymarketCredential, credential_id)
+    if credential is None:
+        raise PolymarketCredentialError("Polymarket credential profile not found")
+    normalized_label = label.strip()
+    if not normalized_label:
+        raise PolymarketCredentialError("label cannot be empty")
+    credential.label = normalized_label[:120]
+    await session.flush()
+    active_id = await get_active_credential_id(session)
+    return profile_from_model(credential, active_id=active_id, fernet=fernet_from_settings())
+
+
 async def delete_credential_profile(session: AsyncSession, credential_id: str) -> None:
     active_id = await get_active_credential_id(session)
     if active_id == credential_id:
