@@ -33,7 +33,7 @@ class AppConfig(BaseModel):
     log_level: str = "INFO"
     log_format: str = "console"
     log_file_enabled: bool = True
-    log_file_path: str = "backend/logs/app.log"
+    log_file_path: str = "logs/backend.log"
     log_file_max_bytes: int = 10 * 1024 * 1024
     log_file_backup_count: int = 7
 

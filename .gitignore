@@ -12,7 +12,7 @@ config/app.yaml
 backend/.venv/
 backend/.env
 backend/.uv-cache/
-backend/logs/
+logs/
 *.log
 
 frontend/node_modules/
