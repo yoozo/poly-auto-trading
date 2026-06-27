@@ -237,7 +237,7 @@ def test_post_signed_order_http_error_does_not_echo_response_body(monkeypatch: p
 
     assert response.status_code == 502
     detail = response.json()["detail"]
-    assert detail == "Polymarket 下单提交失败: HTTP 400 Bad Request"
+    assert detail == "Polymarket 下单提交失败: HTTP 400 Bad Request: bad order"
     assert "0xsensitive-signature" not in detail
     assert "api-secret" not in detail
 

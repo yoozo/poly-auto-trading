@@ -1,7 +1,12 @@
+from time import perf_counter
+from uuid import uuid4
+
+import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from structlog.contextvars import bind_contextvars, clear_contextvars
 
 from app.api.routes_auth import router as auth_router
 from app.api.routes_candles import router as candles_router
@@ -16,6 +21,8 @@ from app.core.auth import AUTH_EXEMPT_PATHS, auth_is_configured, request_is_auth
 from app.core.config import settings
 from app.core.lifecycle import lifespan
 from app.core.logging import configure_logging
+
+logger = structlog.get_logger(__name__)
 
 
 def create_app(enable_lifespan: bool = True) -> FastAPI:
@@ -33,6 +40,34 @@ def create_app(enable_lifespan: bool = True) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def bind_request_logging_context(request, call_next):
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        clear_contextvars()
+        bind_contextvars(request_id=request_id)
+        started_at = perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception(
+                "http_request_failed",
+                method=request.method,
+                path=request.url.path,
+                duration_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
+            clear_contextvars()
+            raise
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "http_request_completed",
+            method=request.method,
+            path=request.url.path,
+            status_code=response.status_code,
+            duration_ms=round((perf_counter() - started_at) * 1000, 2),
+        )
+        clear_contextvars()
+        return response
 
     @app.middleware("http")
     async def require_api_auth(request, call_next):

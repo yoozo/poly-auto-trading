@@ -13,6 +13,11 @@ def test_settings_loads_yaml_and_env_secrets(tmp_path: Path) -> None:
 app:
   env: yaml-env
   log_level: DEBUG
+  log_format: json
+  log_file_enabled: false
+  log_file_path: /tmp/poly-test.log
+  log_file_max_bytes: 2048
+  log_file_backup_count: 2
 cors:
   origins:
     - http://yaml.local
@@ -58,6 +63,11 @@ polymarket:
 
     assert settings.app_env == "yaml-env"
     assert settings.log_level == "DEBUG"
+    assert settings.log_format == "json"
+    assert settings.log_file_enabled is False
+    assert settings.log_file_path == "/tmp/poly-test.log"
+    assert settings.log_file_max_bytes == 2048
+    assert settings.log_file_backup_count == 2
     assert settings.database_url == "postgresql+asyncpg://example"
     assert settings.auth_password == "secret-password"
     assert settings.cors_origins == ["http://yaml.local"]

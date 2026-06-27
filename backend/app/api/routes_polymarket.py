@@ -505,4 +505,24 @@ def normalized_address(value: object) -> str:
 
 def polymarket_http_error_detail(prefix: str, exc: httpx.HTTPStatusError) -> str:
     response = exc.response
-    return f"{prefix}: HTTP {response.status_code} {response.reason_phrase}"
+    message = polymarket_safe_error_message(response)
+    suffix = f"HTTP {response.status_code} {response.reason_phrase}"
+    if message:
+        suffix = f"{suffix}: {message}"
+    return f"{prefix}: {suffix}"
+
+
+def polymarket_safe_error_message(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_message = payload.get("error") or payload.get("message")
+    if not isinstance(raw_message, str):
+        return None
+    message = " ".join(raw_message.split())
+    if not message:
+        return None
+    return message[:240]

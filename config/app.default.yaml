@@ -2,6 +2,11 @@ app:
   name: poly-auto-trading
   env: development
   log_level: INFO
+  log_format: console
+  log_file_enabled: true
+  log_file_path: backend/logs/app.log
+  log_file_max_bytes: 10485760
+  log_file_backup_count: 7
 cors:
   origins:
   - http://localhost:5173

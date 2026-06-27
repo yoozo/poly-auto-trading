@@ -24,6 +24,7 @@ def test_health() -> None:
     client = make_client()
     response = client.get("/api/health")
     assert response.status_code == 200
+    assert response.headers["X-Request-ID"]
     body = response.json()
     assert body["status"] in {"ok", "degraded"}
     assert body["checks"]["api"]["ok"] is True

@@ -15,6 +15,7 @@ dependencies = [
   "py-clob-client-v2>=1.0.1",
   "pyyaml>=6.0.0",
   "sqlalchemy[asyncio]>=2.0.0",
+  "structlog>=25.0.0",
   "uvicorn[standard]>=0.30.0",
   "websockets>=12.0",
 ]

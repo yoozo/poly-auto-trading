@@ -31,6 +31,11 @@ class AppConfig(BaseModel):
     name: str = "poly-auto-trading"
     env: str = "development"
     log_level: str = "INFO"
+    log_format: str = "console"
+    log_file_enabled: bool = True
+    log_file_path: str = "backend/logs/app.log"
+    log_file_max_bytes: int = 10 * 1024 * 1024
+    log_file_backup_count: int = 7
 
 
 class CorsConfig(BaseModel):
@@ -141,6 +146,11 @@ class Settings:
         self.app_name = yaml_config.app.name
         self.app_env = yaml_config.app.env
         self.log_level = yaml_config.app.log_level
+        self.log_format = yaml_config.app.log_format
+        self.log_file_enabled = yaml_config.app.log_file_enabled
+        self.log_file_path = yaml_config.app.log_file_path
+        self.log_file_max_bytes = yaml_config.app.log_file_max_bytes
+        self.log_file_backup_count = yaml_config.app.log_file_backup_count
         self.database_url = secrets.database_url
 
         self.cors_origins_raw = join_csv(yaml_config.cors.origins)
