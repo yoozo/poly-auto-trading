@@ -133,11 +133,11 @@ body[data-theme="dark"] {
   width: min(360px, calc(100vw - 24px));
   padding: 12px;
   color: rgb(255 255 255 / 88%);
-  background: rgb(31 31 31 / 94%);
+  background: #262626;
 }
 
 .performance-tooltip-overlay .ant-tooltip-arrow::before {
-  background: rgb(31 31 31 / 94%);
+  background: #262626;
 }
 
 .performance-tooltip-content {
@@ -148,7 +148,12 @@ body[data-theme="dark"] {
 
 .performance-tooltip-content .ant-typography,
 .performance-tooltip-content .ant-badge-status-text {
-  color: rgb(255 255 255 / 88%);
+  color: rgb(255 255 255 / 88%) !important;
+}
+
+.performance-tooltip-head .ant-badge,
+.performance-tooltip-head .ant-badge-status-text {
+  color: rgb(255 255 255 / 78%) !important;
 }
 
 .performance-tooltip-head {
