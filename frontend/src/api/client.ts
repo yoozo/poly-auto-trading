@@ -388,11 +388,21 @@ export type PolymarketUpDownMarket = {
 
 export type PolymarketInterval = "5m" | "15m" | "1h" | "4h";
 
-export type PolymarketWsMessage = {
-  type: "polymarket.btc_up_down.snapshot";
-  interval: PolymarketInterval;
-  markets: PolymarketUpDownMarket[];
-};
+export type PolymarketWsMessage =
+  | {
+      type: "polymarket.btc_up_down.markets.snapshot";
+      interval: PolymarketInterval;
+      markets: PolymarketUpDownMarket[];
+    }
+  | {
+      type: "polymarket.btc_up_down.market.snapshot";
+      interval: PolymarketInterval;
+      market: PolymarketUpDownMarket;
+    }
+  | {
+      type: "polymarket.btc_up_down.error";
+      message: string;
+    };
 
 export type PolymarketAccountPosition = {
   condition_id: string | null;
@@ -670,14 +680,7 @@ export const api = {
     if (params.onlyBilateral) query.set("only_bilateral", "true");
     return request<MarketPerformancePage>(`/api/reports/accounts/${accountId}/markets?${query.toString()}`);
   },
-  polymarketBtcUpDown: (interval: PolymarketInterval = "5m", limit = 12) =>
-    request<PolymarketUpDownMarket[]>(
-      `/api/polymarket/btc-up-down?interval=${interval}&limit=${limit}&include_recent_closed=true`
-    ),
-  polymarketAccountState: (conditionId?: string | null) =>
-    request<PolymarketAccountState>(
-      conditionId ? `/api/polymarket/account-state/${encodeURIComponent(conditionId)}` : "/api/polymarket/account-state"
-    ),
+  polymarketAccountState: () => request<PolymarketAccountState>("/api/polymarket/account-state"),
   refreshPolymarketAccountState: () =>
     request<PolymarketAccountState>("/api/polymarket/account-state/refresh", {
       method: "POST",

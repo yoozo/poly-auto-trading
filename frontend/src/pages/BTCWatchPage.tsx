@@ -1,5 +1,5 @@
 import { ClockCircleOutlined, DownOutlined, ExportOutlined, FullscreenExitOutlined, FullscreenOutlined, SwapOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Typography, notification } from "antd";
+import { Button, Card, Checkbox, Dropdown, Empty, InputNumber, Modal, Segmented, Spin, Typography, notification } from "antd";
 import type { MenuProps } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -76,7 +76,6 @@ type TradeDraft = {
   side: "BUY" | "SELL";
   nonce: number;
 };
-const EMPTY_POLYMARKET_MARKETS: PolymarketUpDownMarket[] = [];
 const EMPTY_ACCOUNT_STATE: PolymarketAccountState = {
   wallet: null,
   clob_address: null,
@@ -130,6 +129,7 @@ export default function BTCWatchPage() {
   const [isJumpingTime, setIsJumpingTime] = useState(false);
   const [timeJumpError, setTimeJumpError] = useState<string | null>(null);
   const [polymarketMarkets, setPolymarketMarkets] = useState<PolymarketUpDownMarket[]>([]);
+  const [polymarketMarketsLoading, setPolymarketMarketsLoading] = useState(false);
   const [selectedPolymarketSnapshot, setSelectedPolymarketSnapshot] = useState<PolymarketUpDownMarket | null>(null);
   const [comparisonLine, setComparisonLine] = useState<ChartComparisonLine | null>(null);
   const [comparisonRetryNonce, setComparisonRetryNonce] = useState(0);
@@ -153,6 +153,9 @@ export default function BTCWatchPage() {
   const activePolymarketIntervalRef = useRef<PolymarketInterval>(polymarketInterval);
   const polymarketSocketRef = useRef<WebSocket | null>(null);
   const polymarketSocketSubscribedIntervalRef = useRef<PolymarketInterval | null>(null);
+  const polymarketSocketSubscribedMarketIdRef = useRef<string | null>(null);
+  const polymarketMarketsCacheRef = useRef<Map<PolymarketInterval, PolymarketUpDownMarket[]>>(new Map());
+  const selectedPolymarketIdRef = useRef<string | null>(selectedPolymarketId);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(WIDE_LAYOUT_QUERY);
@@ -169,17 +172,7 @@ export default function BTCWatchPage() {
     return () => mediaQuery.removeEventListener("change", syncVisibleCandles);
   }, []);
 
-  const {
-    data: polymarketSnapshot = EMPTY_POLYMARKET_MARKETS,
-    error: polymarketError,
-  } = useQuery({
-    queryKey: ["polymarket-btc-up-down", polymarketInterval],
-    queryFn: () => api.polymarketBtcUpDown(polymarketInterval, 12),
-    // REST 只负责初始快照和切换 interval；后续盘口/窗口变化由 Polymarket WS 快照推送。
-    staleTime: 5 * ONE_MINUTE_MS,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
+  const [polymarketError, setPolymarketError] = useState<string | null>(null);
 
   const activeCandles = useMemo(() => candles.filter((candle) => candle.interval === interval), [candles, interval]);
   useEffect(() => {
@@ -334,20 +327,19 @@ export default function BTCWatchPage() {
 
   useEffect(() => {
     activePolymarketIntervalRef.current = polymarketInterval;
+    selectedPolymarketIdRef.current = null;
     localStorage.setItem(POLY_INTERVAL_KEY, polymarketInterval);
     setSelectedPolymarketId(null);
     setAutoSwitchPolymarket(true);
-    setPolymarketMarkets([]);
+    const cachedMarkets = polymarketMarketsCacheRef.current.get(polymarketInterval) ?? [];
+    setPolymarketMarkets(cachedMarkets);
+    setPolymarketMarketsLoading(cachedMarkets.length === 0);
     setSelectedPolymarketSnapshot(null);
     setComparisonLine(null);
     comparisonRequestKeyRef.current = null;
     activeComparisonKeyRef.current = null;
     comparisonLineCacheRef.current.clear();
   }, [polymarketInterval]);
-
-  useEffect(() => {
-    setPolymarketMarkets(polymarketSnapshot);
-  }, [polymarketSnapshot]);
 
   useEffect(() => {
     if (!activeCredentialMatches || !selectedPolymarketConditionId) {
@@ -358,6 +350,7 @@ export default function BTCWatchPage() {
   }, [accountStateSnapshot, activeCredentialMatches, activeCredentialQueryId, selectedPolymarketConditionId]);
 
   useEffect(() => {
+    selectedPolymarketIdRef.current = selectedPolymarketId;
     if (!selectedPolymarketId) {
       setSelectedPolymarketSnapshot(null);
       return;
@@ -383,13 +376,32 @@ export default function BTCWatchPage() {
       };
       socket.onmessage = (event) => {
         const message = parsePolymarketMessage(event.data);
+        if (!message) return;
+        if (message.type === "polymarket.btc_up_down.error") {
+          setPolymarketError(message.message);
+          setPolymarketMarketsLoading(false);
+          return;
+        }
         if (!isValidPolymarketMessage(message, activePolymarketIntervalRef.current)) return;
-        setPolymarketMarkets(message.markets);
+        setPolymarketError(null);
+        if (message.type === "polymarket.btc_up_down.markets.snapshot") {
+          polymarketMarketsCacheRef.current.set(message.interval, message.markets);
+          setPolymarketMarkets(message.markets);
+          setPolymarketMarketsLoading(false);
+          return;
+        }
+        setPolymarketMarkets((current) => {
+          const next = replacePolymarketMarket(current, message.market);
+          polymarketMarketsCacheRef.current.set(message.interval, next);
+          return next;
+        });
+        setPolymarketMarketsLoading(false);
       };
       socket.onclose = () => {
         if (polymarketSocketRef.current === socket) {
           polymarketSocketRef.current = null;
           polymarketSocketSubscribedIntervalRef.current = null;
+          polymarketSocketSubscribedMarketIdRef.current = null;
         }
         if (closedByEffect) return;
         reconnectTimer = window.setTimeout(connect, 1000);
@@ -413,6 +425,11 @@ export default function BTCWatchPage() {
   useEffect(() => {
     subscribePolymarketSocket(polymarketInterval);
   }, [polymarketInterval]);
+
+  useEffect(() => {
+    if (!selectedPolymarketId) return;
+    subscribePolymarketMarketSocket(polymarketInterval, selectedPolymarketId);
+  }, [polymarketInterval, selectedPolymarketId]);
 
   useEffect(() => {
     if (polymarketMarkets.length === 0) return;
@@ -803,6 +820,29 @@ export default function BTCWatchPage() {
     if (polymarketSocketSubscribedIntervalRef.current === nextInterval) return;
     socket.send(JSON.stringify({ type: "polymarket.btc_up_down.subscribe", interval: nextInterval }));
     polymarketSocketSubscribedIntervalRef.current = nextInterval;
+    polymarketSocketSubscribedMarketIdRef.current = null;
+  }
+
+  function subscribePolymarketMarketSocket(nextInterval: PolymarketInterval, marketId: string) {
+    const socket = polymarketSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (selectedPolymarketIdRef.current !== marketId) return;
+    const knownMarket =
+      polymarketMarkets.find((market) => market.id === marketId) ??
+      polymarketMarketsCacheRef.current.get(nextInterval)?.find((market) => market.id === marketId) ??
+      selectedPolymarketSnapshot;
+    if (!knownMarket || knownMarket.interval !== nextInterval) return;
+    const subscriptionKey = `${nextInterval}:${marketId}`;
+    if (polymarketSocketSubscribedMarketIdRef.current === subscriptionKey) return;
+    socket.send(
+      JSON.stringify({
+        type: "polymarket.btc_up_down.market.subscribe",
+        interval: nextInterval,
+        market_id: marketId,
+      })
+    );
+    polymarketSocketSubscribedIntervalRef.current = nextInterval;
+    polymarketSocketSubscribedMarketIdRef.current = subscriptionKey;
   }
 
   const loadMore = useCallback(
@@ -1066,11 +1106,12 @@ export default function BTCWatchPage() {
           selectedMarket={selectedPolymarket}
           selectedMarketId={selectedPolymarketId}
           onSelectedMarketId={handlePolymarketMarketSelect}
-          error={polymarketError instanceof Error ? polymarketError.message : null}
+          error={polymarketError}
           accountState={polymarketAccountState}
           accountStateError={accountStateError instanceof Error ? accountStateError.message : null}
           walletConnected={walletConnected}
           walletProfileReady={activeCredentialMatches}
+          loading={polymarketMarketsLoading}
         />
       )}
       <Modal
@@ -1120,6 +1161,7 @@ function PolymarketBtcPanel({
   accountStateError,
   walletConnected,
   walletProfileReady,
+  loading,
 }: {
   interval: PolymarketInterval;
   markets: PolymarketUpDownMarket[];
@@ -1131,6 +1173,7 @@ function PolymarketBtcPanel({
   accountStateError: string | null;
   walletConnected: boolean;
   walletProfileReady: boolean;
+  loading: boolean;
 }) {
   const activeMarket =
     markets.find((market) => market.id === selectedMarketId) ??
@@ -1181,6 +1224,12 @@ function PolymarketBtcPanel({
         </div>
       </div>
       <div className="polymarket-market-selector">
+        {loading && (
+          <div className="polymarket-market-loading" aria-live="polite">
+            <Spin size="small" />
+            <Typography.Text type="secondary">加载 {interval} market...</Typography.Text>
+          </div>
+        )}
         <div className="polymarket-market-rail" role="tablist" aria-label="Polymarket 市场窗口">
           {railModel.latestPastMarket && (
             <button
@@ -1228,7 +1277,15 @@ function PolymarketBtcPanel({
         </div>
       </div>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
-      {!activeMarket && !error && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${interval} 市场`} />}
+      {!activeMarket && !error && (
+        loading ? (
+          <div className="polymarket-market-empty-loading">
+            <Spin />
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无 ${interval} 市场`} />
+        )
+      )}
       {activeMarket && (
         <div className="polymarket-market">
           <div className="polymarket-outcomes">
@@ -1990,7 +2047,13 @@ function isValidMarketCandle(candle: MarketCandle | null, symbol: string, interv
 function parsePolymarketMessage(value: string) {
   try {
     const message = JSON.parse(value) as PolymarketWsMessage;
-    if (message.type !== "polymarket.btc_up_down.snapshot") return null;
+    if (
+      message.type !== "polymarket.btc_up_down.markets.snapshot" &&
+      message.type !== "polymarket.btc_up_down.market.snapshot" &&
+      message.type !== "polymarket.btc_up_down.error"
+    ) {
+      return null;
+    }
     return message;
   } catch {
     return null;
@@ -1998,8 +2061,23 @@ function parsePolymarketMessage(value: string) {
 }
 
 function isValidPolymarketMessage(message: PolymarketWsMessage | null, activeInterval: PolymarketInterval): message is PolymarketWsMessage {
-  if (!message || message.interval !== activeInterval || !Array.isArray(message.markets)) return false;
-  return message.markets.every((market) => market.interval === activeInterval && typeof market.id === "string" && market.id.length > 0);
+  if (!message || message.type === "polymarket.btc_up_down.error" || message.interval !== activeInterval) return false;
+  if (message.type === "polymarket.btc_up_down.markets.snapshot") {
+    return message.markets.every((market) => isValidPolymarketMarket(market, activeInterval));
+  }
+  return isValidPolymarketMarket(message.market, activeInterval);
+}
+
+function isValidPolymarketMarket(market: PolymarketUpDownMarket | null, activeInterval: PolymarketInterval) {
+  return Boolean(market && market.interval === activeInterval && typeof market.id === "string" && market.id.length > 0);
+}
+
+function replacePolymarketMarket(markets: PolymarketUpDownMarket[], market: PolymarketUpDownMarket) {
+  const index = markets.findIndex((item) => item.id === market.id);
+  if (index < 0) return [...markets, market];
+  const next = [...markets];
+  next[index] = market;
+  return next;
 }
 
 function withIndicatorWarmupStart(startMs: number, interval: CandleInterval) {

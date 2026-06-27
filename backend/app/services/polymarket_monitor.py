@@ -105,7 +105,7 @@ class PolymarketMarketMonitor:
         )
 
     async def refresh_markets_once(self) -> None:
-        previous_tokens = set(await polymarket_up_down_store.token_ids())
+        previous_tokens = set(await self.subscription_token_ids())
         for interval in UP_DOWN_INTERVAL_TAGS:
             markets = await self._client.fetch_btc_up_down_markets(
                 interval=interval,
@@ -113,10 +113,13 @@ class PolymarketMarketMonitor:
                 include_recent_closed=True,
             )
             await polymarket_up_down_store.replace_markets(interval, markets)
-            await self.broadcast_snapshot(interval)
-        current_tokens = set(await polymarket_up_down_store.token_ids())
+            await self.broadcast_markets_snapshot(interval)
+        current_tokens = set(await self.subscription_token_ids())
         if current_tokens != previous_tokens:
             self._token_change_event.set()
+
+    def notify_token_subscription_changed(self) -> None:
+        self._token_change_event.set()
 
     async def scheduled_refresh_once(self) -> None:
         # cron 层负责“何时执行”，monitor 保留刷新后的状态推进和订阅变更信号。
@@ -132,7 +135,7 @@ class PolymarketMarketMonitor:
                 intervals = sorted(self._pending_broadcast_intervals)
                 self._pending_broadcast_intervals.clear()
             for interval in intervals:
-                await self.broadcast_snapshot(interval)
+                await self.broadcast_active_market_snapshots(interval)
 
     async def ws_loop(self) -> None:
         backoff = 1.0
@@ -207,11 +210,17 @@ class PolymarketMarketMonitor:
 
     async def _wait_for_token_ids(self) -> list[str]:
         while True:
-            token_ids = await polymarket_up_down_store.token_ids()
+            token_ids = await self.subscription_token_ids()
             if token_ids:
                 return token_ids
             await self.refresh_markets_once()
             await asyncio.sleep(3)
+
+    async def subscription_token_ids(self) -> list[str]:
+        # 上游 Polymarket marketChannel 订阅 token：基础预热当前窗口，活跃订阅跟随前端选中的 market。
+        current_tokens = await polymarket_up_down_store.current_market_token_ids()
+        active_tokens = await polymarket_up_down_store.token_ids_for_market_ids(await polymarket_ws_hub.active_market_ids())
+        return sorted(set(current_tokens + active_tokens))
 
     async def _ping_loop(self, websocket: Any) -> None:
         while True:
@@ -251,16 +260,34 @@ class PolymarketMarketMonitor:
         async with self._broadcast_lock:
             self._pending_broadcast_intervals.update(intervals)
 
-    async def broadcast_snapshot(self, interval: str) -> None:
+    async def broadcast_markets_snapshot(self, interval: str) -> None:
         markets = await polymarket_up_down_store.list_markets(interval, limit=12)
-        await polymarket_ws_hub.broadcast(
+        await polymarket_ws_hub.broadcast_markets(
             interval,
             {
-                "type": "polymarket.btc_up_down.snapshot",
+                "type": "polymarket.btc_up_down.markets.snapshot",
                 "interval": interval,
                 "markets": jsonable_encoder(markets),
             },
         )
+
+    async def broadcast_snapshot(self, interval: str) -> None:
+        await self.broadcast_markets_snapshot(interval)
+
+    async def broadcast_active_market_snapshots(self, interval: str) -> None:
+        active_market_ids = await polymarket_ws_hub.active_market_ids()
+        for market_id in active_market_ids:
+            market = await polymarket_up_down_store.get_market_in_interval(interval, market_id)
+            if market is None:
+                continue
+            await polymarket_ws_hub.broadcast_market(
+                market_id,
+                {
+                    "type": "polymarket.btc_up_down.market.snapshot",
+                    "interval": interval,
+                    "market": jsonable_encoder(market),
+                },
+            )
 
 
 def subscription_payload(token_ids: list[str]) -> dict[str, Any]:

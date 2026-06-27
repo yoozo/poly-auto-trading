@@ -28,9 +28,9 @@ export const PERFORMANCE_MONITOR_ENABLED_EVENT = "poly-auto.performanceMonitorEn
 
 const DEFAULT_RESULTS: PerformanceMetricResult[] = [
   { key: "ws_handshake", title: "WS 握手", latencyMs: null, status: "idle", meta: "", error: "" },
-  { key: "ws_ping", title: "Ping", latencyMs: null, status: "idle", meta: "", error: "" },
-  { key: "candles", title: "K线", latencyMs: null, status: "idle", meta: "BTCUSDT 5m", error: "" },
-  { key: "polymarket", title: "盘口", latencyMs: null, status: "idle", meta: "Polymarket 5m", error: "" },
+  { key: "ws_ping", title: "Ping 延迟", latencyMs: null, status: "idle", meta: "", error: "" },
+  { key: "candles", title: "币安 K线", latencyMs: null, status: "idle", meta: "BTCUSDT 5m", error: "" },
+  { key: "polymarket", title: "Polymarket", latencyMs: null, status: "idle", meta: "5m markets", error: "" },
 ];
 
 export function PerformanceMonitorTooltip() {
@@ -42,8 +42,9 @@ export function PerformanceMonitorTooltip() {
 
   const status = useMemo(() => {
     if (running) return "processing";
-    const pingResult = results.find((result) => result.key === "ws_ping");
-    return pingLatencyTone(pingResult);
+    return maxLatencyTone(
+      results.filter((result) => result.key === "candles" || result.key === "polymarket")
+    );
   }, [results, running]);
 
   const updateResult = useCallback((key: PerformanceMetricKey, patch: Partial<PerformanceMetricResult>) => {
@@ -139,7 +140,7 @@ function PerformanceTooltipContent({ results, running }: { results: PerformanceM
         {results.map((result) => (
           <div className="performance-tooltip-row" key={result.key}>
             <span>{result.title}</span>
-            <strong className={result.key === "ws_ping" ? `performance-tooltip-latency-${pingLatencyTone(result)}` : undefined}>
+            <strong className={isPrimaryDataLatency(result) ? `performance-tooltip-latency-${latencyTone(result)}` : undefined}>
               {formatLatencyValue(result.latencyMs)}ms
             </strong>
             {result.error ? <em>{result.error}</em> : <em>{result.meta}</em>}
@@ -262,13 +263,52 @@ function measureMarketCandles(socket: WebSocket): Promise<Partial<PerformanceMet
 }
 
 async function measurePolymarketOrderbook(interval: PolymarketInterval): Promise<Partial<PerformanceMetricResult>> {
+  let socket: WebSocket | null = null;
   const start = performance.now();
   try {
-    const markets = await api.polymarketBtcUpDown(interval, 12);
-    return metricOk(start, `${markets.length} 市场 / ${countPolymarketQuotes(markets)} 报价`);
+    socket = new WebSocket(api.polymarketBtcUpDownWsUrl(interval));
+    return await waitForPolymarketMarketsSnapshot(socket, start);
   } catch (error) {
     return metricError(start, errorMessage(error));
+  } finally {
+    socket?.close();
   }
+}
+
+function waitForPolymarketMarketsSnapshot(socket: WebSocket, start: number): Promise<Partial<PerformanceMetricResult>> {
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(metricError(start, "盘口超时"));
+    }, 8_000);
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("error", onError);
+      socket.removeEventListener("close", onClose);
+    };
+    const onError = () => {
+      cleanup();
+      resolve(metricError(start, "盘口 WS 失败"));
+    };
+    const onClose = () => {
+      cleanup();
+      resolve(metricError(start, "连接关闭"));
+    };
+    const onMessage = (event: MessageEvent<string>) => {
+      const message = parsePolymarketWsMessage(event.data);
+      if (!message) return;
+      cleanup();
+      if (message.type === "polymarket.btc_up_down.error") {
+        resolve(metricError(start, message.message || "盘口失败"));
+        return;
+      }
+      resolve(metricOk(start, `${message.markets.length} 市场 / ${countPolymarketQuotes(message.markets)} 报价`));
+    };
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("error", onError);
+    socket.addEventListener("close", onClose);
+  });
 }
 
 function parseMarketPong(raw: string): { type: "market.pong"; request_id: string } | null {
@@ -293,6 +333,27 @@ function parseMarketWsMessage(raw: string): MarketWsMessage | null {
   return null;
 }
 
+type PolymarketMarketsSnapshotMessage =
+  | {
+      type: "polymarket.btc_up_down.markets.snapshot";
+      markets: PolymarketUpDownMarket[];
+    }
+  | {
+      type: "polymarket.btc_up_down.error";
+      message: string;
+    };
+
+function parsePolymarketWsMessage(raw: string): PolymarketMarketsSnapshotMessage | null {
+  try {
+    const payload = JSON.parse(raw) as PolymarketMarketsSnapshotMessage;
+    if (payload?.type === "polymarket.btc_up_down.markets.snapshot" && Array.isArray(payload.markets)) return payload;
+    if (payload?.type === "polymarket.btc_up_down.error") return payload;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function metricOk(start: number, meta: string): Partial<PerformanceMetricResult> {
   return { latencyMs: performance.now() - start, status: "ok", meta, error: "" };
 }
@@ -301,7 +362,7 @@ function metricError(start: number, error: string): Partial<PerformanceMetricRes
   return { latencyMs: performance.now() - start, status: "error", meta: "", error };
 }
 
-function pingLatencyTone(result?: PerformanceMetricResult): PerformanceLatencyTone {
+function latencyTone(result?: PerformanceMetricResult): PerformanceLatencyTone {
   if (!result || result.status === "idle") return "default";
   if (result.status === "running") return "processing";
   if (result.status === "error") return "error";
@@ -309,6 +370,23 @@ function pingLatencyTone(result?: PerformanceMetricResult): PerformanceLatencyTo
   if (result.latencyMs < 300) return "success";
   if (result.latencyMs < 1000) return "warning";
   return "error";
+}
+
+function maxLatencyTone(results: PerformanceMetricResult[]): PerformanceLatencyTone {
+  const rank: Record<PerformanceLatencyTone, number> = {
+    default: 0,
+    success: 1,
+    processing: 2,
+    warning: 3,
+    error: 4,
+  };
+  return results
+    .map((result) => latencyTone(result))
+    .reduce<PerformanceLatencyTone>((max, tone) => (rank[tone] > rank[max] ? tone : max), "default");
+}
+
+function isPrimaryDataLatency(result: PerformanceMetricResult) {
+  return result.key === "candles" || result.key === "polymarket";
 }
 
 function countPolymarketQuotes(markets: PolymarketUpDownMarket[]) {

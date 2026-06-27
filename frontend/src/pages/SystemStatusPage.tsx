@@ -175,7 +175,7 @@ const PERFORMANCE_INTERVAL: PolymarketInterval = "5m";
 const DEFAULT_PERFORMANCE_RESULTS: PerformanceMetricResult[] = [
   {
     key: "ws_handshake",
-    title: "客户到服务器的 WS 握手时间",
+    title: "WS 握手时间",
     description: "/api/ws/market 建连到 open",
     latencyMs: null,
     status: "idle",
@@ -184,8 +184,8 @@ const DEFAULT_PERFORMANCE_RESULTS: PerformanceMetricResult[] = [
   },
   {
     key: "ws_ping",
-    title: "WS ping 回包延迟",
-    description: "market.ping 到 market.pong 的 RTT",
+    title: "连接后 ping 延迟",
+    description: "WS open 后 market.ping 到 market.pong 的 RTT",
     latencyMs: null,
     status: "idle",
     meta: "应用层 ping/pong",
@@ -193,8 +193,8 @@ const DEFAULT_PERFORMANCE_RESULTS: PerformanceMetricResult[] = [
   },
   {
     key: "candles",
-    title: "获取 K 线的时间",
-    description: "market.candles.request 到 snapshot",
+    title: "币安 K 线延迟",
+    description: "market.candles.request 到 Binance K 线 snapshot",
     latencyMs: null,
     status: "idle",
     meta: "BTCUSDT / 5m / 300 根",
@@ -202,11 +202,11 @@ const DEFAULT_PERFORMANCE_RESULTS: PerformanceMetricResult[] = [
   },
   {
     key: "polymarket",
-    title: "获取 Polymarket 盘口数据的时间",
-    description: "/api/polymarket/btc-up-down 初始快照",
+    title: "Polymarket 延迟",
+    description: "Polymarket WS 握手到 5m markets.snapshot",
     latencyMs: null,
     status: "idle",
-    meta: "12 个市场",
+    meta: "BTC Up/Down / 5m",
     error: ""
   }
 ];
@@ -436,13 +436,54 @@ function measureMarketCandles(socket: WebSocket): Promise<Partial<PerformanceMet
 }
 
 async function measurePolymarketOrderbook(interval: PolymarketInterval): Promise<Partial<PerformanceMetricResult>> {
+  let socket: WebSocket | null = null;
   const start = performance.now();
   try {
-    const markets = await api.polymarketBtcUpDown(interval, 12);
-    return metricOk(start, `${markets.length} 个市场 / ${countPolymarketQuotes(markets)} 个报价`);
+    socket = new WebSocket(api.polymarketBtcUpDownWsUrl(interval));
+    return await waitForPolymarketMarketsSnapshot(socket, start);
   } catch (error) {
     return metricError(start, errorMessage(error));
+  } finally {
+    socket?.close();
   }
+}
+
+function waitForPolymarketMarketsSnapshot(socket: WebSocket, start: number): Promise<Partial<PerformanceMetricResult>> {
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(metricError(start, "Polymarket WS 快照等待超时"));
+    }, 8_000);
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("error", onError);
+      socket.removeEventListener("close", onClose);
+    };
+    const onError = () => {
+      cleanup();
+      resolve(metricError(start, "Polymarket WS 握手失败"));
+    };
+    const onClose = () => {
+      cleanup();
+      resolve(metricError(start, "Polymarket WS 已关闭"));
+    };
+    const onMessage = (event: MessageEvent<string>) => {
+      const message = parsePolymarketWsMessage(event.data);
+      if (!message) return;
+      cleanup();
+      if (message.type === "polymarket.btc_up_down.error") {
+        resolve(metricError(start, message.message || "Polymarket 快照失败"));
+        return;
+      }
+      resolve(metricOk(start, `${message.markets.length} 个市场 / ${countPolymarketQuotes(message.markets)} 个报价`));
+    };
+
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("error", onError);
+    socket.addEventListener("close", onClose);
+  });
 }
 
 type MarketPongMessage = {
@@ -466,6 +507,27 @@ function parseMarketWsMessage(raw: string): MarketWsMessage | null {
     if (payload?.type === "market.candles.snapshot" && Array.isArray(payload.candles)) return payload;
     if (payload?.type === "market.candles.error" && typeof payload.request_id === "string") return payload;
     if (payload?.type === "market.candle") return payload;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+type PolymarketMarketsSnapshotMessage =
+  | {
+      type: "polymarket.btc_up_down.markets.snapshot";
+      markets: PolymarketUpDownMarket[];
+    }
+  | {
+      type: "polymarket.btc_up_down.error";
+      message: string;
+    };
+
+function parsePolymarketWsMessage(raw: string): PolymarketMarketsSnapshotMessage | null {
+  try {
+    const payload = JSON.parse(raw) as PolymarketMarketsSnapshotMessage;
+    if (payload?.type === "polymarket.btc_up_down.markets.snapshot" && Array.isArray(payload.markets)) return payload;
+    if (payload?.type === "polymarket.btc_up_down.error") return payload;
   } catch {
     return null;
   }

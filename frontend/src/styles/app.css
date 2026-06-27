@@ -2034,6 +2034,21 @@ body[data-theme="dark"] .app-account-login-action {
   margin: 10px 0;
 }
 
+.polymarket-market-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.polymarket-market-empty-loading {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+}
+
 .polymarket-market-rail {
   display: flex;
   align-items: center;

@@ -41,49 +41,19 @@ from app.services.polymarket_ws_hub import polymarket_ws_hub
 router = APIRouter(tags=["polymarket"])
 logger = logging.getLogger(__name__)
 POLYMARKET_BTC_UP_DOWN_INTERVALS = {"5m", "15m", "1h", "4h"}
+POLYMARKET_BTC_UP_DOWN_LIST_LIMIT = 12
+POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED = True
 
 
-@router.get("/polymarket/btc-up-down", response_model=list[PolymarketUpDownMarket])
-async def btc_up_down_markets(
-    interval: str = Query("5m", pattern="^(5m|15m|1h|4h)$"),
-    limit: int = Query(6, ge=1, le=20),
-    include_recent_closed: bool = Query(True),
-) -> list[PolymarketUpDownMarket]:
-    try:
-        cached = await polymarket_up_down_store.list_markets(interval, limit=limit)
-        if cached:
-            return cached
-        # API 层只暴露项目需要的 BTC up/down 视图；实时盘口由后台 marketChannel 缓存覆盖。
-        markets = await PolymarketClient().fetch_btc_up_down_markets(
-            interval=interval,
-            limit=limit,
-            include_recent_closed=include_recent_closed,
-        )
-        await polymarket_up_down_store.replace_markets(interval, markets)
-        return await polymarket_up_down_store.list_markets(interval, limit=limit)
-    except PolymarketInputError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.warning("Failed to fetch Polymarket BTC up/down markets", exc_info=exc)
-        raise HTTPException(status_code=502, detail=f"Polymarket 数据获取失败: {exc}") from exc
-
-
-@router.get("/polymarket/btc-up-down/{market_id}", response_model=PolymarketUpDownMarket)
-async def btc_up_down_market(market_id: str) -> PolymarketUpDownMarket:
-    market = await polymarket_up_down_store.get_market(market_id)
-    if market is None:
-        raise HTTPException(status_code=404, detail="Polymarket market not found")
-    return market
+@dataclass(frozen=True)
+class BtcUpDownMarketSubscribeMessage:
+    interval: str
+    market_id: str
 
 
 @router.get("/polymarket/account-state", response_model=PolymarketAccountState)
 async def account_state() -> PolymarketAccountState:
     return await polymarket_account_store.snapshot()
-
-
-@router.get("/polymarket/account-state/{condition_id}", response_model=PolymarketAccountState)
-async def account_state_for_market(condition_id: str) -> PolymarketAccountState:
-    return await polymarket_account_store.snapshot(condition_id)
 
 
 @router.post("/polymarket/account-state/refresh", response_model=PolymarketAccountState)
@@ -232,24 +202,53 @@ async def btc_up_down_websocket(
     current_interval = interval
     await polymarket_ws_hub.connect(websocket, current_interval)
     try:
-        await send_btc_up_down_snapshot(websocket, current_interval)
+        await send_btc_up_down_current_market_snapshot(websocket, current_interval)
+        await send_btc_up_down_markets_snapshot(websocket, current_interval)
         while True:
             raw_message = await websocket.receive_text()
             # 浏览器不能发 WebSocket 协议层 ping，这里提供应用层 ping/pong 供前端测后端回包 RTT。
             if await send_btc_up_down_pong(websocket, raw_message):
                 continue
+            market_subscription = parse_btc_up_down_market_subscribe_message(raw_message)
+            if market_subscription is not None:
+                previous_active_markets = await polymarket_ws_hub.active_market_ids()
+                market = await polymarket_up_down_store.get_market_in_interval(
+                    market_subscription.interval,
+                    market_subscription.market_id,
+                )
+                if market is None:
+                    logger.debug(
+                        "Ignoring stale Polymarket market subscription",
+                        extra={"interval": market_subscription.interval, "market_id": market_subscription.market_id},
+                    )
+                    continue
+                await polymarket_ws_hub.replace_market_subscription(
+                    websocket,
+                    market_subscription.interval,
+                    market_subscription.market_id,
+                )
+                current_interval = market_subscription.interval
+                await notify_polymarket_market_subscription_changed(previous_active_markets)
+                await send_btc_up_down_market_snapshot(websocket, market_subscription.interval, market)
+                continue
             next_interval = parse_btc_up_down_subscribe_message(raw_message)
             if next_interval is None:
                 continue
             if next_interval == current_interval:
-                await send_btc_up_down_snapshot(websocket, current_interval)
+                await send_btc_up_down_current_market_snapshot(websocket, current_interval)
+                await send_btc_up_down_markets_snapshot(websocket, current_interval)
                 continue
-            # 同一条 Polymarket WS 只订阅一个 market 周期，切换时替换注册并补发新周期快照。
-            await polymarket_ws_hub.replace_subscription(websocket, current_interval, next_interval)
+            previous_active_markets = await polymarket_ws_hub.active_market_ids()
+            # interval 切换只影响列表视图；单 market 盘口订阅由前端选中 market 后显式发起。
+            await polymarket_ws_hub.replace_interval_subscription(websocket, current_interval, next_interval)
             current_interval = next_interval
-            await send_btc_up_down_snapshot(websocket, current_interval)
+            await notify_polymarket_market_subscription_changed(previous_active_markets)
+            await send_btc_up_down_current_market_snapshot(websocket, current_interval)
+            await send_btc_up_down_markets_snapshot(websocket, current_interval)
     except WebSocketDisconnect:
+        previous_active_markets = await polymarket_ws_hub.active_market_ids()
         await polymarket_ws_hub.disconnect(websocket, current_interval)
+        await notify_polymarket_market_subscription_changed(previous_active_markets)
 
 
 def parse_btc_up_down_subscribe_message(raw_message: str) -> str | None:
@@ -261,6 +260,22 @@ def parse_btc_up_down_subscribe_message(raw_message: str) -> str | None:
         return None
     interval = payload.get("interval")
     return interval if isinstance(interval, str) and interval in POLYMARKET_BTC_UP_DOWN_INTERVALS else None
+
+
+def parse_btc_up_down_market_subscribe_message(raw_message: str) -> BtcUpDownMarketSubscribeMessage | None:
+    try:
+        payload = json.loads(raw_message)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "polymarket.btc_up_down.market.subscribe":
+        return None
+    interval = payload.get("interval")
+    market_id = payload.get("market_id")
+    if not isinstance(interval, str) or interval not in POLYMARKET_BTC_UP_DOWN_INTERVALS:
+        return None
+    if not isinstance(market_id, str) or not market_id.strip():
+        return None
+    return BtcUpDownMarketSubscribeMessage(interval=interval, market_id=market_id.strip())
 
 
 async def send_btc_up_down_pong(websocket: WebSocket, raw_message: str) -> bool:
@@ -279,15 +294,68 @@ async def send_btc_up_down_pong(websocket: WebSocket, raw_message: str) -> bool:
     return True
 
 
-async def send_btc_up_down_snapshot(websocket: WebSocket, interval: str) -> None:
-    markets = await polymarket_up_down_store.list_markets(interval, limit=12)
+async def send_btc_up_down_markets_snapshot(websocket: WebSocket, interval: str) -> None:
+    try:
+        markets = await ensure_btc_up_down_markets(interval)
+    except Exception as exc:
+        logger.warning("Failed to prepare Polymarket BTC up/down markets snapshot", exc_info=exc)
+        await send_btc_up_down_error(websocket, f"Polymarket 数据获取失败: {exc}")
+        return
     await websocket.send_json(
         {
-            "type": "polymarket.btc_up_down.snapshot",
+            "type": "polymarket.btc_up_down.markets.snapshot",
             "interval": interval,
             "markets": jsonable_encoder(markets),
         }
     )
+
+
+async def send_btc_up_down_snapshot(websocket: WebSocket, interval: str) -> None:
+    await send_btc_up_down_markets_snapshot(websocket, interval)
+
+
+async def send_btc_up_down_current_market_snapshot(websocket: WebSocket, interval: str) -> None:
+    # 当前 market 已由 monitor 基础订阅预热；先发它可以让前端切 interval 时不用等待完整列表。
+    market = await polymarket_up_down_store.current_market(interval)
+    if market is None:
+        return
+    await send_btc_up_down_market_snapshot(websocket, interval, market)
+
+
+async def send_btc_up_down_market_snapshot(websocket: WebSocket, interval: str, market: PolymarketUpDownMarket) -> None:
+    await websocket.send_json(
+        {
+            "type": "polymarket.btc_up_down.market.snapshot",
+            "interval": interval,
+            "market": jsonable_encoder(market),
+        }
+    )
+
+
+async def send_btc_up_down_error(websocket: WebSocket, message: str) -> None:
+    await websocket.send_json({"type": "polymarket.btc_up_down.error", "message": message})
+
+
+async def ensure_btc_up_down_markets(interval: str) -> list[PolymarketUpDownMarket]:
+    cached = await polymarket_up_down_store.list_markets(interval, limit=POLYMARKET_BTC_UP_DOWN_LIST_LIMIT)
+    if cached:
+        return cached
+    markets = await PolymarketClient().fetch_btc_up_down_markets(
+        interval=interval,
+        limit=POLYMARKET_BTC_UP_DOWN_LIST_LIMIT,
+        include_recent_closed=POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED,
+    )
+    await polymarket_up_down_store.replace_markets(interval, markets)
+    return await polymarket_up_down_store.list_markets(interval, limit=POLYMARKET_BTC_UP_DOWN_LIST_LIMIT)
+
+
+async def notify_polymarket_market_subscription_changed(previous_active_markets: set[str]) -> None:
+    if await polymarket_ws_hub.active_market_ids() == previous_active_markets:
+        return
+    # 前端只订阅单个 market，但上游 WS 订阅的是所有活跃 market 的 token 并集；变化时触发 monitor 重连。
+    from app.services.polymarket_monitor import polymarket_market_monitor
+
+    polymarket_market_monitor.notify_token_subscription_changed()
 
 
 @router.websocket("/ws/polymarket/account-state")

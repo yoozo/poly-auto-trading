@@ -5,12 +5,9 @@ from typing import Any
 import httpcore
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 from polymarket import TransportError
 
-from app.main import create_app
 from app.api import routes_polymarket
-from conftest import login_test_client
 from app.services.polymarket_client import (
     PolymarketClient,
     is_btc_up_down_event,
@@ -23,6 +20,7 @@ from app.services.polymarket_client import (
     sdk_profile_to_gamma_dict,
     sdk_series_to_gamma_events,
 )
+from app.services.polymarket_market_store import PolymarketUpDownStore
 
 
 class RecordingWebSocket:
@@ -53,6 +51,14 @@ def test_parse_btc_up_down_subscribe_message_rejects_invalid_payload() -> None:
     assert routes_polymarket.parse_btc_up_down_subscribe_message(
         '{"type":"polymarket.btc_up_down.subscribe","interval":"1m"}'
     ) is None
+
+
+def test_parse_btc_up_down_market_subscribe_message_accepts_market_id() -> None:
+    message = routes_polymarket.parse_btc_up_down_market_subscribe_message(
+        '{"type":"polymarket.btc_up_down.market.subscribe","interval":"5m","market_id":"market-1"}'
+    )
+
+    assert message == routes_polymarket.BtcUpDownMarketSubscribeMessage(interval="5m", market_id="market-1")
 
 
 @pytest.mark.asyncio
@@ -422,8 +428,12 @@ def test_sdk_profile_and_activity_adapters_keep_legacy_keys() -> None:
     assert activity["usdcSize"] == "0.48"
 
 
-def test_btc_up_down_endpoint(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_btc_up_down_ws_market_list_uses_fixed_fetch_options(monkeypatch) -> None:
+    calls: list[tuple[str, int, bool]] = []
+
     async def fake_fetch(self, interval, limit, include_recent_closed=True):
+        calls.append((interval, limit, include_recent_closed))
         now = datetime.now(timezone.utc)
         return [
             normalize_up_down_market(
@@ -439,17 +449,14 @@ def test_btc_up_down_endpoint(monkeypatch) -> None:
         ]
 
     monkeypatch.setattr(PolymarketClient, "fetch_btc_up_down_markets", fake_fetch)
+    monkeypatch.setattr(routes_polymarket, "polymarket_up_down_store", PolymarketUpDownStore())
 
-    app = create_app(enable_lifespan=False)
-    client = TestClient(app)
-    login_test_client(client)
-    response = client.get("/api/polymarket/btc-up-down?interval=15m&limit=2")
+    markets = await routes_polymarket.ensure_btc_up_down_markets("15m")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body[0]["window"] == "current"
-    assert body[0]["interval"] == "15m"
-    assert body[0]["outcome_quotes"][0]["name"] == "Up"
+    assert calls == [("15m", 12, True)]
+    assert markets[0].window == "current"
+    assert markets[0].interval == "15m"
+    assert markets[0].outcome_quotes[0].name == "Up"
 
 
 def make_event(slug: str, start_time: str, end_time: str) -> dict:

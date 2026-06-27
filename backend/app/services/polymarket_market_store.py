@@ -49,17 +49,49 @@ class PolymarketUpDownStore:
             return refreshed[:limit]
         return refreshed
 
-    async def get_market(self, market_id: str) -> PolymarketUpDownMarket | None:
+    async def get_market_in_interval(self, interval: str, market_id: str) -> PolymarketUpDownMarket | None:
+        async with self._lock:
+            markets = list(self._markets_by_interval.get(interval, []))
+        for market in markets:
+            if market.id == market_id:
+                return refresh_market_window(market)
+        return None
+
+    async def current_market(self, interval: str) -> PolymarketUpDownMarket | None:
+        async with self._lock:
+            markets = list(self._markets_by_interval.get(interval, []))
+        return first_market_by_window(markets, "current")
+
+    async def current_market_token_ids(self) -> list[str]:
+        async with self._lock:
+            interval_markets = {
+                interval: list(markets)
+                for interval, markets in self._markets_by_interval.items()
+            }
+        ids: list[str] = []
+        for markets in interval_markets.values():
+            current = first_market_by_window(markets, "current")
+            if current is None:
+                continue
+            ids.extend(token_ids_for_market(current))
+        return sorted(set(ids))
+
+    async def token_ids_for_market_ids(self, market_ids: set[str]) -> list[str]:
+        if not market_ids:
+            return []
         async with self._lock:
             markets = [
                 market
                 for interval_markets in self._markets_by_interval.values()
                 for market in interval_markets
             ]
-        for market in markets:
-            if market.id == market_id:
-                return refresh_market_window(market)
-        return None
+        ids = [
+            token_id
+            for market in markets
+            if market.id in market_ids
+            for token_id in token_ids_for_market(market)
+        ]
+        return sorted(set(ids))
 
     async def token_ids(self) -> list[str]:
         async with self._lock:
@@ -248,6 +280,21 @@ def refresh_market_window(market: PolymarketUpDownMarket) -> PolymarketUpDownMar
         seconds_to_start=seconds_between(now, market.start_time),
         seconds_to_end=seconds_between(now, market.end_time),
     )
+
+
+def first_market_by_window(markets: list[PolymarketUpDownMarket], window: str) -> PolymarketUpDownMarket | None:
+    for market in markets:
+        if refresh_market_window(market).window == window:
+            return market
+    return None
+
+
+def token_ids_for_market(market: PolymarketUpDownMarket) -> list[str]:
+    return [
+        quote.token_id
+        for quote in market.outcome_quotes
+        if quote.token_id
+    ]
 
 
 def update_quote_level(

@@ -562,31 +562,6 @@ async def test_balance_allowance_uses_l2_credentials_without_signing_key(monkeyp
     assert balance.allowance == 999
 
 
-def test_account_state_endpoint_returns_filtered_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = PolymarketAccountStore()
-
-    async def fake_snapshot(condition_id: str | None = None):
-        await store.replace_positions([make_position("0xabc", "up-token")])
-        await store.replace_orders([make_order("order-1", "0xabc", "up-token")])
-        return await store.snapshot(condition_id)
-
-    monkeypatch.setattr(polymarket_account_monitor.polymarket_account_store, "snapshot", fake_snapshot)
-    import app.api.routes_polymarket as routes_polymarket
-
-    monkeypatch.setattr(routes_polymarket.polymarket_account_store, "snapshot", fake_snapshot)
-
-    app = create_app(enable_lifespan=False)
-    client = TestClient(app)
-    login_test_client(client)
-    response = client.get("/api/polymarket/account-state/0xabc")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["condition_id"] == "0xabc"
-    assert body["positions"][0]["asset"] == "up-token"
-    assert body["orders"][0]["id"] == "order-1"
-
-
 def test_cancel_order_endpoint_cancels_order(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     suppressed: list[list[str]] = []
