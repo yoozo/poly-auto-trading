@@ -392,15 +392,18 @@ export type PolymarketWsMessage =
   | {
       type: "polymarket.btc_up_down.markets.snapshot";
       interval: PolymarketInterval;
+      request_id?: string;
       markets: PolymarketUpDownMarket[];
     }
   | {
       type: "polymarket.btc_up_down.market.snapshot";
       interval: PolymarketInterval;
+      request_id?: string;
       market: PolymarketUpDownMarket;
     }
   | {
       type: "polymarket.btc_up_down.error";
+      request_id?: string;
       message: string;
     };
 

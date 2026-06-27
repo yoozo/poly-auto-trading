@@ -6,6 +6,7 @@ import {
   type MarketWsMessage,
   type PolymarketInterval,
   type PolymarketUpDownMarket,
+  type PolymarketWsMessage,
 } from "../api/client";
 
 type PerformanceMetricKey = "ws_handshake" | "ws_ping" | "candles" | "polymarket";
@@ -269,22 +270,85 @@ function measureMarketCandles(socket: WebSocket): Promise<Partial<PerformanceMet
 
 async function measurePolymarketOrderbook(interval: PolymarketInterval): Promise<Partial<PerformanceMetricResult>> {
   let socket: WebSocket | null = null;
-  const start = performance.now();
+  const connectStart = performance.now();
   try {
     socket = new WebSocket(api.polymarketBtcUpDownWsUrl(interval));
-    return await waitForPolymarketMarketsSnapshot(socket, start);
+    const openResult = await waitForSocketOpen(socket, connectStart);
+    if (openResult.status === "error") return metricError(connectStart, openResult.error || "盘口 WS 握手失败");
+    const marketId = await waitForPolymarketInitialMarketId(socket);
+    // 性能值只统计“已连接后主动订阅单个盘口 -> 对应 snapshot 回包”的耗时。
+    return await measurePolymarketMarketSubscribe(socket, interval, marketId);
   } catch (error) {
-    return metricError(start, errorMessage(error));
+    return metricError(connectStart, errorMessage(error));
   } finally {
     socket?.close();
   }
 }
 
-function waitForPolymarketMarketsSnapshot(socket: WebSocket, start: number): Promise<Partial<PerformanceMetricResult>> {
+function waitForPolymarketInitialMarketId(socket: WebSocket): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      rejectWithMessage("盘口列表超时");
+    }, 8_000);
+    const rejectWithMessage = (message: string) => reject(new Error(message));
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      socket.removeEventListener("message", onMessage);
+      socket.removeEventListener("error", onError);
+      socket.removeEventListener("close", onClose);
+    };
+    const onError = () => {
+      cleanup();
+      rejectWithMessage("盘口 WS 失败");
+    };
+    const onClose = () => {
+      cleanup();
+      rejectWithMessage("盘口 WS 已关闭");
+    };
+    const onMessage = (event: MessageEvent<string>) => {
+      const message = parsePolymarketWsMessage(event.data);
+      if (!message) return;
+      if (message.type === "polymarket.btc_up_down.error") {
+        cleanup();
+        rejectWithMessage(message.message || "盘口列表失败");
+        return;
+      }
+      if (message.type === "polymarket.btc_up_down.market.snapshot") {
+        cleanup();
+        resolve(message.market.id);
+        return;
+      }
+      const market = message.markets.find((item) => item.id);
+      if (!market) return;
+      cleanup();
+      resolve(market.id);
+    };
+    socket.addEventListener("message", onMessage);
+    socket.addEventListener("error", onError);
+    socket.addEventListener("close", onClose);
+  });
+}
+
+function measurePolymarketMarketSubscribe(
+  socket: WebSocket,
+  interval: PolymarketInterval,
+  marketId: string,
+): Promise<Partial<PerformanceMetricResult>> {
+  const requestId = `polymarket-market:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const start = performance.now();
+  socket.send(
+    JSON.stringify({
+      type: "polymarket.btc_up_down.market.subscribe",
+      interval,
+      market_id: marketId,
+      request_id: requestId,
+    }),
+  );
   return new Promise((resolve) => {
     const timeout = window.setTimeout(() => {
       cleanup();
-      resolve(metricError(start, "盘口超时"));
+      resolve(metricError(start, "盘口订阅超时"));
     }, 8_000);
     const cleanup = () => {
       window.clearTimeout(timeout);
@@ -294,7 +358,7 @@ function waitForPolymarketMarketsSnapshot(socket: WebSocket, start: number): Pro
     };
     const onError = () => {
       cleanup();
-      resolve(metricError(start, "盘口 WS 失败"));
+      resolve(metricError(start, "盘口订阅失败"));
     };
     const onClose = () => {
       cleanup();
@@ -302,13 +366,17 @@ function waitForPolymarketMarketsSnapshot(socket: WebSocket, start: number): Pro
     };
     const onMessage = (event: MessageEvent<string>) => {
       const message = parsePolymarketWsMessage(event.data);
-      if (!message) return;
+      if (!message || message.request_id !== requestId) return;
       cleanup();
       if (message.type === "polymarket.btc_up_down.error") {
-        resolve(metricError(start, message.message || "盘口失败"));
+        resolve(metricError(start, message.message || "盘口订阅失败"));
         return;
       }
-      resolve(metricOk(start, `${message.markets.length} 市场 / ${countPolymarketQuotes(message.markets)} 报价`));
+      if (message.type === "polymarket.btc_up_down.markets.snapshot") {
+        resolve(metricOk(start, `${message.markets.length} 市场 / ${countPolymarketQuotes(message.markets)} 报价`));
+        return;
+      }
+      resolve(metricOk(start, `${message.market.outcome_quotes.length} 报价`));
     };
     socket.addEventListener("message", onMessage);
     socket.addEventListener("error", onError);
@@ -338,20 +406,11 @@ function parseMarketWsMessage(raw: string): MarketWsMessage | null {
   return null;
 }
 
-type PolymarketMarketsSnapshotMessage =
-  | {
-      type: "polymarket.btc_up_down.markets.snapshot";
-      markets: PolymarketUpDownMarket[];
-    }
-  | {
-      type: "polymarket.btc_up_down.error";
-      message: string;
-    };
-
-function parsePolymarketWsMessage(raw: string): PolymarketMarketsSnapshotMessage | null {
+function parsePolymarketWsMessage(raw: string): PolymarketWsMessage | null {
   try {
-    const payload = JSON.parse(raw) as PolymarketMarketsSnapshotMessage;
+    const payload = JSON.parse(raw) as PolymarketWsMessage;
     if (payload?.type === "polymarket.btc_up_down.markets.snapshot" && Array.isArray(payload.markets)) return payload;
+    if (payload?.type === "polymarket.btc_up_down.market.snapshot" && payload.market) return payload;
     if (payload?.type === "polymarket.btc_up_down.error") return payload;
   } catch {
     return null;

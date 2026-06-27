@@ -49,6 +49,7 @@ POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED = True
 class BtcUpDownMarketSubscribeMessage:
     interval: str
     market_id: str
+    request_id: str | None = None
 
 
 @router.get("/polymarket/account-state", response_model=PolymarketAccountState)
@@ -229,7 +230,12 @@ async def btc_up_down_websocket(
                 )
                 current_interval = market_subscription.interval
                 await notify_polymarket_market_subscription_changed(previous_active_markets)
-                await send_btc_up_down_market_snapshot(websocket, market_subscription.interval, market)
+                await send_btc_up_down_market_snapshot(
+                    websocket,
+                    market_subscription.interval,
+                    market,
+                    request_id=market_subscription.request_id,
+                )
                 continue
             next_interval = parse_btc_up_down_subscribe_message(raw_message)
             if next_interval is None:
@@ -271,11 +277,16 @@ def parse_btc_up_down_market_subscribe_message(raw_message: str) -> BtcUpDownMar
         return None
     interval = payload.get("interval")
     market_id = payload.get("market_id")
+    request_id = payload.get("request_id")
     if not isinstance(interval, str) or interval not in POLYMARKET_BTC_UP_DOWN_INTERVALS:
         return None
     if not isinstance(market_id, str) or not market_id.strip():
         return None
-    return BtcUpDownMarketSubscribeMessage(interval=interval, market_id=market_id.strip())
+    return BtcUpDownMarketSubscribeMessage(
+        interval=interval,
+        market_id=market_id.strip(),
+        request_id=request_id if isinstance(request_id, str) and request_id else None,
+    )
 
 
 async def send_btc_up_down_pong(websocket: WebSocket, raw_message: str) -> bool:
@@ -322,14 +333,21 @@ async def send_btc_up_down_current_market_snapshot(websocket: WebSocket, interva
     await send_btc_up_down_market_snapshot(websocket, interval, market)
 
 
-async def send_btc_up_down_market_snapshot(websocket: WebSocket, interval: str, market: PolymarketUpDownMarket) -> None:
-    await websocket.send_json(
-        {
-            "type": "polymarket.btc_up_down.market.snapshot",
-            "interval": interval,
-            "market": jsonable_encoder(market),
-        }
-    )
+async def send_btc_up_down_market_snapshot(
+    websocket: WebSocket,
+    interval: str,
+    market: PolymarketUpDownMarket,
+    *,
+    request_id: str | None = None,
+) -> None:
+    payload = {
+        "type": "polymarket.btc_up_down.market.snapshot",
+        "interval": interval,
+        "market": jsonable_encoder(market),
+    }
+    if request_id:
+        payload["request_id"] = request_id
+    await websocket.send_json(payload)
 
 
 async def send_btc_up_down_error(websocket: WebSocket, message: str) -> None:

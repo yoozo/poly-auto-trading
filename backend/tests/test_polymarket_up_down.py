@@ -61,6 +61,18 @@ def test_parse_btc_up_down_market_subscribe_message_accepts_market_id() -> None:
     assert message == routes_polymarket.BtcUpDownMarketSubscribeMessage(interval="5m", market_id="market-1")
 
 
+def test_parse_btc_up_down_market_subscribe_message_accepts_request_id() -> None:
+    message = routes_polymarket.parse_btc_up_down_market_subscribe_message(
+        '{"type":"polymarket.btc_up_down.market.subscribe","interval":"5m","market_id":"market-1","request_id":"perf-1"}'
+    )
+
+    assert message == routes_polymarket.BtcUpDownMarketSubscribeMessage(
+        interval="5m",
+        market_id="market-1",
+        request_id="perf-1",
+    )
+
+
 @pytest.mark.asyncio
 async def test_send_btc_up_down_pong_echoes_request_id() -> None:
     websocket = RecordingWebSocket()
