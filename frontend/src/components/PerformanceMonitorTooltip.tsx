@@ -105,7 +105,13 @@ export function PerformanceMonitorTooltip() {
 
   return (
     <Tooltip placement="bottomLeft" mouseEnterDelay={0.2} title={<PerformanceTooltipContent results={results} running={running} />}>
-      <button className={`performance-tooltip-trigger performance-tooltip-trigger-${status}`} type="button" aria-label="性能检测结果">
+      <button
+        className={`performance-tooltip-trigger performance-tooltip-trigger-${status}`}
+        type="button"
+        aria-label="重新检测性能"
+        title={running ? "检测中" : "重新检测"}
+        onClick={() => void runTest()}
+      >
         <span className="performance-tooltip-dot" />
       </button>
     </Tooltip>

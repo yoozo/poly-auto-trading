@@ -33,7 +33,6 @@ import { INDICATOR_WARMUP_BARS, calculateIndicatorPoints } from "../components/m
 import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletConnection";
 import {
-  candleAtOpenTime,
   hasCandleAtTime,
   marketChartFocusKey,
   marketComparisonTarget,
@@ -150,6 +149,7 @@ export default function BTCWatchPage() {
   const marketCandlesRequestSeqRef = useRef(0);
   const pendingMarketCandlesRef = useRef<Map<string, PendingMarketCandlesRequest>>(new Map());
   const marketSocketOpenWaitersRef = useRef<MarketSocketOpenWaiter[]>([]);
+  const activeCandlesRef = useRef<MarketCandle[]>([]);
   const activePolymarketIntervalRef = useRef<PolymarketInterval>(polymarketInterval);
   const polymarketSocketRef = useRef<WebSocket | null>(null);
   const polymarketSocketSubscribedIntervalRef = useRef<PolymarketInterval | null>(null);
@@ -182,6 +182,9 @@ export default function BTCWatchPage() {
   });
 
   const activeCandles = useMemo(() => candles.filter((candle) => candle.interval === interval), [candles, interval]);
+  useEffect(() => {
+    activeCandlesRef.current = activeCandles;
+  }, [activeCandles]);
   const activeIndicators = useMemo(
     () => calculateIndicatorPoints(activeCandles, interval),
     [activeCandles, interval]
@@ -455,6 +458,22 @@ export default function BTCWatchPage() {
       };
     }
     const { baselineStartMs, marketId, marketInterval } = comparisonTarget;
+    const cachedCandle = activeIntervalRef.current === "1m"
+      ? previousOneMinuteCandle(mergeCandles(activeCandlesRef.current, pendingLiveCandlesRef.current), baselineStartMs)
+      : null;
+    if (cachedCandle && Number.isFinite(cachedCandle.close)) {
+      const nextLine = marketComparisonLine({
+        marketId,
+        startMs: baselineStartMs,
+        price: cachedCandle.close,
+        interval: marketInterval,
+      });
+      comparisonLineCacheRef.current.set(comparisonKey, nextLine);
+      setComparisonLine(nextLine);
+      return () => {
+        cancelled = true;
+      };
+    }
     if (comparisonRequestKeyRef.current === comparisonKey) {
       return () => {
         cancelled = true;
@@ -463,18 +482,19 @@ export default function BTCWatchPage() {
     comparisonRequestKeyRef.current = comparisonKey;
     setComparisonLine(null);
 
-    // Polymarket 展示窗口可能和 API 的 eventStartTime 有几分钟偏移；基准线统一取派生窗口起点的 1m K open。
+    // 基准价取 Polymarket 窗口开始前上一根 1m K 的 close；窗口刚开始时这根 K 已闭合，可避免首分钟空档。
     void (async () => {
       try {
+        const previousOpenMs = Math.max(0, baselineStartMs - ONE_MINUTE_MS);
         const rows = await requestMarketCandles({
           interval: "1m",
-          startMs: Math.max(0, baselineStartMs),
-          endMs: baselineStartMs + 5 * ONE_MINUTE_MS,
-          limit: 6,
+          startMs: previousOpenMs,
+          endMs: baselineStartMs,
+          limit: 2,
         });
         if (cancelled || activeComparisonKeyRef.current !== comparisonKey) return;
-        const targetCandle = candleAtOpenTime(rows, baselineStartMs);
-        if (!targetCandle || !Number.isFinite(targetCandle.open)) {
+        const targetCandle = previousOneMinuteCandle(rows, baselineStartMs);
+        if (!targetCandle || !Number.isFinite(targetCandle.close)) {
           if (comparisonRequestKeyRef.current === comparisonKey) {
             comparisonRequestKeyRef.current = null;
           }
@@ -485,7 +505,7 @@ export default function BTCWatchPage() {
         const nextLine = marketComparisonLine({
           marketId,
           startMs: baselineStartMs,
-          price: targetCandle.open,
+          price: targetCandle.close,
           interval: marketInterval,
         });
         comparisonLineCacheRef.current.set(comparisonKey, nextLine);
@@ -524,7 +544,7 @@ export default function BTCWatchPage() {
 
   function scheduleComparisonRetry(comparisonKey: string) {
     clearComparisonRetryTimer();
-    // 1m 起点 candle 可能刚生成或接口短暂失败；只重试请求，不放宽精确 open_time 规则。
+    // 上一根 1m candle 偶尔会因 WS/DB 同步短暂缺失；只重试请求，不放宽精确时间匹配规则。
     comparisonRetryTimerRef.current = window.setTimeout(() => {
       comparisonRetryTimerRef.current = null;
       if (activeComparisonKeyRef.current === comparisonKey && !comparisonLineCacheRef.current.has(comparisonKey)) {
@@ -2004,6 +2024,16 @@ function marketComparisonLine({
     title: interval,
     color: "#f59e0b",
   };
+}
+
+function previousOneMinuteCandle(rows: MarketCandle[], baselineStartMs: number) {
+  const previousOpenMs = baselineStartMs - ONE_MINUTE_MS;
+  return (
+    rows.find((row) => {
+      const openMs = new Date(row.open_time).getTime();
+      return Number.isFinite(openMs) && openMs === previousOpenMs;
+    }) ?? null
+  );
 }
 
 function formatProbability(value: number | null) {

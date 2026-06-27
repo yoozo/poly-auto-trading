@@ -92,7 +92,14 @@ body[data-theme="dark"] {
   border-radius: 999px;
   background: rgb(255 255 255 / 78%);
   box-shadow: 0 2px 8px rgb(15 23 42 / 10%);
-  cursor: default;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.performance-tooltip-trigger:hover {
+  border-color: #1677ff;
+  box-shadow: 0 4px 14px rgb(15 23 42 / 16%);
+  transform: translateY(-1px);
 }
 
 .performance-tooltip-dot {
