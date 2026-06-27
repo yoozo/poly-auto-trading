@@ -1495,6 +1495,8 @@ function PolymarketOrderEntry({
   const inputLabel = orderMode === "MARKET" && side === "BUY" ? "Amount" : "Shares";
   const inputSuffix = orderMode === "MARKET" && side === "BUY" ? "USDC" : "shares";
   const maxInput = side === "SELL" ? selectedPositionSize : undefined;
+  const canSubmitForMarket = market.accepting_orders || (closeOnly && side === "SELL");
+  const marketStatusText = market.accepting_orders ? "当前 market 可交易" : closeOnly ? "close-only 可卖出" : "暂停接单";
   const sideOptions = closeOnly
     ? [{ label: "Sell", value: "SELL" }]
     : [
@@ -1503,7 +1505,7 @@ function PolymarketOrderEntry({
       ];
   const canSubmit = Boolean(
     activeCredential &&
-      market.accepting_orders &&
+      canSubmitForMarket &&
       selectedQuote?.token_id &&
       amount &&
       amount >= 1 &&
@@ -1540,7 +1542,7 @@ function PolymarketOrderEntry({
       onNotice("warning", "无法下单", "请先点击右上角账户区域连接 MetaMask，并启用匹配的 wallet profile");
       return;
     }
-    if (!market.accepting_orders) {
+    if (!canSubmitForMarket) {
       onNotice("warning", "无法下单", "当前 market 暂停接单");
       return;
     }
@@ -1641,7 +1643,7 @@ function PolymarketOrderEntry({
         <div className="polymarket-order-entry-head">
           <div>
             <span>交易</span>
-            <small>{market.accepting_orders ? "当前 market 可交易" : "暂停接单"}</small>
+            <small>{marketStatusText}</small>
           </div>
           <strong>{selectedOutcome} {formatCents(marketPrice)}</strong>
         </div>
