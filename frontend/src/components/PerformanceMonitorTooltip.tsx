@@ -19,6 +19,8 @@ type PerformanceMetricResult = {
   error: string;
 };
 
+type PerformanceLatencyTone = "default" | "processing" | "success" | "warning" | "error";
+
 const PERFORMANCE_INTERVAL: PolymarketInterval = "5m";
 const DETECT_INTERVAL_MS = 60_000;
 export const PERFORMANCE_MONITOR_ENABLED_KEY = "poly-auto.performanceMonitorEnabled";
@@ -40,9 +42,8 @@ export function PerformanceMonitorTooltip() {
 
   const status = useMemo(() => {
     if (running) return "processing";
-    if (results.some((result) => result.status === "error")) return "error";
-    if (results.every((result) => result.status === "ok")) return "success";
-    return "default";
+    const pingResult = results.find((result) => result.key === "ws_ping");
+    return pingLatencyTone(pingResult);
   }, [results, running]);
 
   const updateResult = useCallback((key: PerformanceMetricKey, patch: Partial<PerformanceMetricResult>) => {
@@ -138,7 +139,9 @@ function PerformanceTooltipContent({ results, running }: { results: PerformanceM
         {results.map((result) => (
           <div className="performance-tooltip-row" key={result.key}>
             <span>{result.title}</span>
-            <strong>{formatLatencyValue(result.latencyMs)}ms</strong>
+            <strong className={result.key === "ws_ping" ? `performance-tooltip-latency-${pingLatencyTone(result)}` : undefined}>
+              {formatLatencyValue(result.latencyMs)}ms
+            </strong>
             {result.error ? <em>{result.error}</em> : <em>{result.meta}</em>}
           </div>
         ))}
@@ -296,6 +299,16 @@ function metricOk(start: number, meta: string): Partial<PerformanceMetricResult>
 
 function metricError(start: number, error: string): Partial<PerformanceMetricResult> {
   return { latencyMs: performance.now() - start, status: "error", meta: "", error };
+}
+
+function pingLatencyTone(result?: PerformanceMetricResult): PerformanceLatencyTone {
+  if (!result || result.status === "idle") return "default";
+  if (result.status === "running") return "processing";
+  if (result.status === "error") return "error";
+  if (result.latencyMs === null) return "default";
+  if (result.latencyMs < 300) return "success";
+  if (result.latencyMs < 1000) return "warning";
+  return "error";
 }
 
 function countPolymarketQuotes(markets: PolymarketUpDownMarket[]) {

@@ -113,6 +113,10 @@ body[data-theme="dark"] {
   background: #52c41a;
 }
 
+.performance-tooltip-trigger-warning .performance-tooltip-dot {
+  background: #faad14;
+}
+
 .performance-tooltip-trigger-processing .performance-tooltip-dot {
   background: #1677ff;
 }
@@ -154,6 +158,26 @@ body[data-theme="dark"] {
   color: #fff;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+.performance-tooltip-row .performance-tooltip-latency-success {
+  color: #95de64;
+}
+
+.performance-tooltip-row .performance-tooltip-latency-warning {
+  color: #ffd666;
+}
+
+.performance-tooltip-row .performance-tooltip-latency-error {
+  color: #ff7875;
+}
+
+.performance-tooltip-row .performance-tooltip-latency-processing {
+  color: #69b1ff;
+}
+
+.performance-tooltip-row .performance-tooltip-latency-default {
+  color: rgb(255 255 255 / 76%);
 }
 
 .performance-tooltip-row em {
