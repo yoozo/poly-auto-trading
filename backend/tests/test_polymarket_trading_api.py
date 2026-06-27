@@ -242,6 +242,230 @@ def test_post_signed_order_http_error_does_not_echo_response_body(monkeypatch: p
     assert "api-secret" not in detail
 
 
+def test_post_signed_order_http_error_drops_sensitive_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_credentials = RuntimePolymarketCredentials(
+        source="db",
+        credential_id="profile-1",
+        signer_address=SIGNER,
+        funder_address=FUNDER,
+        signature_type=3,
+        api_key="api-key-owner",
+        api_secret="api-secret",
+        api_passphrase="api-pass",
+    )
+
+    async def fake_resolve_runtime_credentials() -> RuntimePolymarketCredentials:
+        return runtime_credentials
+
+    async def fake_post_signed_order(self, **kwargs):  # noqa: ANN001
+        request = httpx.Request("POST", "https://clob.polymarket.com/order")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"error": "invalid signature 0xsensitive-signature api_secret=api-secret"},
+        )
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    async def fake_fetch_trading_restriction(self):  # noqa: ANN001
+        return PolymarketTradingRestriction(blocked=False, close_only=False, country="HK")
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket, "resolve_runtime_credentials", fake_resolve_runtime_credentials)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "post_signed_order", fake_post_signed_order)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "fetch_trading_restriction", fake_fetch_trading_restriction)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post(
+        "/api/polymarket/orders/signed",
+        json={
+            "signed_order": make_signed_order(side="BUY", maker_amount="500000", taker_amount="1000000"),
+            "token_id": "token-1",
+            "side": "BUY",
+            "price": 0.5,
+            "size": 1,
+        },
+    )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == "Polymarket 下单提交失败: HTTP 400 Bad Request"
+    assert "0xsensitive-signature" not in detail
+    assert "api-secret" not in detail
+
+
+def test_post_signed_order_region_restricted_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_credentials = RuntimePolymarketCredentials(
+        source="db",
+        credential_id="profile-1",
+        signer_address=SIGNER,
+        funder_address=FUNDER,
+        signature_type=3,
+        api_key="api-key-owner",
+        api_secret="api-secret",
+        api_passphrase="api-pass",
+    )
+    asyncio.run(
+        polymarket_account_store.replace_positions(
+            [
+                PolymarketAccountPosition(
+                    condition_id="condition-1",
+                    asset="token-1",
+                    title=None,
+                    slug=None,
+                    event_slug=None,
+                    outcome="Up",
+                    size=1,
+                    avg_price=None,
+                    cur_price=None,
+                    current_value=None,
+                    cash_pnl=None,
+                    percent_pnl=None,
+                    redeemable=False,
+                    mergeable=False,
+                    end_date=None,
+                    raw={},
+                )
+            ]
+        )
+    )
+
+    async def fake_resolve_runtime_credentials() -> RuntimePolymarketCredentials:
+        return runtime_credentials
+
+    async def fake_post_signed_order(self, **kwargs):  # noqa: ANN001
+        request = httpx.Request("POST", "https://clob.polymarket.com/order")
+        response = httpx.Response(
+            403,
+            request=request,
+            json={
+                "error": "Trading restricted in your region, please refer to available regions - https://docs.polymarket.com/developers/CLOB/geoblock",
+                "api_secret": "api-secret",
+            },
+        )
+        raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+
+    async def fake_fetch_trading_restriction(self):  # noqa: ANN001
+        return PolymarketTradingRestriction(blocked=True, close_only=True, country="SG")
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket, "resolve_runtime_credentials", fake_resolve_runtime_credentials)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "post_signed_order", fake_post_signed_order)
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "fetch_trading_restriction", fake_fetch_trading_restriction)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post(
+        "/api/polymarket/orders/signed",
+        json={
+            "signed_order": make_signed_order(side="SELL", maker_amount="1000000", taker_amount="500000"),
+            "token_id": "token-1",
+            "side": "SELL",
+            "price": 0.5,
+            "size": 1,
+        },
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert "Trading restricted in your region" in detail
+    assert "api-secret" not in detail
+
+
+def test_cancel_order_region_restricted_returns_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_cancel_order(self, order_id: str):  # noqa: ANN001
+        request = httpx.Request("DELETE", "https://clob.polymarket.com/order")
+        response = httpx.Response(
+            403,
+            request=request,
+            json={
+                "error": "Trading restricted in your region, please refer to available regions - https://docs.polymarket.com/developers/CLOB/geoblock",
+                "api_secret": "api-secret",
+            },
+        )
+        raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "cancel_order", fake_cancel_order)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post("/api/polymarket/orders/0xorder/cancel")
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail.startswith("Polymarket 撤单失败: HTTP 403 Forbidden")
+    assert "Trading restricted in your region" in detail
+    assert "api-secret" not in detail
+
+
+def test_cancel_order_http_error_does_not_echo_response_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_cancel_order(self, order_id: str):  # noqa: ANN001
+        request = httpx.Request("DELETE", "https://clob.polymarket.com/order")
+        response = httpx.Response(
+            404,
+            request=request,
+            json={
+                "error": "order not found",
+                "signature": "0xsensitive-signature",
+                "api_secret": "api-secret",
+            },
+        )
+        raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "cancel_order", fake_cancel_order)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post("/api/polymarket/orders/0xorder/cancel")
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == "Polymarket 撤单失败: HTTP 404 Not Found: order not found"
+    assert "0xsensitive-signature" not in detail
+    assert "api-secret" not in detail
+
+
+def test_cancel_order_http_error_drops_sensitive_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_cancel_order(self, order_id: str):  # noqa: ANN001
+        request = httpx.Request("DELETE", "https://clob.polymarket.com/order")
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"message": "cancel rejected: signature 0xsensitive-signature api_secret=api-secret"},
+        )
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    import app.api.routes_polymarket as routes_polymarket
+
+    monkeypatch.setattr(routes_polymarket.PolymarketClient, "cancel_order", fake_cancel_order)
+
+    app = create_app(enable_lifespan=False)
+    client = TestClient(app)
+    login_test_client(client)
+
+    response = client.post("/api/polymarket/orders/0xorder/cancel")
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == "Polymarket 撤单失败: HTTP 400 Bad Request"
+    assert "0xsensitive-signature" not in detail
+    assert "api-secret" not in detail
+
+
 def test_post_signed_order_rejects_close_only_buy(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_credentials = RuntimePolymarketCredentials(
         source="db",

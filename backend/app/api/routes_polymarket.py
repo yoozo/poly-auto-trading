@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -43,6 +44,10 @@ logger = logging.getLogger(__name__)
 POLYMARKET_BTC_UP_DOWN_INTERVALS = {"5m", "15m", "1h", "4h"}
 POLYMARKET_BTC_UP_DOWN_LIST_LIMIT = 12
 POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED = True
+SENSITIVE_ERROR_MESSAGE_PATTERN = re.compile(
+    r"(api[_ -]?(?:secret|passphrase|key)|secret|passphrase|private[_ -]?key|seed[_ -]?phrase|signature|signed[_ -]?order)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -152,9 +157,13 @@ async def cancel_polymarket_order(order_id: str) -> PolymarketCancelOrderRespons
         )
     except PolymarketInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        http_exc = polymarket_order_http_exception("Polymarket 撤单失败", exc)
+        logger.warning("Failed to cancel Polymarket order: %s", http_exc.detail, extra={"order_id": order_id}, exc_info=exc)
+        raise http_exc from exc
     except Exception as exc:
         logger.warning("Failed to cancel Polymarket order", extra={"order_id": order_id}, exc_info=exc)
-        raise HTTPException(status_code=502, detail=f"Polymarket 撤单失败: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Polymarket 撤单失败: {type(exc).__name__}") from exc
 
 
 @router.post("/polymarket/orders/signed", response_model=PolymarketSignedOrderResponse)
@@ -185,9 +194,9 @@ async def post_signed_polymarket_order(
     except PolymarketInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPStatusError as exc:
-        detail = polymarket_http_error_detail("Polymarket 下单提交失败", exc)
-        logger.warning("Failed to post signed Polymarket order: %s", detail, exc_info=exc)
-        raise HTTPException(status_code=502, detail=detail) from exc
+        http_exc = polymarket_order_http_exception("Polymarket 下单提交失败", exc)
+        logger.warning("Failed to post signed Polymarket order: %s", http_exc.detail, exc_info=exc)
+        raise http_exc from exc
     except Exception as exc:
         logger.warning("Failed to post signed Polymarket order", exc_info=exc)
         raise HTTPException(status_code=502, detail=f"Polymarket 下单提交失败: {type(exc).__name__}") from exc
@@ -512,6 +521,19 @@ def polymarket_http_error_detail(prefix: str, exc: httpx.HTTPStatusError) -> str
     return f"{prefix}: {suffix}"
 
 
+def polymarket_order_http_exception(prefix: str, exc: httpx.HTTPStatusError) -> HTTPException:
+    # CLOB 错误响应可能含敏感字段；只暴露白名单 message，并保留明确的 HTTP 语义。
+    status_code = 403 if is_polymarket_region_restricted_error(exc) else 502
+    return HTTPException(status_code=status_code, detail=polymarket_http_error_detail(prefix, exc))
+
+
+def is_polymarket_region_restricted_error(exc: httpx.HTTPStatusError) -> bool:
+    if exc.response.status_code != 403:
+        return False
+    message = polymarket_safe_error_message(exc.response)
+    return bool(message and "trading restricted" in message.lower())
+
+
 def polymarket_safe_error_message(response: httpx.Response) -> str | None:
     try:
         payload = response.json()
@@ -524,5 +546,7 @@ def polymarket_safe_error_message(response: httpx.Response) -> str | None:
         return None
     message = " ".join(raw_message.split())
     if not message:
+        return None
+    if SENSITIVE_ERROR_MESSAGE_PATTERN.search(message):
         return None
     return message[:240]
