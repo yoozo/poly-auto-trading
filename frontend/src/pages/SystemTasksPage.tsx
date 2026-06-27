@@ -13,7 +13,7 @@ export default function SystemTasksPage() {
   const tasks = useQuery({
     queryKey: ["system-tasks"],
     queryFn: api.systemTasks,
-    refetchInterval: (query) => (query.state.data?.some((task) => task.status === "running") ? 3000 : 10000)
+    refetchInterval: 15000
   });
   const startTask = useMutation({
     mutationFn: api.startSystemTask,
@@ -21,6 +21,7 @@ export default function SystemTasksPage() {
       message.success(`${taskTypeLabel(task.task_type)}任务已提交`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["system-tasks"] }),
+        queryClient.invalidateQueries({ queryKey: ["system-task"] }),
         queryClient.invalidateQueries({ queryKey: ["services"] }),
         queryClient.invalidateQueries({ queryKey: ["service-events"] })
       ]);
@@ -64,7 +65,7 @@ export default function SystemTasksPage() {
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无系统任务" /> }}
           expandable={{
             expandedRowRender: (record) => <TaskStepsTable task={record} />,
-            rowExpandable: (record) => record.steps.length > 0
+            rowExpandable: (record) => Boolean(record.id && record.step_count > 0)
           }}
           columns={[
             {
@@ -95,7 +96,7 @@ export default function SystemTasksPage() {
             },
             {
               title: "Raw",
-              render: (_, record) => record.steps.reduce((sum, step) => sum + step.raw_count, 0).toLocaleString()
+              render: (_, record) => record.raw_count.toLocaleString()
             },
             {
               title: "开始",
@@ -120,12 +121,22 @@ export default function SystemTasksPage() {
 }
 
 function TaskStepsTable({ task }: { task: SystemTaskStatus }) {
+  const detail = useQuery({
+    queryKey: ["system-task", task.id],
+    queryFn: () => api.systemTask(task.id as number),
+    enabled: task.id !== null,
+    refetchInterval: 15000,
+    initialData: task.steps.length > 0 ? task : undefined
+  });
+  const detailTask = detail.data ?? task;
+
   return (
     <Table<SystemTaskStepStatus>
       rowKey="id"
       size="small"
+      loading={detail.isFetching}
       pagination={{ pageSize: 20, showSizeChanger: true }}
-      dataSource={task.steps}
+      dataSource={detailTask.steps}
       columns={[
         {
           title: "周期",
@@ -179,7 +190,10 @@ function taskTypeLabel(value: SystemTaskType) {
 }
 
 function currentStepLabel(task: SystemTaskStatus) {
-  const step = task.steps.find((item) => item.status === "running") ?? task.steps.find((item) => item.status === "pending" || item.status === "error");
+  const step =
+    task.current_step ??
+    task.steps.find((item) => item.status === "running") ??
+    task.steps.find((item) => item.status === "pending" || item.status === "error");
   if (!step) return <Typography.Text type="secondary">-</Typography.Text>;
   return (
     <Space size={4}>

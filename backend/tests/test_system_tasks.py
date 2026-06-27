@@ -73,7 +73,7 @@ async def test_serialize_system_task_includes_steps_and_ranges(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_system_tasks_batches_steps_and_reuses_ranges(monkeypatch) -> None:
+async def test_system_tasks_returns_summaries_without_ranges(monkeypatch) -> None:
     tasks = [
         SystemTask(
             id=7,
@@ -154,20 +154,21 @@ async def test_system_tasks_batches_steps_and_reuses_ranges(monkeypatch) -> None
         async def __aexit__(self, exc_type, exc, traceback):  # noqa: ANN001
             return False
 
-    ranges_calls: list[str] = []
-
-    async def fake_ranges(session, symbol):
-        ranges_calls.append(symbol)
-        return {"1m": {"count": 10, "min_open_time": None, "max_open_time": None}}
-
     monkeypatch.setattr(routes_system_tasks, "AsyncSessionLocal", FakeSessionContext)
-    monkeypatch.setattr(routes_system_tasks, "list_candle_ranges", fake_ranges)
 
     statuses = await routes_system_tasks.system_tasks("BTCUSDT")
 
     assert [status.id for status in statuses] == [7, 8]
-    assert [step.step_key for status in statuses for step in status.steps] == ["1m:1000", "5m:1000"]
-    assert ranges_calls == ["BTCUSDT"]
+    assert [
+        status.current_step.step_key if status.current_step else None for status in statuses
+    ] == [
+        "1m:1000",
+        None,
+    ]
+    assert [status.raw_count for status in statuses] == [11, 21]
+    assert [status.step_count for status in statuses] == [1, 1]
+    assert [status.steps for status in statuses] == [[], []]
+    assert [status.candle_ranges for status in statuses] == [{}, {}]
 
 
 def test_latest_system_task_returns_idle_when_empty(monkeypatch: pytest.MonkeyPatch) -> None:

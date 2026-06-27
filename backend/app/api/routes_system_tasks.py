@@ -46,6 +46,9 @@ class SystemTaskStatus(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    current_step: SystemTaskStepStatus | None = None
+    raw_count: int = 0
+    step_count: int = 0
     steps: list[SystemTaskStepStatus] = Field(default_factory=list)
     candle_ranges: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
@@ -61,21 +64,8 @@ async def system_tasks(symbol: str = settings.binance_symbol) -> list[SystemTask
         )
         tasks = list(rows.all())
         steps_by_task_id = await load_steps_by_task_id(session, [task.id for task in tasks])
-        candle_ranges_by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
-        for task in tasks:
-            if task.task_type != "kline_backfill" or task.symbol in candle_ranges_by_symbol:
-                continue
-            # 任务列表会被前端轮询；同一 symbol 的 K 线覆盖范围只聚合一次，避免重复扫 candles 大表。
-            candle_ranges_by_symbol[task.symbol] = await list_candle_ranges(session, task.symbol)
         return [
-            build_system_task_status(
-                task,
-                steps_by_task_id.get(task.id, []),
-                candle_ranges=candle_ranges_by_symbol.get(task.symbol, {})
-                if task.task_type == "kline_backfill"
-                else {},
-            )
-            for task in tasks
+            build_system_task_summary(task, steps_by_task_id.get(task.id, [])) for task in tasks
         ]
 
 
@@ -88,6 +78,15 @@ async def latest_system_task(
         task = await latest_task(session, task_type=task_type, symbol=symbol.upper())
         if task is None:
             return SystemTaskStatus(task_type=task_type, symbol=symbol.upper())
+        return await serialize_system_task(session, task)
+
+
+@router.get("/system-tasks/{task_id}", response_model=SystemTaskStatus)
+async def system_task_detail(task_id: int) -> SystemTaskStatus:
+    async with AsyncSessionLocal() as session:
+        task = await session.get(SystemTask, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="system task not found")
         return await serialize_system_task(session, task)
 
 
@@ -157,23 +156,7 @@ def build_system_task_status(
     *,
     candle_ranges: dict[str, dict[str, Any]] | None = None,
 ) -> SystemTaskStatus:
-    steps = [
-        SystemTaskStepStatus(
-            id=step.id,
-            step_key=step.step_key,
-            interval=step.interval,
-            status=step.status,
-            start_ms=step.start_ms,
-            cursor_ms=step.cursor_ms,
-            end_ms=step.end_ms,
-            inserted_count=step.inserted_count,
-            raw_count=step.raw_count,
-            last_error=step.last_error,
-            started_at=step.started_at,
-            finished_at=step.finished_at,
-        )
-        for step in step_rows
-    ]
+    steps = [build_system_task_step_status(step) for step in step_rows]
     return SystemTaskStatus(
         id=task.id,
         task_type=task.task_type,  # type: ignore[arg-type]
@@ -185,6 +168,58 @@ def build_system_task_status(
         started_at=task.started_at,
         finished_at=task.finished_at,
         metadata=task.task_metadata or {},
+        current_step=find_current_step(steps),
+        raw_count=sum(step.raw_count for step in steps),
+        step_count=len(steps),
         steps=steps,
         candle_ranges=candle_ranges or {},
+    )
+
+
+def build_system_task_summary(
+    task: SystemTask,
+    step_rows: Sequence[SystemTaskStep],
+) -> SystemTaskStatus:
+    steps = [build_system_task_step_status(step) for step in step_rows]
+    # 轮询列表只承载摘要，完整 steps 和 candle_ranges 留给详情接口，避免每次刷新传输/聚合大数据。
+    return SystemTaskStatus(
+        id=task.id,
+        task_type=task.task_type,  # type: ignore[arg-type]
+        symbol=task.symbol,
+        status=task.status,
+        message=task.message,
+        error=task.error or None,
+        total_inserted=task.total_inserted,
+        started_at=task.started_at,
+        finished_at=task.finished_at,
+        metadata=task.task_metadata or {},
+        current_step=find_current_step(steps),
+        raw_count=sum(step.raw_count for step in steps),
+        step_count=len(steps),
+        steps=[],
+        candle_ranges={},
+    )
+
+
+def build_system_task_step_status(step: SystemTaskStep) -> SystemTaskStepStatus:
+    return SystemTaskStepStatus(
+        id=step.id,
+        step_key=step.step_key,
+        interval=step.interval,
+        status=step.status,
+        start_ms=step.start_ms,
+        cursor_ms=step.cursor_ms,
+        end_ms=step.end_ms,
+        inserted_count=step.inserted_count,
+        raw_count=step.raw_count,
+        last_error=step.last_error,
+        started_at=step.started_at,
+        finished_at=step.finished_at,
+    )
+
+
+def find_current_step(steps: Sequence[SystemTaskStepStatus]) -> SystemTaskStepStatus | None:
+    return next(
+        (item for item in steps if item.status == "running"),
+        next((item for item in steps if item.status in {"pending", "error"}), None),
     )

@@ -108,6 +108,9 @@ export type SystemTaskStatus = {
   started_at: string | null;
   finished_at: string | null;
   metadata: Record<string, unknown>;
+  current_step: SystemTaskStepStatus | null;
+  raw_count: number;
+  step_count: number;
   steps: SystemTaskStepStatus[];
   candle_ranges: Record<string, CandleRange>;
 };
@@ -630,6 +633,7 @@ export const api = {
       init
     ),
   systemTasks: () => request<SystemTaskStatus[]>("/api/system-tasks?symbol=BTCUSDT"),
+  systemTask: (taskId: number) => request<SystemTaskStatus>(`/api/system-tasks/${taskId}`),
   latestSystemTask: (taskType: SystemTaskType) =>
     request<SystemTaskStatus>(`/api/system-tasks/latest?task_type=${taskType}&symbol=BTCUSDT`),
   startSystemTask: (taskType: SystemTaskType) =>
