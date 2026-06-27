@@ -14,7 +14,7 @@ import { PageContainer, ProLayout } from "@ant-design/pro-components";
 import { Alert, Button, ConfigProvider, Form, Input, Popover, Spin, Typography, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   setUnauthorizedHandler,
@@ -333,6 +333,7 @@ function AccountHeaderSummary({
 }) {
   const queryClient = useQueryClient();
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const accountControlRef = useRef<HTMLDivElement | null>(null);
   const accountStateQueryKey = useMemo(
     () => ["polymarket-account-state", "global", activeProfile?.id ?? "none"] as const,
     [activeProfile?.id],
@@ -466,8 +467,20 @@ function AccountHeaderSummary({
       {accountSummary}
     </Popover>
   );
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (accountControlRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest(".app-account-popover")) return;
+      setPopoverOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointerDown, true);
+  }, [popoverOpen]);
   return (
-    <div className="app-account-control">
+    <div className="app-account-control" ref={accountControlRef}>
       {accountSummaryNode}
       <div className="app-account-actions">
         <Button
