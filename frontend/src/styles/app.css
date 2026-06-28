@@ -2029,19 +2029,31 @@ body[data-theme="dark"] .app-account-login-action {
 }
 
 .polymarket-panel-title-link {
+  appearance: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: max-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #17202a;
+  cursor: pointer;
   flex: 0 0 auto;
+  font: inherit;
   font-weight: 700;
   line-height: 1.2;
   text-decoration: none;
 }
 
-.polymarket-panel-title-link:hover {
+.polymarket-panel-title-link:hover,
+.polymarket-panel-title-link:focus-visible {
   color: #0f62fe;
+}
+
+.polymarket-panel-title-link:focus-visible {
+  outline: 2px solid rgba(15, 98, 254, 0.5);
+  outline-offset: 3px;
 }
 
 .polymarket-panel-title-link .anticon {
@@ -2049,7 +2061,8 @@ body[data-theme="dark"] .app-account-login-action {
   font-size: 12px;
 }
 
-.polymarket-panel-title-link:hover .anticon {
+.polymarket-panel-title-link:hover .anticon,
+.polymarket-panel-title-link:focus-visible .anticon {
   color: #0f62fe;
 }
 
@@ -3987,7 +4000,9 @@ body[data-theme="dark"] .polymarket-panel-title-link .anticon {
 }
 
 body[data-theme="dark"] .polymarket-panel-title-link:hover,
-body[data-theme="dark"] .polymarket-panel-title-link:hover .anticon {
+body[data-theme="dark"] .polymarket-panel-title-link:focus-visible,
+body[data-theme="dark"] .polymarket-panel-title-link:hover .anticon,
+body[data-theme="dark"] .polymarket-panel-title-link:focus-visible .anticon {
   color: #60a5fa;
 }
 

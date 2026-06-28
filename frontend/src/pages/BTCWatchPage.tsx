@@ -71,6 +71,11 @@ const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
 const DEFAULT_ORDER_AMOUNT = 5;
 const SHARE_INPUT_DECIMALS = 4;
 
+function openExternalUrl(url: string) {
+  const openedWindow = window.open(url, "_blank", "noopener,noreferrer");
+  openedWindow?.focus();
+}
+
 type TradeDraft = {
   marketId: string;
   tokenId: string;
@@ -1182,6 +1187,7 @@ function PolymarketBtcPanel({
     markets.find((market) => market.window === "current") ??
     markets.find((market) => market.window === "next") ??
     markets[0];
+  const activeMarketUrl = activeMarket?.slug ? `https://polymarket.com/event/${activeMarket.slug}` : null;
   const railModel = useMemo(
     () => buildMarketRailModel(markets, activeMarket?.id, selectedMarketId),
     [activeMarket?.id, markets, selectedMarketId]
@@ -1201,16 +1207,16 @@ function PolymarketBtcPanel({
       <div className="polymarket-panel-head">
         <div className="polymarket-panel-title">
           <div className="polymarket-title-row">
-            {activeMarket?.slug ? (
-              <a
+            {activeMarketUrl ? (
+              <button
+                type="button"
                 className="polymarket-panel-title-link"
-                href={`https://polymarket.com/event/${activeMarket.slug}`}
-                target="_blank"
-                rel="noreferrer"
+                onClick={() => openExternalUrl(activeMarketUrl)}
+                title="打开 Polymarket 市场"
               >
                 <span>Polymarket BTC Up/Down</span>
                 <ExportOutlined />
-              </a>
+              </button>
             ) : (
               <Typography.Text strong>Polymarket BTC Up/Down</Typography.Text>
             )}
