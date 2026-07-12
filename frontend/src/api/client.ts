@@ -158,7 +158,9 @@ export type PolymarketIncident = {
 
 export type PolymarketStatus = {
   healthy: boolean;
-  page_status: string | null;
+  component_name: string | null;
+  component_status: string | null;
+  summary_page_status: string | null;
   active_incidents: PolymarketIncident[];
   error: string | null;
 };

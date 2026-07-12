@@ -15,6 +15,8 @@ class PolymarketIncident(BaseModel):
 
 class PolymarketStatusResponse(BaseModel):
     healthy: bool
-    page_status: str | None = None
+    component_name: str | None = None
+    component_status: str | None = None
+    summary_page_status: str | None = None
     active_incidents: list[PolymarketIncident] = Field(default_factory=list)
     error: str | None = None

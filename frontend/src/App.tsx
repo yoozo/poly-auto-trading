@@ -353,7 +353,10 @@ function PolymarketStatusTitle({
         <div className="polymarket-status-error">状态检查失败：{statusError}</div>
       ) : status ? (
         <>
-          <div>页面状态：{status.page_status ?? "未知"}</div>
+          <div>
+            CLOB API 状态：{formatPolymarketComponentStatus(status.component_status)}
+          </div>
+          <div>Summary 页面状态：{status.summary_page_status ?? "未知"}</div>
           {incidents.length > 0 ? (
             <div className="polymarket-status-incidents">
               {incidents.map((incident) => (
@@ -375,7 +378,7 @@ function PolymarketStatusTitle({
             <div>当前没有活跃事件</div>
           ) : (
             <div className="polymarket-status-error">
-              页面状态异常：{formatPolymarketPageStatus(status.page_status)}
+              CLOB API 异常：{formatPolymarketComponentStatus(status.component_status)}
             </div>
           )}
         </>
@@ -394,9 +397,11 @@ function PolymarketStatusTitle({
   );
 }
 
-function formatPolymarketPageStatus(status: string | null) {
-  if (status === "HASISSUES") return "存在问题（HASISSUES）";
-  if (status === "UNDERMAINTENANCE") return "维护中（UNDERMAINTENANCE）";
+function formatPolymarketComponentStatus(status: string | null) {
+  if (status === "OPERATIONAL") return "正常（OPERATIONAL）";
+  if (status === "DEGRADEDPERFORMANCE") return "性能下降（DEGRADEDPERFORMANCE）";
+  if (status === "PARTIALOUTAGE") return "部分故障（PARTIALOUTAGE）";
+  if (status === "MAJOROUTAGE") return "重大故障（MAJOROUTAGE）";
   return status ?? "未知（未返回状态码）";
 }
 
