@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.schemas.candle import Candle
+from app.schemas.candle import Candle, IndicatorPoint, Interval
 from app.schemas.market_signal import MarketDataEvent, SignalInput
 from app.services.indicators import calculate_indicator_points
 from app.services.market_ws_hub import market_ws_hub
@@ -70,7 +71,13 @@ class MarketSignalPipeline:
     ) -> dict[str, object] | None:
         if not candles:
             return None
-        return self._serialize_market_candle(symbol, interval, candles[-1])
+        indicator_points = calculate_indicator_points(candles, cast(Interval, interval))
+        return self._serialize_market_candle(
+            symbol,
+            interval,
+            candles[-1],
+            indicator_points[-1] if indicator_points else None,
+        )
 
     def _merge_live_candle(self, candle: Candle) -> list[Candle]:
         # 同一根未收盘 K 线会被多次推送，用 open_time 去重并保留最新值。
@@ -98,21 +105,35 @@ class MarketSignalPipeline:
             service_health_store.set("telegram", "error", last_error=str(exc))
 
     async def _broadcast_market_update(self, signal_input: SignalInput) -> None:
-        # 前端图表只消费 candle，指标由浏览器基于 candle 窗口计算；WS 不再推送冗余 SignalInput。
+        # 前端优先消费这里的后端指标，保证图表和 Telegram 使用同一计算窗口与结果。
         candle = signal_input.candle
         await market_ws_hub.broadcast(
             candle.symbol,
             candle.interval,
-            self._serialize_market_candle(candle.symbol, candle.interval, candle),
+            self._serialize_market_candle(
+                candle.symbol,
+                candle.interval,
+                candle,
+                signal_input.indicator,
+            ),
         )
 
-    def _serialize_market_candle(self, symbol: str, interval: str, candle: Candle) -> dict[str, object]:
-        return {
+    def _serialize_market_candle(
+        self,
+        symbol: str,
+        interval: str,
+        candle: Candle,
+        indicator: IndicatorPoint | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
             "type": "market.candle",
             "symbol": symbol.upper(),
             "interval": interval,
             "candle": candle.model_dump(mode="json"),
         }
+        if indicator is not None:
+            payload["indicator"] = indicator.model_dump(mode="json")
+        return payload
 
 
 market_signal_pipeline = MarketSignalPipeline()

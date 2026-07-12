@@ -180,7 +180,16 @@ export default function BTCWatchPage() {
     activeCandlesRef.current = activeCandles;
   }, [activeCandles]);
   const activeIndicators = useMemo(
-    () => calculateIndicatorPoints(activeCandles, interval),
+    () => {
+      const calculated = calculateIndicatorPoints(activeCandles, interval);
+      const backendByTime = new Map(
+        activeCandles
+          .filter((candle) => candle.indicator)
+          .map((candle) => [candle.indicator!.candle_time, candle.indicator!]),
+      );
+      // 实时 K 线优先使用后端同一计算窗口产出的指标，避免 Telegram 与图表各算一套 diff。
+      return calculated.map((point) => backendByTime.get(point.candle_time) ?? point);
+    },
     [activeCandles, interval]
   );
   const latest = activeCandles.at(-1);
@@ -666,7 +675,9 @@ export default function BTCWatchPage() {
         }
         if (!isValidMarketCandleMessage(message, activeIntervalRef.current)) return;
         if (historicalJumpViewRef.current) return;
-        const candle = message.candle;
+        const candle = message.indicator
+          ? { ...message.candle, indicator: message.indicator }
+          : message.candle;
         if (!candleSnapshotReadyRef.current) {
           // 首帧 snapshot 会补齐 DB 最近闭合 K 线；在它完成前直接画 live candle 会暴露 DB 落后造成的时间断档。
           pendingLiveCandlesRef.current = mergeCandles(pendingLiveCandlesRef.current, [candle]);
@@ -2011,6 +2022,7 @@ function isValidMarketCandleMessage(
 ): message is Extract<MarketWsMessage, { type: "market.candle" }> & { candle: MarketCandle } {
   if (!message || message.type !== "market.candle" || message.symbol !== "BTCUSDT" || message.interval !== activeInterval) return false;
   const candle = message.candle;
+  if (message.indicator && !isValidMarketIndicator(message.indicator, message.symbol, message.interval)) return false;
   return isValidMarketCandle(candle, message.symbol, message.interval);
 }
 
@@ -2032,6 +2044,13 @@ function isValidMarketCandle(candle: MarketCandle | null, symbol: string, interv
   if (![openTime, closeTime, open, high, low, close].every(Number.isFinite)) return false;
   if (openTime <= 0 || closeTime <= openTime) return false;
   return high >= Math.max(open, close, low) && low <= Math.min(open, close, high);
+}
+
+function isValidMarketIndicator(indicator: MarketIndicatorPoint, symbol: string, interval: CandleInterval) {
+  if (indicator.symbol !== symbol || indicator.interval !== interval || !indicator.candle_time) return false;
+  return [indicator.rsi, indicator.rsi_ema, indicator.rsi_ema_diff].every(
+    (value) => value === null || Number.isFinite(Number(value)),
+  );
 }
 
 function parsePolymarketMessage(value: string) {

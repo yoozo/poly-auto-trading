@@ -11,6 +11,20 @@ export type Candle = {
   is_closed: boolean;
 };
 
+export type MarketIndicatorPoint = {
+  symbol: string;
+  interval: CandleInterval;
+  candle_time: string;
+  rsi: number | null;
+  rsi_ema: number | null;
+  rsi_ema_diff: number | null;
+  bollinger: {
+    upper: number | null;
+    middle: number | null;
+    lower: number | null;
+  };
+};
+
 export type CandleInterval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "12h" | "1d" | "1w";
 export type MarketCandlesRequest = {
   type: "market.candles.request";
@@ -40,6 +54,7 @@ export type MarketWsMessage =
       symbol: string;
       interval: CandleInterval;
       candle: Candle | null;
+      indicator?: MarketIndicatorPoint;
     }
   | MarketCandlesSnapshot
   | MarketCandlesError;

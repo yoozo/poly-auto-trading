@@ -1,4 +1,6 @@
-import type { CandleInterval } from "../../api/client";
+import type { CandleInterval, MarketIndicatorPoint } from "../../api/client";
+
+export type { MarketIndicatorPoint } from "../../api/client";
 
 export type MarketCandle = {
   symbol: string;
@@ -11,20 +13,7 @@ export type MarketCandle = {
   close: number;
   volume: number;
   is_closed: boolean;
-};
-
-export type MarketIndicatorPoint = {
-  symbol: string;
-  interval: CandleInterval;
-  candle_time: string;
-  rsi: number | null;
-  rsi_ema: number | null;
-  rsi_ema_diff: number | null;
-  bollinger: {
-    upper: number | null;
-    middle: number | null;
-    lower: number | null;
-  };
+  indicator?: MarketIndicatorPoint;
 };
 
 export type StreamStatus = "connecting" | "connected" | "reconnecting" | "closed";

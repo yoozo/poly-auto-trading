@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import desc, select
@@ -398,6 +399,7 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     reminders = [delivery_signal_reminder(signal) for signal in signals]
     lines = [
         f"{score_marker(total_score)}市场：{market_name}",
+        f"K线时间：{format_signal_time(signals[0].occurred_at)}",
         f"总分：{format_optional(total_score)}",
         f"方向：{direction_emoji}{direction_name}",
         f"信号提醒：{'，'.join(reminders)}",
@@ -582,6 +584,10 @@ def mask_chat_id(value: str) -> str:
 
 def format_optional(value: float | None) -> str:
     return "-" if value is None else f"{value:.2f}"
+
+
+def format_signal_time(value: datetime) -> str:
+    return value.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S Asia/Shanghai")
 
 
 def utc_now() -> datetime:
