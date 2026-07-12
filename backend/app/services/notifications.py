@@ -587,7 +587,7 @@ def format_optional(value: float | None) -> str:
 
 
 def format_signal_time(value: datetime) -> str:
-    return value.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S Asia/Shanghai")
+    return value.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def utc_now() -> datetime:
