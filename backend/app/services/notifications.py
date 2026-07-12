@@ -114,7 +114,11 @@ async def process_signal_notifications(
 ) -> list[NotificationDelivery]:
     if not signals:
         return []
-    delivery = await process_telegram_delivery(session, signals)
+    # Telegram 当前只保留 RSI-Diff 提醒；其他信号仍由分析层落库，但不进入外部通知渠道。
+    telegram_signals = [signal for signal in signals if signal.signal_key == "rsi_ema_diff"]
+    if not telegram_signals:
+        return []
+    delivery = await process_telegram_delivery(session, telegram_signals)
     return [delivery] if delivery is not None else []
 
 

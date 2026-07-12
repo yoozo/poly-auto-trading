@@ -226,7 +226,7 @@ def test_analyze_signal_input_marks_negative_rsi_diff_as_buy_long() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_signal_notifications_groups_signals(monkeypatch) -> None:
+async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch) -> None:
     calls = []
     candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     signals = [
@@ -242,7 +242,25 @@ async def test_process_signal_notifications_groups_signals(monkeypatch) -> None:
 
     await notifications.process_signal_notifications(object(), signals)
 
-    assert calls == [signals]
+    assert calls == [[signals[1]]]
+
+
+@pytest.mark.asyncio
+async def test_process_signal_notifications_skips_when_no_rsi_diff(monkeypatch) -> None:
+    calls = []
+    candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signals = [make_signal_record(1, "rsi_low", "RSI <= 30", candle_time)]
+
+    async def fake_process_telegram_delivery(session, signal_records):
+        calls.append(signal_records)
+        return None
+
+    monkeypatch.setattr(notifications, "process_telegram_delivery", fake_process_telegram_delivery)
+
+    deliveries = await notifications.process_signal_notifications(object(), signals)
+
+    assert deliveries == []
+    assert calls == []
 
 
 @pytest.mark.asyncio
