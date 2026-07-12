@@ -40,6 +40,9 @@ binance:
   - 1w
   candle_history_limit: 500
   ws_enabled: true
+  ws_adaptive_enabled: true
+  ws_probe_interval_seconds: 300
+  ws_probe_timeout_seconds: 5
 polymarket:
   gamma_base_url: https://gamma-api.polymarket.com
   data_base_url: https://data-api.polymarket.com

@@ -89,3 +89,29 @@ async def test_refresh_live_window_reads_database_only(monkeypatch) -> None:
     assert calls["synced"] == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
     assert calls["listed"] == [{"symbol": "BTCUSDT", "interval": "1m", "limit": 500}]
     assert binance_monitor.market_signal_pipeline._live_candles[("BTCUSDT", "1m")] == cached
+
+
+@pytest.mark.asyncio
+async def test_select_ws_endpoint_prefers_lowest_probe_latency(monkeypatch) -> None:
+    monitor = binance_monitor.BinanceMonitor()
+    endpoints = ["wss://slow.example", "wss://fast.example"]
+
+    async def fake_probe(base_urls):
+        monitor._ws_endpoint_scores = {
+            endpoints[0]: binance_monitor.WsEndpointScore(latency_ms=240, last_probe_at=1),
+            endpoints[1]: binance_monitor.WsEndpointScore(latency_ms=80, last_probe_at=1),
+        }
+
+    monkeypatch.setattr(monitor, "_probe_ws_endpoints", fake_probe)
+    monkeypatch.setattr(binance_monitor.settings, "binance_ws_adaptive_enabled", True)
+    monkeypatch.setattr(binance_monitor.settings, "binance_ws_probe_interval_seconds", 300)
+
+    assert await monitor._select_ws_endpoint(endpoints) == endpoints[1]
+
+
+@pytest.mark.asyncio
+async def test_select_ws_endpoint_keeps_configured_first_when_adaptive_disabled(monkeypatch) -> None:
+    monitor = binance_monitor.BinanceMonitor()
+    monkeypatch.setattr(binance_monitor.settings, "binance_ws_adaptive_enabled", False)
+
+    assert await monitor._select_ws_endpoint(["wss://first.example", "wss://second.example"]) == "wss://first.example"

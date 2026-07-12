@@ -77,6 +77,9 @@ class BinanceConfig(BaseModel):
     intervals: list[str] = Field(default_factory=lambda: ["1m", "5m", "15m", "1h", "4h", "12h", "1d", "1w"])
     candle_history_limit: int = 500
     ws_enabled: bool = True
+    ws_adaptive_enabled: bool = True
+    ws_probe_interval_seconds: int = 300
+    ws_probe_timeout_seconds: float = 5.0
 
 
 class PolymarketConfig(BaseModel):
@@ -175,6 +178,9 @@ class Settings:
         self.binance_intervals_raw = join_csv(yaml_config.binance.intervals)
         self.candle_history_limit = yaml_config.binance.candle_history_limit
         self.binance_ws_enabled = yaml_config.binance.ws_enabled
+        self.binance_ws_adaptive_enabled = yaml_config.binance.ws_adaptive_enabled
+        self.binance_ws_probe_interval_seconds = yaml_config.binance.ws_probe_interval_seconds
+        self.binance_ws_probe_timeout_seconds = yaml_config.binance.ws_probe_timeout_seconds
 
         self.polymarket_gamma_base_url = yaml_config.polymarket.gamma_base_url
         self.polymarket_data_base_url = yaml_config.polymarket.data_base_url
