@@ -10,6 +10,57 @@ body,
   background: var(--app-bg, #f4f6fa);
 }
 
+.polymarket-status-title {
+  color: inherit;
+  transition: color 120ms ease;
+}
+
+.polymarket-status-title-abnormal {
+  color: #ff4d4f;
+}
+
+.polymarket-status-tooltip-overlay {
+  max-width: min(390px, calc(100vw - 24px));
+}
+
+.polymarket-status-tooltip-overlay .ant-tooltip-inner {
+  max-width: min(390px, calc(100vw - 24px));
+}
+
+.polymarket-status-tooltip {
+  min-width: 220px;
+  line-height: 1.6;
+}
+
+.polymarket-status-tooltip-title {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.polymarket-status-error {
+  color: #ffccc7;
+}
+
+.polymarket-status-incidents {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.polymarket-status-incident {
+  padding-top: 6px;
+  border-top: 1px solid rgb(255 255 255 / 18%);
+}
+
+.polymarket-status-incident-name {
+  color: #fff;
+  font-weight: 600;
+}
+
+.polymarket-status-incident a {
+  color: #91caff;
+}
+
 body {
   background: var(--app-bg, #f4f6fa);
 }

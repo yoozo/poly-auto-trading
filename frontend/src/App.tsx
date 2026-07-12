@@ -11,7 +11,7 @@ import {
   SettingOutlined
 } from "@ant-design/icons";
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
-import { Alert, Button, ConfigProvider, Form, Input, Popover, Spin, Typography, theme } from "antd";
+import { Alert, Button, ConfigProvider, Form, Input, Popover, Spin, Tooltip, Typography, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,6 +22,7 @@ import {
   type PolymarketAccountStateWsMessage,
   type PolymarketCredentialProfile
 } from "./api/client";
+import type { PolymarketStatus } from "./api/client";
 import { PerformanceMonitorTooltip } from "./components/PerformanceMonitorTooltip";
 import { PolymarketCredentialManager } from "./components/PolymarketCredentialManager";
 import { connectWallet, disconnectWallet, useWalletConnection } from "./hooks/useWalletConnection";
@@ -133,6 +134,13 @@ export default function App() {
     enabled: authStatus === "authenticated" && activeWalletMatches,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
+  });
+  const polymarketStatusQuery = useQuery({
+    queryKey: ["polymarket-status"],
+    queryFn: api.polymarketStatus,
+    enabled: authStatus === "authenticated",
+    refetchInterval: 60_000,
+    retry: 1,
   });
   const [accountState, setAccountState] = useState<PolymarketAccountState>(EMPTY_ACCOUNT_STATE);
   const pathname = locationState.pathname;
@@ -269,6 +277,12 @@ export default function App() {
         ) : (
           <ProLayout
             title="Poly Auto"
+            headerTitleRender={() => (
+              <PolymarketStatusTitle
+                status={polymarketStatusQuery.data}
+                error={polymarketStatusQuery.error}
+              />
+            )}
             logo={false}
             route={route}
             location={{ pathname: pathname === "/reports/market-detail" ? "/reports" : pathname }}
@@ -320,6 +334,66 @@ export default function App() {
       </div>
     </ConfigProvider>
   );
+}
+
+function PolymarketStatusTitle({
+  status,
+  error,
+}: {
+  status: PolymarketStatus | undefined;
+  error: Error | null;
+}) {
+  const abnormal = Boolean(error) || status?.healthy === false;
+  const incidents = status?.active_incidents ?? [];
+  const tooltip = (
+    <div className="polymarket-status-tooltip">
+      <div className="polymarket-status-tooltip-title">Polymarket 状态</div>
+      {error ? (
+        <div className="polymarket-status-error">状态检查失败：{error.message}</div>
+      ) : status ? (
+        <>
+          <div>页面状态：{status.page_status ?? "未知"}</div>
+          {incidents.length > 0 ? (
+            <div className="polymarket-status-incidents">
+              {incidents.map((incident) => (
+                <div className="polymarket-status-incident" key={incident.id}>
+                  <div className="polymarket-status-incident-name">{incident.name}</div>
+                  <div>状态：{incident.status}</div>
+                  <div>影响：{incident.impact}</div>
+                  {incident.started_at && <div>开始：{formatStatusTime(incident.started_at)}</div>}
+                  {incident.updated_at && <div>更新：{formatStatusTime(incident.updated_at)}</div>}
+                  {incident.url && (
+                    <a href={incident.url} target="_blank" rel="noreferrer">
+                      查看详情
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : status.healthy ? (
+            <div>当前没有活跃事件</div>
+          ) : (
+            <div className="polymarket-status-error">当前页面状态异常</div>
+          )}
+        </>
+      ) : (
+        <div>正在检查 Polymarket 状态...</div>
+      )}
+    </div>
+  );
+
+  return (
+    <Tooltip title={tooltip} placement="bottomLeft" overlayClassName="polymarket-status-tooltip-overlay">
+      <span className={`polymarket-status-title${abnormal ? " polymarket-status-title-abnormal" : ""}`}>
+        Poly Auto
+      </span>
+    </Tooltip>
+  );
+}
+
+function formatStatusTime(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
 function AccountHeaderSummary({

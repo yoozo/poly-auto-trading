@@ -146,6 +146,23 @@ export type HealthStatus = {
   checks: Record<string, { ok: boolean; error?: string }>;
 };
 
+export type PolymarketIncident = {
+  id: string;
+  name: string;
+  status: string;
+  impact: string;
+  started_at: string | null;
+  updated_at: string | null;
+  url: string | null;
+};
+
+export type PolymarketStatus = {
+  healthy: boolean;
+  page_status: string | null;
+  active_incidents: PolymarketIncident[];
+  error: string | null;
+};
+
 export type ServiceHealth = {
   name: string;
   state: string;
@@ -584,6 +601,7 @@ export const api = {
     }),
   logout: () => request<AuthSession>("/api/auth/logout", { method: "POST" }),
   health: () => request<HealthStatus>("/api/health"),
+  polymarketStatus: () => request<PolymarketStatus>("/api/polymarket/status"),
   services: () => request<ServiceHealth[]>("/api/status/services"),
   serviceEvents: (
     params: {

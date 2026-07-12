@@ -21,6 +21,7 @@ from app.schemas.polymarket import (
     PolymarketSignedOrderResponse,
     PolymarketUpDownMarket,
 )
+from app.schemas.polymarket_status import PolymarketStatusResponse
 from app.services.polymarket_account_monitor import polymarket_account_monitor
 from app.services.polymarket_client import PolymarketClient, PolymarketInputError
 from app.services.polymarket_account_store import polymarket_account_store
@@ -38,6 +39,7 @@ from app.services.polymarket_credentials import (
 )
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
+from app.services.polymarket_status import get_polymarket_status
 
 router = APIRouter(tags=["polymarket"])
 logger = logging.getLogger(__name__)
@@ -60,6 +62,11 @@ class BtcUpDownMarketSubscribeMessage:
 @router.get("/polymarket/account-state", response_model=PolymarketAccountState)
 async def account_state() -> PolymarketAccountState:
     return await polymarket_account_store.snapshot()
+
+
+@router.get("/polymarket/status", response_model=PolymarketStatusResponse)
+async def polymarket_status() -> PolymarketStatusResponse:
+    return await get_polymarket_status()
 
 
 @router.post("/polymarket/account-state/refresh", response_model=PolymarketAccountState)
