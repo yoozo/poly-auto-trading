@@ -9,7 +9,7 @@ from app.core.auth import require_websocket_auth
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.db.session import get_session
-from app.schemas.candle import Candle, Interval
+from app.schemas.candle import Candle, Interval, MarketCandle
 from app.services.candle_backfill import (
     CandleBackfillStatus,
     candle_backfill_runner,
@@ -17,6 +17,7 @@ from app.services.candle_backfill import (
 )
 from app.services.candle_store import list_candles, list_candles_between
 from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
+from app.services.indicators import calculate_indicator_points
 from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.market_ws_hub import market_ws_hub
 
@@ -43,7 +44,7 @@ async def start_indicator_backfill(symbol: str = settings.binance_symbol) -> Ind
     return await indicator_backfill_runner.start_all(symbol=symbol)
 
 
-@router.get("/candles", response_model=list[Candle])
+@router.get("/candles", response_model=list[MarketCandle])
 async def candles(
     symbol: str = settings.binance_symbol,
     interval: Interval = Query("1m"),
@@ -100,7 +101,7 @@ async def market_websocket(
 
 
 class CandleSnapshot:
-    def __init__(self, mode: Literal["latest", "range"], candles: list[Candle]) -> None:
+    def __init__(self, mode: Literal["latest", "range"], candles: list[MarketCandle]) -> None:
         self.mode = mode
         self.candles = candles
 
@@ -289,12 +290,15 @@ async def load_candles_snapshot(
         start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
         end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
         candles = await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
-        return CandleSnapshot("range", candles)
+        return CandleSnapshot("range", attach_indicators(candles, interval))
 
-    await candle_sync_service.ensure_latest_window(session, symbol=symbol, interval=interval, limit=limit)
-    cached = await list_candles(session, symbol=symbol, interval=interval, limit=limit)
-    live_candles = market_signal_pipeline.get_live_candles(symbol, interval, limit=limit)
-    return CandleSnapshot("latest", merge_live_candles(cached, live_candles, limit))
+    # 指标递归依赖历史状态，快照内部使用后端实时窗口计算，再只返回请求的最后 limit 根。
+    indicator_limit = max(limit, settings.candle_history_limit)
+    await candle_sync_service.ensure_latest_window(session, symbol=symbol, interval=interval, limit=indicator_limit)
+    cached = await list_candles(session, symbol=symbol, interval=interval, limit=indicator_limit)
+    live_candles = market_signal_pipeline.get_live_candles(symbol, interval, limit=indicator_limit)
+    candles = merge_live_candles(cached, live_candles, indicator_limit)
+    return CandleSnapshot("latest", attach_indicators(candles[-limit:], interval, source_candles=candles))
 
 
 def merge_live_candles(cached: list[Candle], live_candles: list[Candle], limit: int) -> list[Candle]:
@@ -303,3 +307,23 @@ def merge_live_candles(cached: list[Candle], live_candles: list[Candle], limit: 
     for candle in live_candles:
         by_open_time[candle.open_time] = candle
     return sorted(by_open_time.values(), key=lambda candle: candle.open_time)[-limit:]
+
+
+def attach_indicators(
+    candles: list[Candle],
+    interval: Interval,
+    *,
+    source_candles: list[Candle] | None = None,
+) -> list[MarketCandle]:
+    calculation_candles = source_candles or candles
+    points = calculate_indicator_points(calculation_candles, interval)
+    points_by_time = {point.candle_time: point for point in points}
+    return [
+        MarketCandle.model_validate(
+            {
+                **candle.model_dump(),
+                "indicator": points_by_time.get(candle.open_time),
+            }
+        )
+        for candle in candles
+    ]

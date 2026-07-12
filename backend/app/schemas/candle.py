@@ -74,3 +74,9 @@ class IndicatorPoint(BaseModel):
         if value is not None and not isfinite(value):
             raise ValueError("indicator fields must be finite numbers or null")
         return value
+
+
+class MarketCandle(Candle):
+    """K 线快照及其后端统一计算的指标。"""
+
+    indicator: IndicatorPoint | None = None

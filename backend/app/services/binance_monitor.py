@@ -29,6 +29,11 @@ class BinanceMonitor:
         if not settings.binance_ws_enabled:
             service_health_store.set("binance_ws", "idle")
             return
+        # 先把后端指标计算所需的历史窗口装入内存，再接收 WS 增量，避免服务刚启动时用不完整窗口触发通知。
+        try:
+            await self.backfill_once()
+        except Exception:
+            logger.exception("Failed to prime Binance live candle windows")
         self._tasks = [
             asyncio.create_task(self.ws_loop(), name="binance-ws"),
         ]

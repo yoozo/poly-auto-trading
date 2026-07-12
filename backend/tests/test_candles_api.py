@@ -255,7 +255,8 @@ def test_candles_limit_mode_syncs_latest_window_before_reading(monkeypatch) -> N
 
     assert response.status_code == 200
     assert len(response.json()) == 300
-    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 300}
+    # 最新快照要按后端实时指标窗口同步，再裁剪为请求数量。
+    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 500}
 
 
 def test_candles_limit_mode_merges_live_open_candle(monkeypatch) -> None:
@@ -375,7 +376,7 @@ async def test_market_ws_candles_latest_request_syncs_and_merges_live_candle(mon
         },
     )
 
-    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 300}
+    assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 500}
     payload = websocket.messages[-1]
     assert payload["type"] == "market.candles.snapshot"
     assert payload["request_id"] == "latest-1"
@@ -384,6 +385,7 @@ async def test_market_ws_candles_latest_request_syncs_and_merges_live_candle(mon
     assert payload["candles"][-1]["open_time"] == "2026-01-01T05:00:00Z"
     assert payload["candles"][-1]["close"] == 555
     assert payload["candles"][-1]["is_closed"] is False
+    assert payload["candles"][-1]["indicator"]["candle_time"] == "2026-01-01T05:00:00Z"
 
 
 @pytest.mark.asyncio

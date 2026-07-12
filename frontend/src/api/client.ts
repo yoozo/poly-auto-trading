@@ -9,6 +9,7 @@ export type Candle = {
   close: number;
   volume: number;
   is_closed: boolean;
+  indicator?: MarketIndicatorPoint;
 };
 
 export type MarketIndicatorPoint = {
