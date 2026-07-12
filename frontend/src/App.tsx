@@ -345,11 +345,12 @@ function PolymarketStatusTitle({
 }) {
   const abnormal = Boolean(error) || status?.healthy === false;
   const incidents = status?.active_incidents ?? [];
+  const statusError = error?.message ?? status?.error;
   const tooltip = (
     <div className="polymarket-status-tooltip">
       <div className="polymarket-status-tooltip-title">Polymarket 状态</div>
-      {error ? (
-        <div className="polymarket-status-error">状态检查失败：{error.message}</div>
+      {statusError ? (
+        <div className="polymarket-status-error">状态检查失败：{statusError}</div>
       ) : status ? (
         <>
           <div>页面状态：{status.page_status ?? "未知"}</div>
@@ -373,7 +374,9 @@ function PolymarketStatusTitle({
           ) : status.healthy ? (
             <div>当前没有活跃事件</div>
           ) : (
-            <div className="polymarket-status-error">当前页面状态异常</div>
+            <div className="polymarket-status-error">
+              页面状态异常：{formatPolymarketPageStatus(status.page_status)}
+            </div>
           )}
         </>
       ) : (
@@ -389,6 +392,12 @@ function PolymarketStatusTitle({
       </span>
     </Tooltip>
   );
+}
+
+function formatPolymarketPageStatus(status: string | null) {
+  if (status === "HASISSUES") return "存在问题（HASISSUES）";
+  if (status === "UNDERMAINTENANCE") return "维护中（UNDERMAINTENANCE）";
+  return status ?? "未知（未返回状态码）";
 }
 
 function formatStatusTime(value: string) {
