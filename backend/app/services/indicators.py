@@ -37,6 +37,24 @@ def calculate_indicator_points(candles: list[Candle], interval: Interval) -> lis
         )
     return points
 
+
+def calculate_rolling_indicator_points(
+    candles: list[Candle],
+    interval: Interval,
+    window_size: int,
+) -> list[IndicatorPoint]:
+    """按每根 K 线当时可见的固定窗口计算指标。"""
+    if window_size < 1:
+        raise ValueError("window_size must be greater than or equal to 1")
+
+    points: list[IndicatorPoint] = []
+    for index in range(len(candles)):
+        # TG 实时流水线每次只保留最近 window_size 根；历史快照必须复现这个截断边界。
+        window = candles[max(0, index - window_size + 1) : index + 1]
+        points.append(calculate_indicator_points(window, interval)[-1])
+    return points
+
+
 def calculate_rsi_series(closes: list[float], period: int) -> list[float | None]:
     if len(closes) <= period:
         return [None] * len(closes)
