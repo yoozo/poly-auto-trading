@@ -316,13 +316,27 @@ def attach_indicators(
     source_candles: list[Candle] | None = None,
 ) -> list[MarketCandle]:
     calculation_candles = source_candles or candles
-    points = calculate_indicator_points(calculation_candles, interval)
-    points_by_time = {point.candle_time: point for point in points}
+    source_index_by_time = {
+        candle.open_time: index for index, candle in enumerate(calculation_candles)
+    }
+    indicators_by_time = {}
+    for candle in candles:
+        source_index = source_index_by_time.get(candle.open_time)
+        if source_index is None:
+            continue
+        # TG 在收盘时使用“截至该根的最后 500 根”；历史快照也必须按目标 K 线截断窗口，避免页面窗口变长后指标漂移。
+        window_start = max(0, source_index + 1 - settings.candle_history_limit)
+        points = calculate_indicator_points(
+            calculation_candles[window_start : source_index + 1],
+            interval,
+        )
+        if points:
+            indicators_by_time[candle.open_time] = points[-1]
     return [
         MarketCandle.model_validate(
             {
                 **candle.model_dump(),
-                "indicator": points_by_time.get(candle.open_time),
+                "indicator": indicators_by_time.get(candle.open_time),
             }
         )
         for candle in candles

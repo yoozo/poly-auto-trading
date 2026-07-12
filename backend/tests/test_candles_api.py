@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from math import sin
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api import routes_candles
+from app.services.indicators import calculate_indicator_points
 from app.db.session import get_session
 from app.main import create_app
 from app.schemas.candle import Candle
@@ -257,6 +259,36 @@ def test_candles_limit_mode_syncs_latest_window_before_reading(monkeypatch) -> N
     assert len(response.json()) == 300
     # 最新快照要按后端实时指标窗口同步，再裁剪为请求数量。
     assert calls["sync"] == {"symbol": "BTCUSDT", "interval": "1m", "limit": 500}
+
+
+def test_attach_indicators_uses_target_candle_rolling_window(monkeypatch) -> None:
+    monkeypatch.setattr(routes_candles.settings, "candle_history_limit", 500)
+    source = []
+    for index in range(800):
+        close = 100 + sin(index / 7) * 8 + sin(index / 19) * 3
+        source.append(
+            make_candle(index).model_copy(
+                update={
+                    "open": close,
+                    "high": close + 1,
+                    "low": close - 1,
+                    "close": close,
+                }
+            )
+        )
+
+    target_index = 797
+    expected = calculate_indicator_points(source[target_index - 499 : target_index + 1], "1m")[-1]
+    result = routes_candles.attach_indicators(
+        [source[target_index]],
+        "1m",
+        source_candles=source,
+    )[0]
+
+    assert result.indicator is not None
+    assert result.indicator.rsi == expected.rsi
+    assert result.indicator.rsi_ema == expected.rsi_ema
+    assert result.indicator.rsi_ema_diff == expected.rsi_ema_diff
 
 
 def test_candles_limit_mode_merges_live_open_candle(monkeypatch) -> None:
