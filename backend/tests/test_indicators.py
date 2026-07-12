@@ -3,12 +3,7 @@ from statistics import fmean, pstdev
 
 from app.schemas.candle import BollingerBands
 from app.schemas.candle import Candle
-from app.services.indicators import (
-    BOLLINGER_PERIOD,
-    calculate_bollinger_series,
-    calculate_indicator_points,
-    calculate_rolling_indicator_points,
-)
+from app.services.indicators import BOLLINGER_PERIOD, calculate_bollinger_series, calculate_indicator_points
 
 
 def test_calculate_indicator_points() -> None:
@@ -37,31 +32,6 @@ def test_calculate_indicator_points() -> None:
     assert points[-1].rsi_ema is not None
     assert points[-1].rsi_ema_diff is not None
     assert points[-1].bollinger.upper is not None
-
-
-def test_rolling_indicator_points_match_the_realtime_fixed_window() -> None:
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    candles = [
-        Candle(
-            symbol="BTCUSDT",
-            interval="1m",
-            open_time=start + timedelta(minutes=index),
-            close_time=start + timedelta(minutes=index + 1),
-            open=100 + ((index * 7) % 31),
-            high=200,
-            low=0,
-            close=100 + ((index * 11) % 37),
-            volume=1,
-            is_closed=True,
-        )
-        for index in range(80)
-    ]
-
-    points = calculate_rolling_indicator_points(candles, "1m", 40)
-
-    assert len(points) == len(candles)
-    assert points[-1] == calculate_indicator_points(candles[-40:], "1m")[-1]
-    assert points[60] == calculate_indicator_points(candles[21:61], "1m")[-1]
 
 
 def test_calculate_indicator_points_keeps_raw_placeholder_candles() -> None:

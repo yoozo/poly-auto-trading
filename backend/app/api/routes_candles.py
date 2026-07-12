@@ -17,7 +17,7 @@ from app.services.candle_backfill import (
 )
 from app.services.candle_store import list_candles, list_candles_between
 from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
-from app.services.indicators import calculate_rolling_indicator_points
+from app.services.indicators import calculate_indicator_points
 from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.market_ws_hub import market_ws_hub
 
@@ -316,12 +316,7 @@ def attach_indicators(
     source_candles: list[Candle] | None = None,
 ) -> list[MarketCandle]:
     calculation_candles = source_candles or candles
-    # 不能把整个响应窗口直接作为 RSI/EMA 的递归起点；TG 每个时点都只使用最近 500 根。
-    points = calculate_rolling_indicator_points(
-        calculation_candles,
-        interval,
-        settings.candle_history_limit,
-    )
+    points = calculate_indicator_points(calculation_candles, interval)
     points_by_time = {point.candle_time: point for point in points}
     return [
         MarketCandle.model_validate(
