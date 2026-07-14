@@ -291,6 +291,25 @@ def test_attach_indicators_uses_target_candle_rolling_window(monkeypatch) -> Non
     assert result.indicator.rsi_ema_diff == expected.rsi_ema_diff
 
 
+def test_attach_indicators_reuses_same_rolling_window_calculation(monkeypatch) -> None:
+    monkeypatch.setattr(routes_candles.settings, "candle_history_limit", 500)
+    source = [make_candle(index) for index in range(500)]
+    calls: list[int] = []
+    original = routes_candles.calculate_indicator_points
+
+    def recording_calculate_indicator_points(candles, interval):  # noqa: ANN001
+        calls.append(len(candles))
+        return original(candles, interval)
+
+    monkeypatch.setattr(routes_candles, "calculate_indicator_points", recording_calculate_indicator_points)
+
+    result = routes_candles.attach_indicators(source[-300:], "1m", source_candles=source)
+
+    assert len(result) == 300
+    # 300 个目标都从同一窗口起点计算，应该复用为一次 500 根指标计算。
+    assert calls == [500]
+
+
 def test_candles_limit_mode_merges_live_open_candle(monkeypatch) -> None:
     cached = [make_candle(index) for index in range(300)]
     live_candle = make_candle(300).model_copy(update={"high": 556, "close": 555, "is_closed": False})

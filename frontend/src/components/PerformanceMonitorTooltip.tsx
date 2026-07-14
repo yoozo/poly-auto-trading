@@ -23,6 +23,7 @@ type PerformanceMetricResult = {
 type PerformanceLatencyTone = "default" | "processing" | "success" | "warning" | "error";
 
 const PERFORMANCE_INTERVAL: PolymarketInterval = "5m";
+const PERFORMANCE_MONITOR_CANDLE_LIMIT = 1;
 const DETECT_INTERVAL_MS = 60_000;
 export const PERFORMANCE_MONITOR_ENABLED_KEY = "poly-auto.performanceMonitorEnabled";
 export const PERFORMANCE_MONITOR_ENABLED_EVENT = "poly-auto.performanceMonitorEnabled.changed";
@@ -30,7 +31,7 @@ export const PERFORMANCE_MONITOR_ENABLED_EVENT = "poly-auto.performanceMonitorEn
 const DEFAULT_RESULTS: PerformanceMetricResult[] = [
   { key: "ws_handshake", title: "WS 握手", latencyMs: null, status: "idle", meta: "", error: "" },
   { key: "ws_ping", title: "Ping 延迟", latencyMs: null, status: "idle", meta: "", error: "" },
-  { key: "candles", title: "币安 K线", latencyMs: null, status: "idle", meta: "BTCUSDT 5m", error: "" },
+  { key: "candles", title: "币安 K线", latencyMs: null, status: "idle", meta: "BTCUSDT 5m / 轻量探针", error: "" },
   { key: "polymarket", title: "Polymarket", latencyMs: null, status: "idle", meta: "5m markets", error: "" },
 ];
 
@@ -228,7 +229,8 @@ function measureMarketCandles(socket: WebSocket): Promise<Partial<PerformanceMet
     request_id: requestId,
     symbol: "BTCUSDT",
     interval: PERFORMANCE_INTERVAL,
-    limit: 300,
+    // 自动监控只验证快照链路，避免每分钟传输 300 根 K 线并额外占用前后端资源。
+    limit: PERFORMANCE_MONITOR_CANDLE_LIMIT,
   };
   const start = performance.now();
   socket.send(JSON.stringify(payload));

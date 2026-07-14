@@ -319,19 +319,22 @@ def attach_indicators(
     source_index_by_time = {
         candle.open_time: index for index, candle in enumerate(calculation_candles)
     }
-    indicators_by_time = {}
+    targets_by_window_start: dict[int, list[tuple[Candle, int]]] = {}
     for candle in candles:
         source_index = source_index_by_time.get(candle.open_time)
         if source_index is None:
             continue
         # TG 在收盘时使用“截至该根的最后 500 根”；历史快照也必须按目标 K 线截断窗口，避免页面窗口变长后指标漂移。
         window_start = max(0, source_index + 1 - settings.candle_history_limit)
-        points = calculate_indicator_points(
-            calculation_candles[window_start : source_index + 1],
-            interval,
-        )
-        if points:
-            indicators_by_time[candle.open_time] = points[-1]
+        targets_by_window_start.setdefault(window_start, []).append((candle, source_index))
+
+    indicators_by_time = {}
+    for window_start, targets in targets_by_window_start.items():
+        # 同一历史窗口内的 RSI/EMA/BOLL 是递推序列；一次计算到该组最大目标，避免 300 根快照重复跑 300 次。
+        max_source_index = max(source_index for _, source_index in targets)
+        points = calculate_indicator_points(calculation_candles[window_start : max_source_index + 1], interval)
+        for candle, source_index in targets:
+            indicators_by_time[candle.open_time] = points[source_index - window_start]
     return [
         MarketCandle.model_validate(
             {
