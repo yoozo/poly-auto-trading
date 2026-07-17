@@ -390,10 +390,13 @@ async def test_series_fetch_hydrates_missing_event_markets(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_up_down_events_logs_retryable_series_fallback_without_warning_traceback(monkeypatch, caplog) -> None:
+    event_query_params = []
+
     async def fake_fetch_up_down_series_events(self, **kwargs):
         raise TransportError("Request failed")
 
     async def fake_fetch_event_page_with_sdk(self, client, **params):
+        event_query_params.append(params)
         return [make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")]
 
     monkeypatch.setattr(PolymarketClient, "fetch_up_down_series_events", fake_fetch_up_down_series_events)
@@ -412,6 +415,7 @@ async def test_up_down_events_logs_retryable_series_fallback_without_warning_tra
         if record.message == "Polymarket up/down series fetch failed; falling back to events"
     ]
     assert [event["slug"] for event in events] == ["btc-updown-5m-1"]
+    assert event_query_params[0]["order"] == "endDate"
     assert fallback_records
     assert all(record.levelno == logging.INFO for record in fallback_records)
     assert all(record.exc_info is None for record in fallback_records)

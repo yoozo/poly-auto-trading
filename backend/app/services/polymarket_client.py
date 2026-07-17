@@ -641,7 +641,8 @@ class PolymarketClient:
             "limit": limit,
             "related_tags": True,
             "end_date_min": end_date_min,
-            "order": "end_date",
+            # keyset 的筛选参数使用 snake_case，但 order 必须传事件响应里的 JSON 字段名。
+            "order": "endDate",
             "ascending": True,
         }
         try:
