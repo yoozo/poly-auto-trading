@@ -28,18 +28,6 @@ export function intervalMs(interval: CandleInterval) {
   return 7 * 24 * 60 * 60_000;
 }
 
-export function initialLookbackMs(interval: CandleInterval) {
-  if (interval === "1m") return 12 * 60 * 60_000;
-  if (interval === "5m") return 3 * 24 * 60 * 60_000;
-  if (interval === "15m") return 7 * 24 * 60 * 60_000;
-  if (interval === "30m") return 14 * 24 * 60 * 60_000;
-  if (interval === "1h") return 30 * 24 * 60 * 60_000;
-  if (interval === "4h") return 120 * 24 * 60 * 60_000;
-  if (interval === "12h") return 180 * 24 * 60 * 60_000;
-  if (interval === "1d") return 365 * 24 * 60 * 60_000;
-  return 3 * 365 * 24 * 60 * 60_000;
-}
-
 export function defaultVisibleBars(interval: CandleInterval) {
   if (interval === "1m") return 360;
   if (interval === "5m") return 320;

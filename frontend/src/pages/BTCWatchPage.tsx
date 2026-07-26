@@ -29,7 +29,7 @@ import type {
   MarketIndicatorPoint,
   StreamStatus,
 } from "../components/market-chart/types";
-import { INDICATOR_WARMUP_BARS, calculateIndicatorPoints } from "../components/market-chart/indicators";
+import { calculateIndicatorPoints } from "../components/market-chart/indicators";
 import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletConnection";
 import {
@@ -248,7 +248,7 @@ export default function BTCWatchPage() {
       return {
         mode: "latest" as const,
         interval,
-        limit: 300 + INDICATOR_WARMUP_BARS,
+        limit: 300,
         startMs: undefined,
         endMs: undefined,
       };
@@ -259,13 +259,11 @@ export default function BTCWatchPage() {
     const startMs = Math.max(0, polymarketChartFocusAnchorMs - Math.round(visibleBars * 0.45) * barMs);
     const endMs = polymarketChartFocusAnchorMs + Math.round(visibleBars * 0.65) * barMs;
     const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
-    const warmupStartMs = withIndicatorWarmupStart(startMs, interval);
-
     return {
       mode: "focus" as const,
       interval,
-      limit: limit + INDICATOR_WARMUP_BARS,
-      startMs: warmupStartMs,
+      limit,
+      startMs,
       endMs,
     };
   }, [initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
@@ -615,9 +613,9 @@ export default function BTCWatchPage() {
         const focusCandlesResult = await Promise.resolve(
           requestMarketCandles({
             interval: requestInterval,
-            startMs: withIndicatorWarmupStart(startMs, requestInterval),
+            startMs,
             endMs,
-            limit: limit + INDICATOR_WARMUP_BARS,
+            limit,
           })
         )
           .then((value) => ({ status: "fulfilled" as const, value }))
@@ -861,11 +859,10 @@ export default function BTCWatchPage() {
     async (startMs: number, endMs: number) => {
       setIsLoadingMore(true);
       try {
-        // 指标由前端基于 candle 计算，历史翻页只需要多取 warmup K 线。
         const requestEpoch = dataEpochRef.current;
         const older = await requestMarketCandles({
           interval,
-          startMs: withIndicatorWarmupStart(startMs, interval),
+          startMs,
           endMs,
           limit: 1000,
         });
@@ -967,12 +964,12 @@ export default function BTCWatchPage() {
     setIsJumpingTime(true);
     setTimeJumpError(null);
     try {
-      // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近和指标 warmup 所需的 candle。
+      // 时间跳转可能落在当前缓存窗口之外，先补齐目标附近的 candle。
       const jumpCandles = await requestMarketCandles({
         interval: jumpInterval,
-        startMs: withIndicatorWarmupStart(startMs, jumpInterval),
+        startMs,
         endMs,
-        limit: limit + INDICATOR_WARMUP_BARS,
+        limit,
       });
       if (requestEpoch !== dataEpochRef.current || jumpInterval !== activeIntervalRef.current) return;
       if (jumpCandles.length <= 0) {
@@ -2087,11 +2084,6 @@ function replacePolymarketMarket(markets: PolymarketUpDownMarket[], market: Poly
   const next = [...markets];
   next[index] = market;
   return next;
-}
-
-function withIndicatorWarmupStart(startMs: number, interval: CandleInterval) {
-  // RSI/EMA/BOLL 都由前端计算，历史窗口向前多取一段 K 线作为指标 warmup。
-  return Math.max(0, startMs - INDICATOR_WARMUP_BARS * intervalMs(interval));
 }
 
 function marketComparisonLine({

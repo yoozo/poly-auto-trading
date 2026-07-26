@@ -6,9 +6,6 @@ const RSI_EMA_PERIOD = 14;
 const BOLLINGER_PERIOD = 20;
 const BOLLINGER_STDDEV_MULTIPLIER = 2;
 
-// 后端实时指标使用 500 根 K 线作为递归状态窗口，历史图表保持相同 warmup 才能复现 TG 数值。
-export const INDICATOR_WARMUP_BARS = 500;
-
 export function calculateIndicatorPoints(candles: MarketCandle[], interval: CandleInterval): MarketIndicatorPoint[] {
   if (candles.length === 0) return [];
 

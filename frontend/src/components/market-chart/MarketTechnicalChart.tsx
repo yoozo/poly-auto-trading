@@ -22,13 +22,13 @@ import { buildCandlestickData, type ChartCandle } from "./candlestickData";
 import type { ChartComparisonLine, MarketCandle, MarketIndicatorPoint } from "./types";
 import {
   candleTime,
+  defaultVisibleBars,
   formatAxisTime,
   formatFixed,
   formatPrice,
   formatSigned,
   formatTooltipTime,
   indicatorTime,
-  initialLookbackMs,
   intervalMs,
   nearestTimeValue,
   type TimeValue
@@ -851,7 +851,8 @@ export default function MarketTechnicalChart({
     const first = candlesRef.current[0];
     const currentInterval = intervalRef.current;
     const endMs = new Date(first.open_time).getTime() - intervalMs(currentInterval);
-    const startMs = Math.max(0, endMs - initialLookbackMs(currentInterval));
+    const historyPageBars = Math.min(300, defaultVisibleBars(currentInterval));
+    const startMs = Math.max(0, endMs - (historyPageBars - 1) * intervalMs(currentInterval));
     loadMoreQueuedRef.current = true;
     // 拖动过程中 range 变化很密集，稍微延迟并串行化历史加载，避免重复打 API。
     window.setTimeout(() => {

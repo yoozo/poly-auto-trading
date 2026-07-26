@@ -119,10 +119,34 @@ def test_candles_range_mode_syncs_then_reads_database(monkeypatch) -> None:
     assert calls["sync"] == {
         "symbol": "BTCUSDT",
         "interval": "1m",
-        "start_ms": 1767225600000,
+        "start_ms": 1767195660000,
         "end_ms": 1767229200000,
     }
     assert calls["between"]["symbol"] == "BTCUSDT"
+
+
+def test_candles_range_uses_hidden_warmup_for_first_target_indicator(monkeypatch) -> None:
+    source = [make_candle(index) for index in range(501)]
+
+    async def fake_list_between(session, symbol, interval, start, end):
+        return source
+
+    monkeypatch.setattr(routes_candles, "list_candles_between", fake_list_between)
+
+    start_ms = int(source[499].open_time.timestamp() * 1000)
+    end_ms = int(source[500].open_time.timestamp() * 1000)
+    response = make_client().get(
+        f"/api/candles?symbol=BTCUSDT&interval=1m&limit=2&start_ms={start_ms}&end_ms={end_ms}"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["open_time"] for item in body] == [
+        "2026-01-01T08:19:00Z",
+        "2026-01-01T08:20:00Z",
+    ]
+    assert body[0]["indicator"]["rsi"] == 100
+    assert body[0]["indicator"]["rsi_ema"] == 100
 
 
 def test_candles_range_mode_returns_partial_database_window(monkeypatch) -> None:
@@ -478,7 +502,7 @@ async def test_market_ws_candles_range_request_syncs_and_reads_database(monkeypa
     assert calls["sync"] == {
         "symbol": "BTCUSDT",
         "interval": "1m",
-        "start_ms": 1767225600000,
+        "start_ms": 1767195660000,
         "end_ms": 1767229200000,
     }
     payload = websocket.messages[-1]

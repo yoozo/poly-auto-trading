@@ -15,6 +15,7 @@ from app.services.candle_backfill import (
     candle_backfill_runner,
     candle_sync_service,
 )
+from app.services.candle_intervals import CANDLE_INTERVAL_MS
 from app.services.candle_store import list_candles, list_candles_between
 from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
 from app.services.indicators import calculate_indicator_points
@@ -280,17 +281,33 @@ async def load_candles_snapshot(
         raise HTTPException(status_code=400, detail="start_ms must be less than end_ms")
 
     if start_ms is not None and end_ms is not None:
+        warmup_start_ms = max(
+            0,
+            start_ms - ((settings.candle_history_limit - 1) * CANDLE_INTERVAL_MS[interval]),
+        )
         await candle_sync_service.ensure_range(
             session,
             symbol=symbol,
             interval=interval,
-            start_ms=start_ms,
+            start_ms=warmup_start_ms,
             end_ms=end_ms,
         )
-        start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        warmup_start = datetime.fromtimestamp(warmup_start_ms / 1000, tz=timezone.utc)
+        target_start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
         end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
-        candles = await list_candles_between(session, symbol=symbol, interval=interval, start=start, end=end)
-        return CandleSnapshot("range", attach_indicators(candles, interval))
+        source_candles = await list_candles_between(
+            session,
+            symbol=symbol,
+            interval=interval,
+            start=warmup_start,
+            end=end,
+        )
+        candles = [candle for candle in source_candles if candle.open_time >= target_start]
+        # warmup 只负责还原目标区间起点的指标状态，不能作为用户历史数据返回并画到图上。
+        return CandleSnapshot(
+            "range",
+            attach_indicators(candles, interval, source_candles=source_candles),
+        )
 
     # 指标递归依赖历史状态，快照内部使用后端实时窗口计算，再只返回请求的最后 limit 根。
     indicator_limit = max(limit, settings.candle_history_limit)
