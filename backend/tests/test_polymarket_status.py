@@ -4,7 +4,7 @@ import pytest
 from app.services import polymarket_status
 
 
-def components_payload(*, status="OPERATIONAL", incidents=None, include_clob=True):
+def components_payload(*, status="OPERATIONAL", incidents=None, include_clob=True, clob_name="  Trading API (CLOB)"):
     components = [
         {"id": "website", "name": "Website", "status": "OPERATIONAL"},
     ]
@@ -12,7 +12,7 @@ def components_payload(*, status="OPERATIONAL", incidents=None, include_clob=Tru
         components.append(
             {
                 "id": "clob",
-                "name": "CLOB API",
+                "name": clob_name,
                 "status": status,
                 "activeIncidents": incidents or [],
             }
@@ -52,7 +52,7 @@ def test_clob_operational_is_healthy() -> None:
     result = normalize()
 
     assert result.healthy is True
-    assert result.component_name == "CLOB API"
+    assert result.component_name == "  Trading API (CLOB)"
     assert result.component_status == "OPERATIONAL"
     assert result.summary_page_status == "UP"
     assert result.active_incidents == []
@@ -69,6 +69,13 @@ def test_non_operational_clob_status_is_unhealthy(status) -> None:
 def test_missing_clob_component_raises() -> None:
     with pytest.raises(ValueError, match="CLOB API"):
         normalize(components_payload(include_clob=False))
+
+
+def test_legacy_clob_component_name_remains_supported() -> None:
+    result = normalize(components_payload(clob_name="CLOB API"))
+
+    assert result.healthy is True
+    assert result.component_name == "CLOB API"
 
 
 def test_clob_incident_is_unhealthy() -> None:
