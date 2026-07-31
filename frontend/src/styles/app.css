@@ -1954,6 +1954,17 @@ body[data-theme="dark"] .app-account-login-action {
   flex-wrap: wrap;
 }
 
+.watch-indicator-period {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #64748b;
+}
+
+.watch-indicator-period .ant-input-number {
+  width: 58px;
+}
+
 .watch-toolbar-status {
   flex: 0 1 auto;
   justify-content: flex-end;

@@ -41,6 +41,8 @@ export type MarketTechnicalChartProps = {
   indicators: MarketIndicatorPoint[];
   showBollinger: boolean;
   showRsi: boolean;
+  rsiPeriod?: number;
+  diffPeriod?: number;
   onLoadMore?: (startMs: number, endMs: number) => Promise<void>;
   isLoadingMore?: boolean;
   isInitializing?: boolean;
@@ -133,6 +135,8 @@ export default function MarketTechnicalChart({
   indicators,
   showBollinger,
   showRsi,
+  rsiPeriod = 14,
+  diffPeriod = 14,
   onLoadMore,
   isLoadingMore = false,
   isInitializing = false,
@@ -1415,7 +1419,7 @@ export default function MarketTechnicalChart({
 
     const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval}</span>`];
     rows.push(
-      `RSI14 ${formatFixed(indicator.rsi)} · EMA14 ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
+      `RSI${rsiPeriod} ${formatFixed(indicator.rsi)} · EMA${diffPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
     );
     tooltip.innerHTML = rows.join("<br />");
     tooltip.hidden = false;
