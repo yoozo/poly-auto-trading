@@ -1421,9 +1421,10 @@ export default function MarketTechnicalChart({
       typeof previousDiff === "number" && typeof indicator.rsi_ema_diff === "number"
         ? Math.abs(previousDiff - indicator.rsi_ema_diff)
         : null;
+    const diffChangeClass = diffChange !== null && diffChange > 9 ? "diff-strong" : diffChange !== null && diffChange > 6 ? "diff-watch" : "diff-normal";
     const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval}</span>`];
     rows.push(
-      `RSI${indicatorPeriod} ${formatFixed(indicator.rsi)} · EMA${indicatorPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)} · |ΔDiff| ${formatFixed(diffChange)}`
+      `RSI${indicatorPeriod} ${formatFixed(indicator.rsi)} · EMA${indicatorPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)} · |ΔDiff| <span class="${diffChangeClass}">${formatFixed(diffChange)}</span>`
     );
     tooltip.innerHTML = rows.join("<br />");
     tooltip.hidden = false;
