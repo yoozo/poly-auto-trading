@@ -1,22 +1,24 @@
 import type { CandleInterval } from "../../api/client";
 import type { MarketCandle, MarketIndicatorPoint } from "./types";
 
-export const DEFAULT_RSI_PERIOD = 14;
-export const DEFAULT_DIFF_PERIOD = 14;
+export const DEFAULT_INDICATOR_PERIOD = 14;
 const BOLLINGER_PERIOD = 20;
 const BOLLINGER_STDDEV_MULTIPLIER = 2;
+
+export function indicatorWarmupBars(period: number) {
+  return Math.max(BOLLINGER_PERIOD, period * 2);
+}
 
 export function calculateIndicatorPoints(
   candles: MarketCandle[],
   interval: CandleInterval,
-  rsiPeriod = DEFAULT_RSI_PERIOD,
-  diffPeriod = DEFAULT_DIFF_PERIOD,
+  period = DEFAULT_INDICATOR_PERIOD,
 ): MarketIndicatorPoint[] {
   if (candles.length === 0) return [];
 
   const closes = candles.map((candle) => candle.close);
-  const rsiValues = calculateRsiSeries(closes, rsiPeriod);
-  const rsiEmaValues = calculateNullableEmaSeries(rsiValues, diffPeriod);
+  const rsiValues = calculateRsiSeries(closes, period);
+  const rsiEmaValues = calculateNullableEmaSeries(rsiValues, period);
   const bollingerValues = calculateBollingerSeries(closes);
 
   return candles.map((candle, index) => {

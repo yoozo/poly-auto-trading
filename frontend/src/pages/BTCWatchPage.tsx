@@ -31,8 +31,8 @@ import type {
 } from "../components/market-chart/types";
 import {
   calculateIndicatorPoints,
-  DEFAULT_DIFF_PERIOD,
-  DEFAULT_RSI_PERIOD,
+  DEFAULT_INDICATOR_PERIOD,
+  indicatorWarmupBars,
 } from "../components/market-chart/indicators";
 import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletConnection";
@@ -64,8 +64,7 @@ const candleIntervalLabels: Record<CandleInterval, string> = {
 const INTERVAL_KEY = "poly-auto.btcWatch.interval";
 const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
-const RSI_PERIOD_KEY = "poly-auto.btcWatch.rsiPeriod";
-const DIFF_PERIOD_KEY = "poly-auto.btcWatch.diffPeriod";
+const INDICATOR_PERIOD_KEY = "poly-auto.btcWatch.rsiPeriod";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
 const MIN_INDICATOR_PERIOD = 2;
 const MAX_INDICATOR_PERIOD = 200;
@@ -110,8 +109,9 @@ export default function BTCWatchPage() {
   });
   const [showBollinger, setShowBollinger] = useState(() => localStorage.getItem(BOLL_KEY) !== "0");
   const [showRsi, setShowRsi] = useState(() => localStorage.getItem(RSI_KEY) !== "0");
-  const [rsiPeriod, setRsiPeriod] = useState(() => readIndicatorPeriod(RSI_PERIOD_KEY, DEFAULT_RSI_PERIOD));
-  const [diffPeriod, setDiffPeriod] = useState(() => readIndicatorPeriod(DIFF_PERIOD_KEY, DEFAULT_DIFF_PERIOD));
+  const [indicatorPeriod, setIndicatorPeriod] = useState(() =>
+    readIndicatorPeriod(INDICATOR_PERIOD_KEY, DEFAULT_INDICATOR_PERIOD)
+  );
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
   const [marketSocketOpenNonce, setMarketSocketOpenNonce] = useState(0);
   const [candles, setCandles] = useState<MarketCandle[]>([]);
@@ -191,9 +191,9 @@ export default function BTCWatchPage() {
   }, [activeCandles]);
   const activeIndicators = useMemo(
     () => {
-      const calculated = calculateIndicatorPoints(activeCandles, interval, rsiPeriod, diffPeriod);
+      const calculated = calculateIndicatorPoints(activeCandles, interval, indicatorPeriod);
       // 后端只持久化默认 14/14 指标；自定义 period 时必须完全使用当前 K 线重算结果。
-      if (rsiPeriod !== DEFAULT_RSI_PERIOD || diffPeriod !== DEFAULT_DIFF_PERIOD) return calculated;
+      if (indicatorPeriod !== DEFAULT_INDICATOR_PERIOD) return calculated;
       const backendByTime = new Map(
         activeCandles
           .filter((candle) => candle.indicator)
@@ -202,7 +202,7 @@ export default function BTCWatchPage() {
       // 实时 K 线优先使用后端同一计算窗口产出的指标，避免 Telegram 与图表各算一套 diff。
       return calculated.map((point) => backendByTime.get(point.candle_time) ?? point);
     },
-    [activeCandles, diffPeriod, interval, rsiPeriod]
+    [activeCandles, indicatorPeriod, interval]
   );
   const latest = activeCandles.at(-1);
   const selectedPolymarket = selectedPolymarketMarket({
@@ -260,7 +260,7 @@ export default function BTCWatchPage() {
       return {
         mode: "latest" as const,
         interval,
-        limit: 300,
+        limit: Math.min(Math.max(300, initialVisibleCandles + indicatorWarmupBars(indicatorPeriod)), 1000),
         startMs: undefined,
         endMs: undefined,
       };
@@ -268,9 +268,11 @@ export default function BTCWatchPage() {
 
     const barMs = intervalMs(interval);
     const visibleBars = Math.max(initialVisibleCandles, 80);
-    const startMs = Math.max(0, polymarketChartFocusAnchorMs - Math.round(visibleBars * 0.45) * barMs);
+    // RSI-EMA diff 需要连续两段 period 预热；额外 K 线只用于计算，焦点视窗仍由 anchor 决定。
+    const warmupBars = indicatorWarmupBars(indicatorPeriod);
+    const startMs = Math.max(0, polymarketChartFocusAnchorMs - (Math.round(visibleBars * 0.45) + warmupBars) * barMs);
     const endMs = polymarketChartFocusAnchorMs + Math.round(visibleBars * 0.65) * barMs;
-    const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
+    const limit = Math.min(Math.max(visibleBars + warmupBars + 40, 140), 1000);
     return {
       mode: "focus" as const,
       interval,
@@ -278,7 +280,7 @@ export default function BTCWatchPage() {
       startMs,
       endMs,
     };
-  }, [initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
+  }, [indicatorPeriod, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
   const candleSnapshotModeRef = useRef<"latest" | "focus">(candleSnapshotQuery.mode);
   const [candleSnapshotError, setCandleSnapshotError] = useState<string | null>(null);
   const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
@@ -346,12 +348,8 @@ export default function BTCWatchPage() {
   }, [showRsi]);
 
   useEffect(() => {
-    localStorage.setItem(RSI_PERIOD_KEY, String(rsiPeriod));
-  }, [rsiPeriod]);
-
-  useEffect(() => {
-    localStorage.setItem(DIFF_PERIOD_KEY, String(diffPeriod));
-  }, [diffPeriod]);
+    localStorage.setItem(INDICATOR_PERIOD_KEY, String(indicatorPeriod));
+  }, [indicatorPeriod]);
 
   useEffect(() => {
     activePolymarketIntervalRef.current = polymarketInterval;
@@ -615,7 +613,7 @@ export default function BTCWatchPage() {
       return;
     }
 
-    const requestKey = `${chartFocusKey}:${interval}`;
+    const requestKey = `${chartFocusKey}:${interval}:${indicatorPeriod}`;
     if (marketFocusDataRequestKeyRef.current === requestKey) return;
     marketFocusDataRequestKeyRef.current = requestKey;
 
@@ -623,9 +621,10 @@ export default function BTCWatchPage() {
     const requestInterval = activeIntervalRef.current;
     const barMs = intervalMs(requestInterval);
     const visibleBars = Math.max(initialVisibleCandles, 80);
-    const startMs = Math.max(0, focusAnchorMs - Math.round(visibleBars * 0.45) * barMs);
+    const warmupBars = indicatorWarmupBars(indicatorPeriod);
+    const startMs = Math.max(0, focusAnchorMs - (Math.round(visibleBars * 0.45) + warmupBars) * barMs);
     const endMs = focusAnchorMs + Math.round(visibleBars * 0.65) * barMs;
-    const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
+    const limit = Math.min(Math.max(visibleBars + warmupBars + 40, 140), 1000);
 
     // 首屏 REST 快照先定基准；快照内仍缺目标 open_time 时，再按当前 K 线周期补齐锚点附近数据。
     void (async () => {
@@ -662,7 +661,7 @@ export default function BTCWatchPage() {
         }
       }
     })();
-  }, [activeCandles, candleSnapshotQuery.mode, chartFocusKey, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
+  }, [activeCandles, candleSnapshotQuery.mode, chartFocusKey, indicatorPeriod, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -977,9 +976,10 @@ export default function BTCWatchPage() {
     const jumpInterval = activeIntervalRef.current;
     const barMs = intervalMs(jumpInterval);
     const visibleBars = Math.max(initialVisibleCandles, 80);
-    const startMs = Math.max(0, targetMs - Math.round(visibleBars * 0.45) * barMs);
+    const warmupBars = indicatorWarmupBars(indicatorPeriod);
+    const startMs = Math.max(0, targetMs - (Math.round(visibleBars * 0.45) + warmupBars) * barMs);
     const endMs = targetMs + Math.round(visibleBars * 0.65) * barMs;
-    const limit = Math.min(Math.max(visibleBars + 40, 140), 1000);
+    const limit = Math.min(Math.max(visibleBars + warmupBars + 40, 140), 1000);
 
     setIsJumpingTime(true);
     setTimeJumpError(null);
@@ -1007,7 +1007,7 @@ export default function BTCWatchPage() {
     } finally {
       setIsJumpingTime(false);
     }
-  }, [initialVisibleCandles, timeJumpInput]);
+  }, [indicatorPeriod, initialVisibleCandles, timeJumpInput]);
 
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((value) => {
@@ -1044,27 +1044,15 @@ export default function BTCWatchPage() {
           RSI
         </Button>
         <label className="watch-indicator-period">
-          RSI
+          Period
           <InputNumber
-            aria-label="RSI period"
+            aria-label="RSI 和 Diff period"
             min={MIN_INDICATOR_PERIOD}
             max={MAX_INDICATOR_PERIOD}
             precision={0}
             size="small"
-            value={rsiPeriod}
-            onChange={(value) => typeof value === "number" && setRsiPeriod(value)}
-          />
-        </label>
-        <label className="watch-indicator-period">
-          Diff
-          <InputNumber
-            aria-label="Diff EMA period"
-            min={MIN_INDICATOR_PERIOD}
-            max={MAX_INDICATOR_PERIOD}
-            precision={0}
-            size="small"
-            value={diffPeriod}
-            onChange={(value) => typeof value === "number" && setDiffPeriod(value)}
+            value={indicatorPeriod}
+            onChange={(value) => typeof value === "number" && setIndicatorPeriod(value)}
           />
         </label>
       </div>
@@ -1121,8 +1109,7 @@ export default function BTCWatchPage() {
             indicators={activeIndicators}
             showBollinger={showBollinger}
             showRsi={showRsi}
-            rsiPeriod={rsiPeriod}
-            diffPeriod={diffPeriod}
+            indicatorPeriod={indicatorPeriod}
             onLoadMore={loadMore}
             isLoadingMore={isLoadingMore}
             isInitializing={isSwitchingInterval}
