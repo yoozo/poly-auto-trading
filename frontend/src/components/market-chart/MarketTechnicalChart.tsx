@@ -1415,9 +1415,15 @@ export default function MarketTechnicalChart({
       return;
     }
 
+    // Diff 变化取相邻上一根 K 线，时间缺口或指标尚未预热完成时不跨段比较。
+    const previousDiff = indicatorByTimeRef.current.get(time - intervalMs(intervalRef.current) / 1000)?.rsi_ema_diff;
+    const diffChange =
+      typeof previousDiff === "number" && typeof indicator.rsi_ema_diff === "number"
+        ? Math.abs(previousDiff - indicator.rsi_ema_diff)
+        : null;
     const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval}</span>`];
     rows.push(
-      `RSI${indicatorPeriod} ${formatFixed(indicator.rsi)} · EMA${indicatorPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)}`
+      `RSI${indicatorPeriod} ${formatFixed(indicator.rsi)} · EMA${indicatorPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)} · |ΔDiff| ${formatFixed(diffChange)}`
     );
     tooltip.innerHTML = rows.join("<br />");
     tooltip.hidden = false;
