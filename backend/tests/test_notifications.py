@@ -226,12 +226,15 @@ def test_analyze_signal_input_marks_negative_rsi_diff_as_buy_long() -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch) -> None:
+@pytest.mark.parametrize("interval", ["15m", "1h", "4h"])
+async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch, interval) -> None:
     calls = []
     candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     signals = [
         make_signal_record(1, "rsi_low", "RSI <= 30", candle_time),
-        make_signal_record(2, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time),
+        make_signal_record(
+            2, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval
+        ),
     ]
 
     async def fake_process_telegram_delivery(session, signal_records):
@@ -243,6 +246,29 @@ async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch) -> 
     await notifications.process_signal_notifications(object(), signals)
 
     assert calls == [[signals[1]]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval", ["1m", "5m"])
+async def test_process_signal_notifications_skips_short_intervals(monkeypatch, interval) -> None:
+    calls = []
+    candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signals = [
+        make_signal_record(
+            1, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval
+        )
+    ]
+
+    async def fake_process_telegram_delivery(session, signal_records):
+        calls.append(signal_records)
+        return None
+
+    monkeypatch.setattr(notifications, "process_telegram_delivery", fake_process_telegram_delivery)
+
+    deliveries = await notifications.process_signal_notifications(object(), signals)
+
+    assert deliveries == []
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -430,6 +456,7 @@ def make_signal_record(
     signal_key: str,
     signal_label: str,
     occurred_at: datetime,
+    interval: str = "1m",
 ) -> SignalRecord:
     return SignalRecord(
         id=signal_id,
@@ -438,11 +465,11 @@ def make_signal_record(
         action="buy" if "low" in signal_key else "sell",
         direction="long" if "low" in signal_key else "short",
         target_type="candle",
-        target_key="BTCUSDT:1m",
-        dedupe_key=f"candle:BTCUSDT:1m:{occurred_at.isoformat()}",
+        target_key=f"BTCUSDT:{interval}",
+        dedupe_key=f"candle:BTCUSDT:{interval}:{occurred_at.isoformat()}",
         occurred_at=occurred_at,
         score=25,
         input_snapshot={},
-        metadata={},
+        metadata={"interval": interval},
         created_at=occurred_at,
     )

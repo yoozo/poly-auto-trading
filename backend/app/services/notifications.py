@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_ENABLED_KEY = "telegram.enabled"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
+TELEGRAM_SIGNAL_INTERVALS = {"15m", "1h", "4h"}
 
 
 async def get_telegram_enabled(session: AsyncSession) -> bool:
@@ -115,8 +116,13 @@ async def process_signal_notifications(
 ) -> list[NotificationDelivery]:
     if not signals:
         return []
-    # Telegram 当前只保留 RSI-Diff 提醒；其他信号仍由分析层落库，但不进入外部通知渠道。
-    telegram_signals = [signal for signal in signals if signal.signal_key == "rsi_ema_diff"]
+    # Telegram 只推送中高周期 RSI-Diff；其他信号仍由分析层落库，不进入外部通知渠道。
+    telegram_signals = [
+        signal
+        for signal in signals
+        if signal.signal_key == "rsi_ema_diff"
+        and signal.metadata.get("interval") in TELEGRAM_SIGNAL_INTERVALS
+    ]
     if not telegram_signals:
         return []
     delivery = await process_telegram_delivery(session, telegram_signals)
