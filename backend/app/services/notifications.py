@@ -28,7 +28,12 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_ENABLED_KEY = "telegram.enabled"
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
-TELEGRAM_SIGNAL_INTERVALS = {"15m", "1h", "4h"}
+TELEGRAM_SIGNAL_SOURCES = {
+    "5m": "chainlink_spot",
+    "15m": "chainlink_spot",
+    "1h": "binance_ws",
+    "4h": "binance_ws",
+}
 
 
 async def get_telegram_enabled(session: AsyncSession) -> bool:
@@ -116,17 +121,29 @@ async def process_signal_notifications(
 ) -> list[NotificationDelivery]:
     if not signals:
         return []
-    # Telegram 只推送中高周期 RSI-Diff；行情价格变化不进入外部通知渠道。
+    # 5m/15m 的交易 market 以 Chainlink 为准；更高周期保留 Binance，避免同一根 K 线被双源重复推送。
     telegram_signals = [
         signal
         for signal in signals
         if signal.signal_key == "rsi_ema_diff"
-        and signal.metadata.get("interval") in TELEGRAM_SIGNAL_INTERVALS
+        and telegram_signal_uses_expected_source(signal)
     ]
     if not telegram_signals:
         return []
     delivery = await process_telegram_delivery(session, telegram_signals)
     return [delivery] if delivery is not None else []
+
+
+def telegram_signal_uses_expected_source(signal: SignalRecord) -> bool:
+    interval = signal.metadata.get("interval")
+    expected_source = TELEGRAM_SIGNAL_SOURCES.get(interval) if isinstance(interval, str) else None
+    events = signal.input_snapshot.get("market_events")
+    source = (
+        events[0].get("source")
+        if isinstance(events, list) and events and isinstance(events[0], dict)
+        else None
+    )
+    return source == expected_source
 
 
 async def process_telegram_delivery(

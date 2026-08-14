@@ -226,14 +226,24 @@ def test_analyze_signal_input_marks_negative_rsi_diff_as_buy_long() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("interval", ["15m", "1h", "4h"])
-async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch, interval) -> None:
+@pytest.mark.parametrize(
+    ("interval", "source"),
+    [
+        ("5m", "chainlink_spot"),
+        ("15m", "chainlink_spot"),
+        ("1h", "binance_ws"),
+        ("4h", "binance_ws"),
+    ],
+)
+async def test_process_signal_notifications_keeps_rsi_diff_from_expected_source(
+    monkeypatch, interval, source
+) -> None:
     calls = []
     candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     signals = [
         make_signal_record(1, "rsi_low", "RSI <= 30", candle_time),
         make_signal_record(
-            2, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval
+            2, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval, source=source
         ),
     ]
 
@@ -249,13 +259,24 @@ async def test_process_signal_notifications_keeps_only_rsi_diff(monkeypatch, int
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("interval", ["1m", "5m"])
-async def test_process_signal_notifications_skips_short_intervals(monkeypatch, interval) -> None:
+@pytest.mark.parametrize(
+    ("interval", "source"),
+    [
+        ("1m", "chainlink_spot"),
+        ("5m", "binance_ws"),
+        ("15m", "binance_ws"),
+        ("1h", "chainlink_spot"),
+        ("4h", "chainlink_spot"),
+    ],
+)
+async def test_process_signal_notifications_skips_unexpected_source(
+    monkeypatch, interval, source
+) -> None:
     calls = []
     candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     signals = [
         make_signal_record(
-            1, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval
+            1, "rsi_ema_diff", "|RSI-EMA diff| >= 8", candle_time, interval=interval, source=source
         )
     ]
 
@@ -457,6 +478,7 @@ def make_signal_record(
     signal_label: str,
     occurred_at: datetime,
     interval: str = "1m",
+    source: str = "binance_ws",
 ) -> SignalRecord:
     return SignalRecord(
         id=signal_id,
@@ -469,7 +491,7 @@ def make_signal_record(
         dedupe_key=f"candle:BTCUSDT:{interval}:{occurred_at.isoformat()}",
         occurred_at=occurred_at,
         score=25,
-        input_snapshot={},
+        input_snapshot={"market_events": [{"source": source}]},
         metadata={"interval": interval},
         created_at=occurred_at,
     )
