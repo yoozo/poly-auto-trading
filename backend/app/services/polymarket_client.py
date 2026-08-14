@@ -78,6 +78,7 @@ UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
 }
+TWAP_STREAM_WINDOW_RE = re.compile(r"twap[-_: ]+(30|60)s(?:-streams)?", re.IGNORECASE)
 CLOSE_ONLY_COUNTRIES = {"PL", "SG", "TH", "TW"}
 GEOBLOCK_URL = "https://polymarket.com/api/geoblock"
 
@@ -139,6 +140,7 @@ class PolymarketUpDownMarket:
     title: str
     series_slug: str | None
     interval: str
+    twap_window_seconds: int | None
     start_time: datetime | None
     end_time: datetime | None
     window: str
@@ -1525,6 +1527,7 @@ def normalize_up_down_market(
         title=string_or_none(market.get("question") or event.get("title")) or "Bitcoin Up or Down",
         series_slug=string_or_none(event.get("seriesSlug")),
         interval=interval,
+        twap_window_seconds=event_twap_window_seconds(event),
         start_time=start_time,
         end_time=end_time,
         window=market_window(start_time=start_time, end_time=end_time, now=now),
@@ -1554,6 +1557,12 @@ def normalize_up_down_market(
         updated_at=now,
         raw_event=event,
     )
+
+
+def event_twap_window_seconds(event: dict[str, Any]) -> int | None:
+    # 市场规则会切换 30s/60s，必须从该 market 的 resolution URL 读取，不能按 5m/15m 猜测。
+    match = TWAP_STREAM_WINDOW_RE.search(json.dumps(event, default=str))
+    return int(match.group(1)) if match else None
 
 
 def normalize_outcome_quote(

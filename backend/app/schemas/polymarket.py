@@ -33,6 +33,7 @@ class PolymarketUpDownMarket(BaseModel):
     title: str
     series_slug: str | None
     interval: str
+    twap_window_seconds: Literal[30, 60] | None = None
     start_time: datetime | None
     end_time: datetime | None
     window: str

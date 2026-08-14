@@ -38,7 +38,6 @@ TOPIC_WINDOWS = {
     "crypto_prices_twap_thirty": 30,
     "crypto_prices_twap_sixty": 60,
 }
-INTERVAL_WINDOWS = {"5m": 30, "15m": 60}
 SYMBOL = "btc/usd"
 E18 = Decimal(10) ** 18
 BASELINE_TOLERANCE = timedelta(seconds=5)
@@ -147,7 +146,7 @@ async def market_price_context(
     *,
     now: datetime | None = None,
 ) -> MarketPriceContext | None:
-    window_seconds = INTERVAL_WINDOWS.get(market.interval)
+    window_seconds = getattr(market, "twap_window_seconds", None)
     if window_seconds is None or market.start_time is None or market.end_time is None:
         return None
 
@@ -158,13 +157,14 @@ async def market_price_context(
     current = await latest_observation(
         session, window_seconds, start, min(now, end)
     )
-    baseline = await baseline_observation(session, window_seconds, start)
-    price_to_beat = None if baseline else await polymarket_price_to_beat(market)
+    # Price To Beat 以 Polymarket 页面使用的 openPrice 为准；本地起始观测仅在接口不可用时兜底。
+    price_to_beat = await polymarket_price_to_beat(market)
+    baseline = None if price_to_beat is not None else await baseline_observation(session, window_seconds, start)
     baseline_point = (
-        observation_point(baseline)
-        if baseline
-        else MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
+        MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
         if price_to_beat is not None
+        else observation_point(baseline)
+        if baseline
         else await binance_baseline(session, start)
     )
     current_point = observation_point(current) if current else None
@@ -203,11 +203,9 @@ async def market_price_context(
         )
 
     difference = current.value - baseline_point.value
-    estimated = baseline_point.source != "chainlink"
+    estimated = baseline_point.source == "binance"
     warning = None
-    if baseline_point.source == "polymarket":
-        warning = "启动时缺少 Chainlink 起始 TWAP，已用 Polymarket 参考价补齐，可能存在细微误差"
-    elif baseline_point.source == "binance":
+    if baseline_point.source == "binance":
         warning = "启动时缺少 Chainlink 起始 TWAP，已用 Binance 1m 收盘价补齐，可能存在误差"
     return MarketPriceContext(
         market_id=market.id,
@@ -253,9 +251,11 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
                     },
                 )
                 response.raise_for_status()
-                value = Decimal(str(response.json()["openPrice"]))
-            # Price to Beat 对 market 生命周期不变，成功后无需再次请求。
-            expires_at = now + timedelta(days=3650)
+                payload = response.json()
+                value = Decimal(str(payload["openPrice"]))
+            # 未完成响应会继续变化，短缓存重试；完成后 Price To Beat 在 market 生命周期内不变。
+            completed = payload.get("completed") is True and payload.get("incomplete") is not True
+            expires_at = now + (timedelta(days=3650) if completed else timedelta(seconds=5))
         except (httpx.HTTPError, KeyError, TypeError, ValueError, InvalidOperation) as exc:
             logger.warning("Failed to fetch Polymarket Price to Beat", exc_info=exc)
             value = None

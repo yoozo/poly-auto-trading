@@ -414,6 +414,7 @@ export type PolymarketUpDownMarket = {
   title: string;
   series_slug: string | null;
   interval: PolymarketInterval;
+  twap_window_seconds: 30 | 60 | null;
   start_time: string | null;
   end_time: string | null;
   window: "current" | "next" | "upcoming" | "expired" | "unknown";

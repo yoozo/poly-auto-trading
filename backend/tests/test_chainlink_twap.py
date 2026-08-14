@@ -14,6 +14,7 @@ from app.services.chainlink_twap import (
     candles_to_persist,
     market_price_context,
     parse_twap_message,
+    polymarket_price_to_beat,
     subscription_payload,
 )
 
@@ -156,42 +157,42 @@ def test_persistence_keeps_live_one_minute_as_replay_source() -> None:
 
 
 @pytest.mark.asyncio
-async def test_market_price_context_prefers_chainlink_baseline(monkeypatch) -> None:
+async def test_market_price_context_prefers_polymarket_price_to_beat(monkeypatch) -> None:
     start = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
     current = SimpleNamespace(value=Decimal("65010"), observed_at=start)
-    baseline = SimpleNamespace(value=Decimal("65000"), observed_at=start)
     requested_windows = []
 
     async def latest(*args):
         requested_windows.append(("current", args[1]))
         return current
 
-    async def starting(*args):
-        requested_windows.append(("baseline", args[1]))
-        return baseline
-
-    async def unexpected_price_to_beat(*args):
-        raise AssertionError("exact Chainlink baseline must not call the fallback endpoint")
-
     monkeypatch.setattr(chainlink_twap, "latest_observation", latest)
-    monkeypatch.setattr(chainlink_twap, "baseline_observation", starting)
+    monkeypatch.setattr(
+        chainlink_twap,
+        "baseline_observation",
+        lambda *args: (_ for _ in ()).throw(AssertionError("official baseline must win")),
+    )
     monkeypatch.setattr(chainlink_twap, "binance_baseline", lambda *args: async_value(None))
-    monkeypatch.setattr(chainlink_twap, "polymarket_price_to_beat", unexpected_price_to_beat)
+    monkeypatch.setattr(
+        chainlink_twap,
+        "polymarket_price_to_beat",
+        lambda *args: async_value(Decimal("65000")),
+    )
 
     context = await market_price_context(
         object(),
-        market(start=start, interval="5m"),
+        market(start=start, interval="5m", twap_window_seconds=60),
         now=start,
     )
 
     assert context is not None
     assert context.quality == "exact"
-    assert context.baseline and context.baseline.source == "chainlink"
+    assert context.baseline and context.baseline.source == "polymarket"
     assert context.difference == Decimal("10")
     assert context.direction == "up"
     assert context.current and context.current.value == Decimal("65010")
     assert context.settlement_twap and context.settlement_twap.value == Decimal("65010")
-    assert requested_windows == [("current", 30), ("baseline", 30)]
+    assert requested_windows == [("current", 60)]
 
 
 @pytest.mark.asyncio
@@ -217,15 +218,48 @@ async def test_market_price_context_marks_binance_startup_fallback(monkeypatch) 
     assert context.warning and "可能存在误差" in context.warning
 
 
+@pytest.mark.asyncio
+async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"openPrice": 65000.5, "completed": False, "incomplete": True}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(chainlink_twap.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    chainlink_twap._price_to_beat_cache.clear()
+    before = datetime.now(timezone.utc)
+    active_market = market(start=start, interval="5m")
+
+    value = await polymarket_price_to_beat(active_market)
+
+    assert value == Decimal("65000.5")
+    assert chainlink_twap._price_to_beat_cache[active_market.id][1] <= before + timedelta(seconds=6)
+
+
 async def async_value(value):
     return value
 
 
-def market(*, start: datetime, interval: str):
+def market(*, start: datetime, interval: str, twap_window_seconds: int | None = None):
     minutes = 5 if interval == "5m" else 15
     return SimpleNamespace(
         id=f"btc-{interval}-{int(start.timestamp())}",
         interval=interval,
+        twap_window_seconds=twap_window_seconds or (30 if interval == "5m" else 60),
         start_time=start,
         end_time=start.replace(minute=start.minute + minutes),
     )
