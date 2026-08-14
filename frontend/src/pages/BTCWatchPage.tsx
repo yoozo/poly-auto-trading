@@ -47,6 +47,7 @@ import {
   POLYMARKET_INTERVAL_MS,
   polymarketDisplayWindow,
   selectedPolymarketMarket,
+  type ChartCandleSource,
   type PolymarketDisplayWindow,
 } from "./btcWatchMarketRules";
 
@@ -68,6 +69,7 @@ const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
 const INDICATOR_PERIOD_KEY = "poly-auto.btcWatch.rsiPeriod";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
+const CANDLE_SOURCE_KEY = "poly-auto.btcWatch.candleSource";
 const MIN_INDICATOR_PERIOD = 2;
 const MAX_INDICATOR_PERIOD = 200;
 const MAX_VISIBLE_MARKET_PILLS = 5;
@@ -132,6 +134,9 @@ export default function BTCWatchPage() {
     const saved = localStorage.getItem(POLY_INTERVAL_KEY);
     return polymarketIntervals.includes(saved as PolymarketInterval) ? (saved as PolymarketInterval) : "5m";
   });
+  const [preferredCandleSource, setPreferredCandleSource] = useState<ChartCandleSource>(() =>
+    localStorage.getItem(CANDLE_SOURCE_KEY) === "binance" ? "binance" : "chainlink"
+  );
   const [selectedPolymarketId, setSelectedPolymarketId] = useState<string | null>(null);
   const [autoSwitchPolymarket, setAutoSwitchPolymarket] = useState(true);
   const [polymarketFocusNonce, setPolymarketFocusNonce] = useState(0);
@@ -217,7 +222,10 @@ export default function BTCWatchPage() {
     selectedMarketId: selectedPolymarketId,
     selectedMarketSnapshot: selectedPolymarketSnapshot,
   });
-  const candleSymbol = marketCandleSymbol(selectedPolymarket?.interval, interval);
+  const chainlinkSourceAvailable =
+    (selectedPolymarket?.interval === "5m" || selectedPolymarket?.interval === "15m") &&
+    (interval === "1m" || interval === "5m" || interval === "15m");
+  const candleSymbol = marketCandleSymbol(selectedPolymarket?.interval, interval, preferredCandleSource);
   const activeCandleSymbolRef = useRef(candleSymbol);
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
   const comparisonTarget = selectedPolymarket ? marketComparisonTarget(selectedPolymarket) : null;
@@ -1081,8 +1089,27 @@ export default function BTCWatchPage() {
         <Typography.Text strong>
           {candleSymbol === "BTCUSD" ? "BTC/USD · Chainlink" : "BTC/USDT · Binance"}
         </Typography.Text>
+        {chainlinkSourceAvailable && (
+          <Segmented
+            size="small"
+            aria-label="K 线数据源"
+            options={[
+              { label: "Chainlink", value: "chainlink" },
+              { label: "Binance", value: "binance" },
+            ]}
+            value={preferredCandleSource}
+            onChange={(value) => {
+              const source = value as ChartCandleSource;
+              localStorage.setItem(CANDLE_SOURCE_KEY, source);
+              setPreferredCandleSource(source);
+            }}
+          />
+        )}
         {latest?.source === "binance_fallback" && (
           <Typography.Text type="warning">Binance 历史补齐</Typography.Text>
+        )}
+        {latest?.source === "polymarket" && (
+          <Typography.Text type="warning">Polymarket 收盘回填</Typography.Text>
         )}
         {latest?.source === "chainlink" && !latest.is_complete && (
           <Typography.Text type="warning">Chainlink K线不完整</Typography.Text>
@@ -1451,7 +1478,7 @@ function MarketPriceSummary({ context }: { context: PolymarketMarketPriceContext
         <strong>{baseline === null ? "--" : `$${formatBtcPrice(baseline)}`}</strong>
       </div>
       <div className="polymarket-price-summary-item current">
-        <span>Current Price</span>
+        <span>{context?.current?.source === "polymarket" ? "Final Price" : "Current Price"}</span>
         <strong>{current === null ? "--" : `$${formatBtcPrice(current)}`}</strong>
       </div>
       <div className={`polymarket-price-summary-diff ${tone}`}>
@@ -2263,11 +2290,16 @@ function formatProbability(value: number | null) {
 
 function marketPriceQualityLabel(context: PolymarketMarketPriceContext | null) {
   if (!context) return "等待 Chainlink";
-  if (context.quality === "exact") return `Chainlink ${context.twap_window_seconds}s TWAP`;
+  if (context.quality === "exact") {
+    return context.current?.source === "polymarket"
+      ? "Polymarket 官方收盘"
+      : `Chainlink ${context.twap_window_seconds}s TWAP`;
+  }
   if (context.quality === "estimated_baseline") {
     return `${context.baseline?.source === "polymarket" ? "Polymarket" : "Binance"} 补齐 · 可能有误差`;
   }
   if (context.quality === "stale") return "Chainlink 已过期";
+  if (context.quality === "waiting_polymarket_final") return "等待 Polymarket 收盘";
   if (context.quality === "unavailable") return "缺少参考价";
   return "等待 Chainlink";
 }

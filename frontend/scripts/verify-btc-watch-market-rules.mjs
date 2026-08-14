@@ -192,6 +192,13 @@ const scenarioSource = `
     for (const candleInterval of ["1h", "4h", "12h", "1d", "1w"]) {
       assert.equal(marketCandleSymbol(marketInterval, candleInterval), "BTCUSDT");
     }
+    for (const candleInterval of ["1m", "5m", "15m"]) {
+      assert.equal(
+        marketCandleSymbol(marketInterval, candleInterval, "binance"),
+        "BTCUSDT",
+        "manual Binance source must override eligible Chainlink chart data"
+      );
+    }
   }
   for (const marketInterval of ["1h", "4h", null]) {
     assert.equal(marketCandleSymbol(marketInterval, "1m"), "BTCUSDT");

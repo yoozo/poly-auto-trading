@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 Interval = Literal["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w"]
-CandleSource = Literal["binance", "chainlink", "binance_fallback"]
+CandleSource = Literal["binance", "chainlink", "binance_fallback", "polymarket"]
 
 
 class Candle(BaseModel):

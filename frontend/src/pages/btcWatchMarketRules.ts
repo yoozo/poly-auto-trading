@@ -38,13 +38,16 @@ export type MarketComparisonTarget = {
   baselineStartMs: number;
 };
 
+export type ChartCandleSource = "chainlink" | "binance";
+
 export function marketCandleSymbol(
   marketInterval: PolymarketInterval | null | undefined,
   candleInterval: CandleInterval,
+  preferredSource: ChartCandleSource = "chainlink",
 ) {
   const chainlinkMarket = marketInterval === "5m" || marketInterval === "15m";
   const chainlinkCandle = candleInterval === "1m" || candleInterval === "5m" || candleInterval === "15m";
-  return chainlinkMarket && chainlinkCandle ? "BTCUSD" : "BTCUSDT";
+  return preferredSource === "chainlink" && chainlinkMarket && chainlinkCandle ? "BTCUSD" : "BTCUSDT";
 }
 
 export function selectedPolymarketMarket({

@@ -9,7 +9,7 @@ export type Candle = {
   close: number;
   volume: number | null;
   is_closed: boolean;
-  source: "binance" | "chainlink" | "binance_fallback";
+  source: "binance" | "chainlink" | "binance_fallback" | "polymarket";
   is_complete: boolean;
   indicator?: MarketIndicatorPoint;
 };
@@ -439,7 +439,7 @@ export type PolymarketMarketPriceContext = {
   market_id: string;
   interval: "5m" | "15m";
   twap_window_seconds: 30 | 60;
-  quality: "exact" | "estimated_baseline" | "waiting_chainlink" | "stale" | "unavailable";
+  quality: "exact" | "estimated_baseline" | "waiting_chainlink" | "waiting_polymarket_final" | "stale" | "unavailable";
   warning: string | null;
   baseline: PolymarketMarketPricePoint | null;
   current: PolymarketMarketPricePoint | null;

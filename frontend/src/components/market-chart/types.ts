@@ -13,7 +13,7 @@ export type MarketCandle = {
   close: number;
   volume: number | null;
   is_closed: boolean;
-  source: "binance" | "chainlink" | "binance_fallback";
+  source: "binance" | "chainlink" | "binance_fallback" | "polymarket";
   is_complete: boolean;
   indicator?: MarketIndicatorPoint;
 };

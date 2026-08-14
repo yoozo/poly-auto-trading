@@ -84,6 +84,20 @@ async def upsert_candle_batch(session: AsyncSession, candles: list[Candle]) -> N
     )
 
 
+async def insert_candles_if_missing(session: AsyncSession, candles: list[Candle]) -> None:
+    if not candles:
+        return
+    validated_candles = [_validate_candle(candle) for candle in candles]
+    for batch in chunked(validated_candles, CANDLE_UPSERT_BATCH_SIZE):
+        statement = insert(CandleModel).values([candle_to_row(candle) for candle in batch])
+        await session.execute(
+            statement.on_conflict_do_nothing(
+                constraint="uq_candles_symbol_interval_open_time"
+            )
+        )
+    await session.commit()
+
+
 def candle_to_row(candle: Candle) -> dict[str, object]:
     return {
         "symbol": candle.symbol.upper(),

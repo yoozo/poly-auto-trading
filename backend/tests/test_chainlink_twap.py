@@ -10,13 +10,17 @@ from app.schemas.candle import Candle
 from app.api.routes_candles import merge_chainlink_history
 from app.services import chainlink_twap
 from app.services.chainlink_twap import (
+    PolymarketPastResult,
     aggregate_spot_candle,
     candles_to_persist,
     market_price_context,
+    parse_polymarket_past_result,
     parse_polymarket_page_open_price,
     parse_twap_message,
+    past_result_candle,
     polymarket_price_to_beat,
     subscription_payload,
+    twap_stream_is_stale,
 )
 
 
@@ -105,6 +109,24 @@ def test_parse_chainlink_spot_message() -> None:
     assert observation.value == Decimal("63504.82")
 
 
+def test_twap_stream_stale_ignores_spot_but_accepts_either_twap_window() -> None:
+    connected_at = datetime(2026, 8, 14, 4, 0, tzinfo=timezone.utc)
+    now = connected_at + timedelta(seconds=61)
+
+    assert twap_stream_is_stale(
+        {"crypto_prices_chainlink": now},
+        connected_at=connected_at,
+        now=now,
+        stall_seconds=60,
+    )
+    assert not twap_stream_is_stale(
+        {"crypto_prices_twap_sixty": now - timedelta(seconds=1)},
+        connected_at=connected_at,
+        now=now,
+        stall_seconds=60,
+    )
+
+
 def test_parse_polymarket_page_open_price_matches_exact_market_query() -> None:
     start = datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc)
     active_market = market(start=start, interval="5m", twap_window_seconds=60)
@@ -116,6 +138,50 @@ def test_parse_polymarket_page_open_price_matches_exact_market_query() -> None:
     )
 
     assert parse_polymarket_page_open_price(page, active_market) == Decimal("63413.31962811328")
+
+
+def test_parse_polymarket_past_result_matches_exact_market_window() -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    payload = {
+        "data": {
+            "results": [
+                {
+                    "startTime": "2026-08-14T03:40:00Z",
+                    "endTime": "2026-08-14T03:45:00Z",
+                    "openPrice": "63300.6962318655",
+                    "closePrice": "63318.667178096744",
+                }
+            ]
+        }
+    }
+
+    result = parse_polymarket_past_result(payload, closed_market)
+
+    assert result is not None
+    assert result.open_price == Decimal("63300.6962318655")
+    assert result.close_price == Decimal("63318.667178096744")
+
+
+def test_polymarket_past_result_builds_missing_candle_from_official_open_close() -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    result = PolymarketPastResult(
+        start_time=start,
+        end_time=start + timedelta(minutes=5),
+        open_price=Decimal("63300.70"),
+        close_price=Decimal("63318.67"),
+    )
+
+    candle = past_result_candle(closed_market, result)
+
+    assert candle.open == 63300.70
+    assert candle.close == 63318.67
+    assert candle.high == 63318.67
+    assert candle.low == 63300.70
+    assert candle.source == "polymarket"
+    assert candle.is_closed is True
+    assert candle.is_complete is False
 
 
 def test_chainlink_spot_ticks_aggregate_ohlc_without_volume() -> None:
@@ -233,6 +299,47 @@ async def test_market_price_context_marks_binance_startup_fallback(monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_closed_market_uses_polymarket_final_instead_of_latest_twap(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    result = PolymarketPastResult(
+        start_time=start,
+        end_time=closed_market.end_time,
+        open_price=Decimal("63300.70"),
+        close_price=Decimal("63318.67"),
+    )
+    monkeypatch.setattr(chainlink_twap, "finalize_closed_market", lambda *args, **kwargs: async_value(result))
+    monkeypatch.setattr(
+        chainlink_twap,
+        "latest_observation",
+        lambda *args: (_ for _ in ()).throw(AssertionError("closed market must not use latest RTDS TWAP")),
+    )
+
+    context = await market_price_context(object(), closed_market, now=closed_market.end_time)
+
+    assert context is not None
+    assert context.quality == "exact"
+    assert context.baseline and context.baseline.value == Decimal("63300.70")
+    assert context.current and context.current.value == Decimal("63318.67")
+    assert context.current.source == "polymarket"
+    assert context.direction == "up"
+
+
+@pytest.mark.asyncio
+async def test_closed_market_waits_when_polymarket_final_is_not_ready(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    monkeypatch.setattr(chainlink_twap, "finalize_closed_market", lambda *args, **kwargs: async_value(None))
+
+    context = await market_price_context(object(), closed_market, now=closed_market.end_time)
+
+    assert context is not None
+    assert context.quality == "waiting_polymarket_final"
+    assert context.current is None
+    assert context.direction is None
+
+
+@pytest.mark.asyncio
 async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkeypatch) -> None:
     start = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
 
@@ -277,6 +384,7 @@ def market(*, start: datetime, interval: str, twap_window_seconds: int | None = 
     minutes = 5 if interval == "5m" else 15
     return SimpleNamespace(
         id=f"btc-{interval}-{int(start.timestamp())}",
+        slug=f"btc-updown-{interval}-{int(start.timestamp())}",
         interval=interval,
         twap_window_seconds=twap_window_seconds or (30 if interval == "5m" else 60),
         start_time=start,

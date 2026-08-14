@@ -1425,7 +1425,11 @@ export default function MarketTechnicalChart({
     const diffChangeClass = diffChange !== null && diffChange > 9 ? "diff-strong" : diffChange !== null && diffChange > 6 ? "diff-watch" : "diff-normal";
     const sourceLabel = candle?.source === "chainlink"
       ? candle.is_complete ? "Chainlink" : "Chainlink · 不完整"
-      : "Binance 历史补齐";
+      : candle?.source === "polymarket"
+        ? "Polymarket 收盘回填"
+        : candle?.source === "binance_fallback"
+          ? "Binance 历史补齐"
+          : "Binance";
     const rows = [`<strong>${formatTooltipTime(time)}</strong> <span class="muted">${escapeHtml(symbol)} ${interval} · ${sourceLabel}</span>`];
     rows.push(
       `RSI${indicatorPeriod} ${formatFixed(indicator.rsi)} · EMA${indicatorPeriod} ${formatFixed(indicator.rsi_ema)} · RSI-EMA ${formatDiffHtml(indicator.rsi_ema_diff)} · |ΔDiff| <span class="${diffChangeClass}">${formatFixed(diffChange)}</span>`

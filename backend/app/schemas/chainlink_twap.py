@@ -28,7 +28,12 @@ class MarketPriceContext(BaseModel):
     interval: Literal["5m", "15m"]
     twap_window_seconds: Literal[30, 60]
     quality: Literal[
-        "exact", "estimated_baseline", "waiting_chainlink", "stale", "unavailable"
+        "exact",
+        "estimated_baseline",
+        "waiting_chainlink",
+        "waiting_polymarket_final",
+        "stale",
+        "unavailable",
     ]
     warning: str | None = None
     baseline: MarketPricePoint | None = None
