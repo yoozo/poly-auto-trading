@@ -38,6 +38,15 @@ export type MarketComparisonTarget = {
   baselineStartMs: number;
 };
 
+export function marketCandleSymbol(
+  marketInterval: PolymarketInterval | null | undefined,
+  candleInterval: CandleInterval,
+) {
+  const chainlinkMarket = marketInterval === "5m" || marketInterval === "15m";
+  const chainlinkCandle = candleInterval === "1m" || candleInterval === "5m" || candleInterval === "15m";
+  return chainlinkMarket && chainlinkCandle ? "BTCUSD" : "BTCUSDT";
+}
+
 export function selectedPolymarketMarket({
   markets,
   selectedMarketId,

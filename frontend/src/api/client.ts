@@ -791,11 +791,11 @@ export const api = {
     if (conditionId) url.searchParams.set("condition_id", conditionId);
     return url.toString();
   },
-  marketWsUrl: (interval: CandleInterval) => {
+  marketWsUrl: (interval: CandleInterval, symbol = "BTCUSDT") => {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/market", base);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.searchParams.set("symbol", "BTCUSD");
+    url.searchParams.set("symbol", symbol);
     url.searchParams.set("interval", interval);
     return url.toString();
   }

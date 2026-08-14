@@ -160,10 +160,23 @@ async def test_market_price_context_prefers_chainlink_baseline(monkeypatch) -> N
     start = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
     current = SimpleNamespace(value=Decimal("65010"), observed_at=start)
     baseline = SimpleNamespace(value=Decimal("65000"), observed_at=start)
-    monkeypatch.setattr(chainlink_twap, "latest_observation", lambda *args: async_value(current))
-    monkeypatch.setattr(chainlink_twap, "baseline_observation", lambda *args: async_value(baseline))
+    requested_windows = []
+
+    async def latest(*args):
+        requested_windows.append(("current", args[1]))
+        return current
+
+    async def starting(*args):
+        requested_windows.append(("baseline", args[1]))
+        return baseline
+
+    async def unexpected_price_to_beat(*args):
+        raise AssertionError("exact Chainlink baseline must not call the fallback endpoint")
+
+    monkeypatch.setattr(chainlink_twap, "latest_observation", latest)
+    monkeypatch.setattr(chainlink_twap, "baseline_observation", starting)
     monkeypatch.setattr(chainlink_twap, "binance_baseline", lambda *args: async_value(None))
-    monkeypatch.setattr(chainlink_twap, "polymarket_price_to_beat", lambda *args: async_value(None))
+    monkeypatch.setattr(chainlink_twap, "polymarket_price_to_beat", unexpected_price_to_beat)
 
     context = await market_price_context(
         object(),
@@ -176,6 +189,9 @@ async def test_market_price_context_prefers_chainlink_baseline(monkeypatch) -> N
     assert context.baseline and context.baseline.source == "chainlink"
     assert context.difference == Decimal("10")
     assert context.direction == "up"
+    assert context.current and context.current.value == Decimal("65010")
+    assert context.settlement_twap and context.settlement_twap.value == Decimal("65010")
+    assert requested_windows == [("current", 30), ("baseline", 30)]
 
 
 @pytest.mark.asyncio

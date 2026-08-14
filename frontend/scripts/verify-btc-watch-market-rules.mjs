@@ -10,6 +10,7 @@ const scenarioSource = `
     baselineStartMsForMarket,
     candleOpenAnchorMs,
     candleAtOpenTime,
+    marketCandleSymbol,
     marketChartFocusKey,
     marketComparisonTarget,
     marketFocusAnchorMs,
@@ -183,6 +184,18 @@ const scenarioSource = `
     selectedMarketSnapshot: baseMarket,
   });
   assert.equal(selectedFresh?.liquidity, 200, "fresh snapshot data should replace the pinned copy when id is present");
+
+  for (const marketInterval of ["5m", "15m"]) {
+    for (const candleInterval of ["1m", "5m", "15m"]) {
+      assert.equal(marketCandleSymbol(marketInterval, candleInterval), "BTCUSD");
+    }
+    for (const candleInterval of ["1h", "4h", "12h", "1d", "1w"]) {
+      assert.equal(marketCandleSymbol(marketInterval, candleInterval), "BTCUSDT");
+    }
+  }
+  for (const marketInterval of ["1h", "4h", null]) {
+    assert.equal(marketCandleSymbol(marketInterval, "1m"), "BTCUSDT");
+  }
 
   const marketMatrix = [
     {

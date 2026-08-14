@@ -154,19 +154,20 @@ async def market_price_context(
     now = ensure_utc(now or datetime.now(timezone.utc))
     start = ensure_utc(market.start_time)
     end = ensure_utc(market.end_time)
-    # Polymarket UI 的 Current Price 是 Chainlink spot；TWAP 仅用于结算估计，二者必须分开。
-    current = await latest_observation(session, SPOT_WINDOW, start, min(now, end))
-    settlement_twap = await latest_observation(
+    # market 展示价、方向和结算都必须使用规则指定的同一 TWAP window；spot 只负责聚合 K 线。
+    current = await latest_observation(
         session, window_seconds, start, min(now, end)
     )
-    price_to_beat = await polymarket_price_to_beat(market)
-    baseline = await baseline_observation(session, SPOT_WINDOW, start)
+    baseline = await baseline_observation(session, window_seconds, start)
+    price_to_beat = None if baseline else await polymarket_price_to_beat(market)
     baseline_point = (
-        MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
+        observation_point(baseline)
+        if baseline
+        else MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
         if price_to_beat is not None
-        else observation_point(baseline) if baseline else await binance_baseline(session, start)
+        else await binance_baseline(session, start)
     )
-    settlement_point = observation_point(settlement_twap) if settlement_twap else None
+    current_point = observation_point(current) if current else None
 
     if current is None:
         return MarketPriceContext(
@@ -174,12 +175,11 @@ async def market_price_context(
             interval=market.interval,
             twap_window_seconds=window_seconds,
             quality="waiting_chainlink",
-            warning="正在等待 Chainlink spot 实时数据，暂不生成方向信号",
+            warning=f"正在等待 Chainlink {window_seconds}s TWAP 实时数据，暂不生成方向信号",
             baseline=baseline_point,
-            settlement_twap=settlement_point,
+            settlement_twap=current_point,
         )
 
-    current_point = observation_point(current)
     if now <= end and now - current.observed_at > timedelta(seconds=settings.chainlink_twap_stale_seconds):
         return MarketPriceContext(
             market_id=market.id,
@@ -189,7 +189,7 @@ async def market_price_context(
             warning="Chainlink TWAP 已过期，暂不生成方向信号",
             baseline=baseline_point,
             current=current_point,
-            settlement_twap=settlement_point,
+            settlement_twap=current_point,
         )
     if baseline_point is None:
         return MarketPriceContext(
@@ -199,29 +199,29 @@ async def market_price_context(
             quality="unavailable",
             warning="缺少市场起始参考价，暂不生成方向信号",
             current=current_point,
-            settlement_twap=settlement_point,
+            settlement_twap=current_point,
         )
 
     difference = current.value - baseline_point.value
-    estimated = baseline_point.source == "binance"
-    settlement_difference = (
-        settlement_twap.value - baseline_point.value if settlement_twap else None
-    )
+    estimated = baseline_point.source != "chainlink"
+    warning = None
+    if baseline_point.source == "polymarket":
+        warning = "启动时缺少 Chainlink 起始 TWAP，已用 Polymarket 参考价补齐，可能存在细微误差"
+    elif baseline_point.source == "binance":
+        warning = "启动时缺少 Chainlink 起始 TWAP，已用 Binance 1m 收盘价补齐，可能存在误差"
     return MarketPriceContext(
         market_id=market.id,
         interval=market.interval,
         twap_window_seconds=window_seconds,
         quality="estimated_baseline" if estimated else "exact",
-        warning="启动时缺少 Chainlink 起始价，已用 Binance 1m 收盘价补齐，可能存在误差" if estimated else None,
+        warning=warning,
         baseline=baseline_point,
         current=current_point,
         difference=difference,
         direction="up" if difference >= 0 else "down",
-        settlement_twap=settlement_point,
-        settlement_difference=settlement_difference,
-        settlement_direction=(
-            "up" if settlement_difference >= 0 else "down"
-        ) if settlement_difference is not None else None,
+        settlement_twap=current_point,
+        settlement_difference=difference,
+        settlement_direction="up" if difference >= 0 else "down",
     )
 
 

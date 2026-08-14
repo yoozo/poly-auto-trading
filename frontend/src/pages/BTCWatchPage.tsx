@@ -39,6 +39,7 @@ import { intervalMs, mergeCandles } from "../components/market-chart/utils";
 import { useWalletConnection, type EthereumProvider } from "../hooks/useWalletConnection";
 import {
   hasCandleAtTime,
+  marketCandleSymbol,
   marketChartFocusKey,
   marketComparisonTarget,
   marketFocusAnchorMs,
@@ -76,7 +77,6 @@ const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
 const POLYGON_CHAIN_ID = "0x89";
 const POLYMARKET_CLOB_HOST = "https://clob.polymarket.com";
 const POLYMARKET_ORDERBOOK_VISIBLE_ROWS = 4;
-const CHAINLINK_CANDLE_SYMBOL = "BTCUSD";
 const DEFAULT_ORDER_AMOUNT = 5;
 const SHARE_INPUT_DECIMALS = 4;
 
@@ -203,7 +203,11 @@ export default function BTCWatchPage() {
           .map((candle) => [candle.indicator!.candle_time, candle.indicator!]),
       );
       // 实时 K 线优先使用后端同一计算窗口产出的指标，避免 Telegram 与图表各算一套 diff。
-      return calculated.map((point) => backendByTime.get(point.candle_time) ?? point);
+      return calculated.map((point) => {
+        const backend = backendByTime.get(point.candle_time);
+        // Chainlink 实时窗口可能尚未积累足够样本，不能用空指标覆盖基于补齐历史算出的当前值。
+        return backend && indicatorPointIsComplete(backend) ? backend : point;
+      });
     },
     [activeCandles, indicatorPeriod, interval]
   );
@@ -213,6 +217,8 @@ export default function BTCWatchPage() {
     selectedMarketId: selectedPolymarketId,
     selectedMarketSnapshot: selectedPolymarketSnapshot,
   });
+  const candleSymbol = marketCandleSymbol(selectedPolymarket?.interval, interval);
+  const activeCandleSymbolRef = useRef(candleSymbol);
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
   const comparisonTarget = selectedPolymarket ? marketComparisonTarget(selectedPolymarket) : null;
   const selectedPolymarketConditionId = selectedPolymarket?.condition_id ?? null;
@@ -308,6 +314,22 @@ export default function BTCWatchPage() {
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
   const marketDiffInterval = selectedPolymarket?.interval ?? polymarketInterval;
+
+  useEffect(() => {
+    if (activeCandleSymbolRef.current === candleSymbol) return;
+    // market 或 K 线周期改变数据源时，旧 symbol 的快照与实时增量都必须一起失效。
+    activeCandleSymbolRef.current = candleSymbol;
+    dataEpochRef.current += 1;
+    candleSnapshotReadyRef.current = false;
+    pendingLiveCandlesRef.current = [];
+    marketFocusDataRequestKeyRef.current = null;
+    historicalJumpViewRef.current = false;
+    setCandles([]);
+    setChartDataReady(false);
+    setChartEpoch((epoch) => epoch + 1);
+    setIsLoadingMore(false);
+    setIsSwitchingInterval(true);
+  }, [candleSymbol]);
 
   useEffect(() => {
     localStorage.setItem(INTERVAL_KEY, interval);
@@ -708,7 +730,7 @@ export default function BTCWatchPage() {
       // WebSocket 只负责实时增量；初始窗口和向前翻页仍由 REST 接口补齐。
       setStreamStatus("connecting");
       const initialInterval = activeIntervalRef.current;
-      socket = new WebSocket(api.marketWsUrl(initialInterval));
+      socket = new WebSocket(api.marketWsUrl(initialInterval, candleSymbol));
       marketSocketRef.current = socket;
       marketSocketSubscribedIntervalRef.current = initialInterval;
       socket.onopen = () => {
@@ -725,7 +747,7 @@ export default function BTCWatchPage() {
           resolveMarketCandlesResponse(message);
           return;
         }
-        if (!isValidMarketCandleMessage(message, activeIntervalRef.current)) return;
+        if (!isValidMarketCandleMessage(message, activeCandleSymbolRef.current, activeIntervalRef.current)) return;
         if (historicalJumpViewRef.current) return;
         const candle = message.indicator
           ? { ...message.candle, indicator: message.indicator }
@@ -770,7 +792,7 @@ export default function BTCWatchPage() {
       rejectPendingMarketCandles(new Error("market websocket closed"));
       socket?.close();
     };
-  }, []);
+  }, [candleSymbol]);
 
   function waitForMarketSocketOpen(timeoutMs = 5000) {
     const socket = marketSocketRef.current;
@@ -824,7 +846,7 @@ export default function BTCWatchPage() {
     const payload: MarketCandlesRequest = {
       type: "market.candles.request",
       request_id: requestId,
-      symbol: CHAINLINK_CANDLE_SYMBOL,
+      symbol: activeCandleSymbolRef.current,
       interval,
       limit,
       ...(startMs !== undefined && endMs !== undefined ? { start_ms: startMs, end_ms: endMs } : {}),
@@ -850,7 +872,7 @@ export default function BTCWatchPage() {
       pending.reject(new Error(message.message || "market candles request failed"));
       return;
     }
-    if (!isValidMarketCandlesSnapshot(message)) {
+    if (!isValidMarketCandlesSnapshot(message, activeCandleSymbolRef.current)) {
       pending.reject(new Error("invalid market candles snapshot"));
       return;
     }
@@ -1056,7 +1078,9 @@ export default function BTCWatchPage() {
   const chartToolbar = (
     <div className="watch-toolbar-inner">
       <div className="watch-toolbar-controls">
-        <Typography.Text strong>BTC/USD · Chainlink</Typography.Text>
+        <Typography.Text strong>
+          {candleSymbol === "BTCUSD" ? "BTC/USD · Chainlink" : "BTC/USDT · Binance"}
+        </Typography.Text>
         {latest?.source === "binance_fallback" && (
           <Typography.Text type="warning">Binance 历史补齐</Typography.Text>
         )}
@@ -1152,8 +1176,8 @@ export default function BTCWatchPage() {
       <Card className="watch-chart-card btc-watch-card" styles={{ body: { padding: 0 } }}>
         {chartDataReady ? (
           <BtcWatchChart
-            key={`${CHAINLINK_CANDLE_SYMBOL}-${interval}-${chartEpoch}`}
-            symbol={CHAINLINK_CANDLE_SYMBOL}
+            key={`${candleSymbol}-${interval}-${chartEpoch}`}
+            symbol={candleSymbol}
             interval={interval}
             candles={activeCandles}
             indicators={activeIndicators}
@@ -2098,18 +2122,20 @@ function parseMarketMessage(value: string) {
 
 function isValidMarketCandleMessage(
   message: MarketWsMessage | null,
+  activeSymbol: string,
   activeInterval: CandleInterval
 ): message is Extract<MarketWsMessage, { type: "market.candle" }> & { candle: MarketCandle } {
-  if (!message || message.type !== "market.candle" || message.symbol !== CHAINLINK_CANDLE_SYMBOL || message.interval !== activeInterval) return false;
+  if (!message || message.type !== "market.candle" || message.symbol !== activeSymbol || message.interval !== activeInterval) return false;
   const candle = message.candle;
   if (message.indicator && !isValidMarketIndicator(message.indicator, message.symbol, message.interval)) return false;
   return isValidMarketCandle(candle, message.symbol, message.interval);
 }
 
 function isValidMarketCandlesSnapshot(
-  message: Extract<MarketWsMessage, { type: "market.candles.snapshot" }>
+  message: Extract<MarketWsMessage, { type: "market.candles.snapshot" }>,
+  activeSymbol: string,
 ): message is Extract<MarketWsMessage, { type: "market.candles.snapshot" }> & { candles: MarketCandle[] } {
-  if (message.symbol !== CHAINLINK_CANDLE_SYMBOL || !Array.isArray(message.candles)) return false;
+  if (message.symbol !== activeSymbol || !Array.isArray(message.candles)) return false;
   return message.candles.every((candle) => isValidMarketCandle(candle, message.symbol, message.interval));
 }
 
@@ -2205,11 +2231,22 @@ function formatProbability(value: number | null) {
 
 function marketPriceQualityLabel(context: PolymarketMarketPriceContext | null) {
   if (!context) return "等待 Chainlink";
-  if (context.quality === "exact") return `Chainlink spot · ${context.twap_window_seconds}s TWAP结算`;
-  if (context.quality === "estimated_baseline") return "Binance 补齐 · 可能有误差";
+  if (context.quality === "exact") return `Chainlink ${context.twap_window_seconds}s TWAP`;
+  if (context.quality === "estimated_baseline") {
+    return `${context.baseline?.source === "polymarket" ? "Polymarket" : "Binance"} 补齐 · 可能有误差`;
+  }
   if (context.quality === "stale") return "Chainlink 已过期";
   if (context.quality === "unavailable") return "缺少参考价";
   return "等待 Chainlink";
+}
+
+function indicatorPointIsComplete(point: MarketIndicatorPoint) {
+  return point.rsi !== null &&
+    point.rsi_ema !== null &&
+    point.rsi_ema_diff !== null &&
+    point.bollinger.upper !== null &&
+    point.bollinger.middle !== null &&
+    point.bollinger.lower !== null;
 }
 
 function formatCents(value: number | null) {
