@@ -22,7 +22,7 @@ BTC Up/Down market 的结算依据是 Chainlink BTC/USD TWAP。现有页面以 B
 4. 构造独立的 market price context：基准价、spot 当前价、TWAP 结算估计、方向、质量和警告。
 5. 通过现有 Polymarket market WebSocket 快照下发 price context。
 6. 前端主图与技术指标切换到 Chainlink 聚合 K 线；启用前历史才使用 Binance 补齐并标源。
-7. Telegram 推送复用同一 price context，并按 market、方向和数据质量去重。
+7. Chainlink 行情变化不发送 Telegram；Telegram 继续只推送原有中高周期 RSI-Diff。
 
 ## 验收标准
 

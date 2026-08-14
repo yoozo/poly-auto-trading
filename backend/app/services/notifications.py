@@ -116,15 +116,12 @@ async def process_signal_notifications(
 ) -> list[NotificationDelivery]:
     if not signals:
         return []
-    # RSI-Diff 延续中高周期规则；TWAP 方向信号单独覆盖 5m/15m market。
+    # Telegram 只推送中高周期 RSI-Diff；行情价格变化不进入外部通知渠道。
     telegram_signals = [
         signal
         for signal in signals
-        if (
-            signal.signal_key == "rsi_ema_diff"
-            and signal.metadata.get("interval") in TELEGRAM_SIGNAL_INTERVALS
-        )
-        or signal.signal_key == "chainlink_twap_direction"
+        if signal.signal_key == "rsi_ema_diff"
+        and signal.metadata.get("interval") in TELEGRAM_SIGNAL_INTERVALS
     ]
     if not telegram_signals:
         return []
@@ -395,16 +392,12 @@ def build_delivery_key(signals: list[SignalRecord]) -> str:
 
 
 def delivery_title(signals: list[SignalRecord]) -> str:
-    if signals[0].signal_key == "chainlink_twap_direction":
-        return f"BTC {signals[0].metadata.get('interval', '')} Chainlink TWAP 方向"
     labels = ", ".join(signal.signal_label for signal in signals)
     total_score = delivery_total_score(signals)
     return f"{score_marker(total_score)} 信号提醒：{labels}"
 
 
 def delivery_message(signals: list[SignalRecord]) -> str:
-    if signals[0].signal_key == "chainlink_twap_direction":
-        return twap_delivery_message(signals[0])
     _ = delivery_target(signals)
     total_score = delivery_total_score(signals)
     market_name = delivery_market_name(signals)
@@ -422,43 +415,6 @@ def delivery_message(signals: list[SignalRecord]) -> str:
             f"- {reminder}  Score={format_score(signal.score)}"
         )
     return "\n".join(lines)
-
-
-def twap_delivery_message(signal: SignalRecord) -> str:
-    metadata = signal.metadata
-    baseline = metadata.get("baseline") or {}
-    current = metadata.get("current") or {}
-    quality = metadata.get("quality")
-    warning = metadata.get("warning")
-    quality_name = "精确 Chainlink 基准" if quality == "exact" else "Binance 启动补偿（可能有误差）"
-    direction_emoji, direction_name = delivery_direction([signal])
-    lines = [
-        f"{direction_emoji} BTC {metadata.get('interval', '')}：{direction_name}",
-        f"市场：{signal.target_key}",
-        f"参考价：${format_price(baseline.get('value'))} ({baseline.get('source', '-')})",
-        f"当前价：${format_price(current.get('value'))} (Chainlink spot)",
-        f"现货价差：${format_signed_price(metadata.get('difference'))}",
-        f"结算 TWAP：${format_price((metadata.get('settlement_twap') or {}).get('value'))} ({metadata.get('twap_window_seconds', '-')}s)",
-        f"结算价差：${format_signed_price(metadata.get('settlement_difference'))}",
-        f"数据质量：{quality_name}",
-    ]
-    if warning:
-        lines.append(f"⚠️ {warning}")
-    return "\n".join(lines)
-
-
-def format_price(value: Any) -> str:
-    try:
-        return f"{float(value):,.2f}"
-    except (TypeError, ValueError):
-        return "-"
-
-
-def format_signed_price(value: Any) -> str:
-    try:
-        return f"{float(value):+,.2f}"
-    except (TypeError, ValueError):
-        return "-"
 
 
 def delivery_market_name(signals: list[SignalRecord]) -> str:

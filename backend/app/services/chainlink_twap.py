@@ -30,7 +30,6 @@ from app.services.candle_intervals import (
 )
 from app.services.candle_store import list_candles, list_candles_between, upsert_candles
 from app.services.market_signal_pipeline import market_signal_pipeline
-from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.service_health import service_health_store
 
 logger = logging.getLogger(__name__)
@@ -405,18 +404,6 @@ class ChainlinkTwapMonitor:
 
         for interval in intervals:
             await polymarket_market_monitor.broadcast_active_market_snapshots(interval)
-            await self.notify_current_market(interval)
-
-    async def notify_current_market(self, interval: str) -> None:
-        market = await polymarket_up_down_store.current_market(interval)
-        if market is None:
-            return
-        async with AsyncSessionLocal() as session:
-            context = await market_price_context(session, market)
-            if context and context.direction and context.quality in {"exact", "estimated_baseline"}:
-                from app.services.chainlink_twap_notifications import notify_twap_direction
-
-                await notify_twap_direction(session, context)
 
 
 class ChainlinkCandleAggregator:
