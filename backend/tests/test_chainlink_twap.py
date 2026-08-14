@@ -13,6 +13,7 @@ from app.services.chainlink_twap import (
     aggregate_spot_candle,
     candles_to_persist,
     market_price_context,
+    parse_polymarket_page_open_price,
     parse_twap_message,
     polymarket_price_to_beat,
     subscription_payload,
@@ -102,6 +103,19 @@ def test_parse_chainlink_spot_message() -> None:
     assert observation is not None
     assert observation.window_seconds == 0
     assert observation.value == Decimal("63504.82")
+
+
+def test_parse_polymarket_page_open_price_matches_exact_market_query() -> None:
+    start = datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc)
+    active_market = market(start=start, interval="5m", twap_window_seconds=60)
+    page = (
+        r'{\"state\":{\"data\":{\"openPrice\":63413.31962811328}},'
+        r'\"queryKey\":[\"crypto-prices\",\"price\",\"BTC\",'
+        r'\"2026-08-14T03:00:00Z\",\"fiveminute\",'
+        r'\"2026-08-14T03:05:00Z\",true,60]}'
+    )
+
+    assert parse_polymarket_page_open_price(page, active_market) == Decimal("63413.31962811328")
 
 
 def test_chainlink_spot_ticks_aggregate_ohlc_without_volume() -> None:
@@ -240,6 +254,11 @@ async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkey
             return FakeResponse()
 
     monkeypatch.setattr(chainlink_twap.httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    monkeypatch.setattr(
+        chainlink_twap,
+        "polymarket_page_price_to_beat",
+        lambda *args: async_value(None),
+    )
     chainlink_twap._price_to_beat_cache.clear()
     before = datetime.now(timezone.utc)
     active_market = market(start=start, interval="5m")

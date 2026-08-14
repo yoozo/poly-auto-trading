@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -43,6 +44,7 @@ E18 = Decimal(10) ** 18
 BASELINE_TOLERANCE = timedelta(seconds=5)
 SPOT_WINDOW = 0
 POLYMARKET_CRYPTO_PRICE_URL = "https://polymarket.com/api/crypto/crypto-price"
+POLYMARKET_EVENT_URL = "https://polymarket.com/event/{slug}"
 _price_to_beat_cache: dict[str, tuple[Decimal | None, datetime]] = {}
 _price_to_beat_lock = asyncio.Lock()
 CHAINLINK_CANDLE_SYMBOL = "BTCUSD"
@@ -241,18 +243,21 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
         }
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(
-                    POLYMARKET_CRYPTO_PRICE_URL,
-                    params=params,
-                    headers={
-                        "Accept": "application/json",
-                        "Referer": "https://polymarket.com/",
-                        "User-Agent": "poly-auto-trading/1.0",
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-                value = Decimal(str(payload["openPrice"]))
+                value = await polymarket_page_price_to_beat(client, market)
+                payload: dict[str, Any] = {"completed": True}
+                if value is None:
+                    response = await client.get(
+                        POLYMARKET_CRYPTO_PRICE_URL,
+                        params=params,
+                        headers={
+                            "Accept": "application/json",
+                            "Referer": "https://polymarket.com/",
+                            "User-Agent": "poly-auto-trading/1.0",
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    value = Decimal(str(payload["openPrice"]))
             # 未完成响应会继续变化，短缓存重试；完成后 Price To Beat 在 market 生命周期内不变。
             completed = payload.get("completed") is True and payload.get("incomplete") is not True
             expires_at = now + (timedelta(days=3650) if completed else timedelta(seconds=5))
@@ -262,6 +267,45 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
             expires_at = now + timedelta(seconds=10)
         _price_to_beat_cache[market.id] = (value, expires_at)
         return value
+
+
+async def polymarket_page_price_to_beat(
+    client: httpx.AsyncClient, market: Any
+) -> Decimal | None:
+    if not market.slug:
+        return None
+    try:
+        response = await client.get(
+            POLYMARKET_EVENT_URL.format(slug=market.slug),
+            headers={
+                "Accept": "text/html",
+                "User-Agent": "Mozilla/5.0 (compatible; poly-auto-trading/1.0)",
+            },
+        )
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return parse_polymarket_page_open_price(response.text, market)
+
+
+def parse_polymarket_page_open_price(page: str, market: Any) -> Decimal | None:
+    start = re.escape(iso_z(ensure_utc(market.start_time)))
+    end = re.escape(iso_z(ensure_utc(market.end_time)))
+    variant = "fiveminute" if market.interval == "5m" else "fifteen"
+    window_seconds = int(market.twap_window_seconds)
+    pattern = re.compile(
+        rf'\\"openPrice\\":(-?\d+(?:\.\d+)?).*?'
+        rf'\\"queryKey\\":\[\\"crypto-prices\\",\\"price\\",\\"BTC\\",'
+        rf'\\"{start}\\",\\"{variant}\\",\\"{end}\\",true,{window_seconds}\]',
+        re.DOTALL,
+    )
+    match = pattern.search(page)
+    if match is None:
+        return None
+    try:
+        return Decimal(match.group(1))
+    except InvalidOperation:
+        return None
 
 
 def iso_z(value: datetime) -> str:
