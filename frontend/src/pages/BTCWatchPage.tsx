@@ -1228,6 +1228,7 @@ export default function BTCWatchPage() {
           walletConnected={walletConnected}
           walletProfileReady={activeCredentialMatches}
           loading={polymarketMarketsLoading}
+          priceContext={marketPriceContext}
         />
       )}
       <Modal
@@ -1278,6 +1279,7 @@ function PolymarketBtcPanel({
   walletConnected,
   walletProfileReady,
   loading,
+  priceContext,
 }: {
   interval: PolymarketInterval;
   markets: PolymarketUpDownMarket[];
@@ -1290,6 +1292,7 @@ function PolymarketBtcPanel({
   walletConnected: boolean;
   walletProfileReady: boolean;
   loading: boolean;
+  priceContext: PolymarketMarketPriceContext | null;
 }) {
   const activeMarket =
     markets.find((market) => market.id === selectedMarketId) ??
@@ -1331,11 +1334,18 @@ function PolymarketBtcPanel({
             )}
           </div>
           {activeMarket && (
-            <Typography.Text type="secondary" className="polymarket-panel-subtitle">
-              {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
-              {activeMarket.accepting_orders ? "可交易" : "暂停接单"} · 流动性{" "}
-              {formatCompact(activeMarket.liquidity)}
-            </Typography.Text>
+            <>
+              <Typography.Text type="secondary" className="polymarket-panel-subtitle">
+                {formatMarketTime(activeMarket)} · {marketWindowLabel(activeMarket, markets)} ·{" "}
+                {activeMarket.accepting_orders ? "可交易" : "暂停接单"} · 流动性{" "}
+                {formatCompact(activeMarket.liquidity)}
+              </Typography.Text>
+              {(activeMarket.interval === "5m" || activeMarket.interval === "15m") && (
+                <MarketPriceSummary
+                  context={priceContext?.market_id === activeMarket.id ? priceContext : null}
+                />
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1426,6 +1436,28 @@ function PolymarketBtcPanel({
         </div>
       )}
     </Card>
+  );
+}
+
+function MarketPriceSummary({ context }: { context: PolymarketMarketPriceContext | null }) {
+  const baseline = finiteNumber(context?.baseline?.value);
+  const current = finiteNumber(context?.current?.value);
+  const difference = finiteNumber(context?.difference);
+  const tone = difference === null ? "flat" : difference >= 0 ? "up" : "down";
+  return (
+    <div className="polymarket-price-summary" title={context?.warning ?? marketPriceQualityLabel(context)}>
+      <div className="polymarket-price-summary-item">
+        <span>Price To Beat</span>
+        <strong>{baseline === null ? "--" : `$${formatBtcPrice(baseline)}`}</strong>
+      </div>
+      <div className="polymarket-price-summary-item current">
+        <span>Current Price</span>
+        <strong>{current === null ? "--" : `$${formatBtcPrice(current)}`}</strong>
+      </div>
+      <div className={`polymarket-price-summary-diff ${tone}`}>
+        {difference === null ? "等待 Chainlink" : `${difference >= 0 ? "▲" : "▼"} $${formatMarketPriceDiff(difference)}`}
+      </div>
+    </div>
   );
 }
 
@@ -2441,6 +2473,11 @@ function formatSignedPercent(value: number | null) {
 function formatCompact(value: number | null) {
   if (value == null) return "-";
   return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+function finiteNumber(value: number | string | null | undefined) {
+  const numeric = Number(value);
+  return value == null || !Number.isFinite(numeric) ? null : numeric;
 }
 
 function positionMatchesMarket(position: PolymarketAccountPosition, market: PolymarketUpDownMarket) {

@@ -2139,6 +2139,62 @@ body[data-theme="dark"] .app-account-login-action {
   white-space: nowrap;
 }
 
+.polymarket-price-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 9px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.polymarket-price-summary-item {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.polymarket-price-summary-item span {
+  color: #667085;
+  font-size: 11px;
+}
+
+.polymarket-price-summary-item strong {
+  overflow: hidden;
+  color: #475467;
+  font-size: 16px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.polymarket-price-summary-item.current strong {
+  color: #f59e0b;
+}
+
+.polymarket-price-summary-diff {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.polymarket-price-summary-diff.up {
+  color: #10b981;
+}
+
+.polymarket-price-summary-diff.down {
+  color: #ef4444;
+}
+
+.polymarket-price-summary-diff.flat {
+  color: #667085;
+}
+
 .polymarket-market-selector {
   display: block;
   align-items: center;
@@ -3927,6 +3983,24 @@ body[data-theme="dark"] .market-detail-metric-info {
 
 body[data-theme="dark"] .polymarket-market-rail {
   border-radius: 999px;
+}
+
+body[data-theme="dark"] .polymarket-price-summary {
+  border-color: #334155;
+  background: #111c2b;
+}
+
+body[data-theme="dark"] .polymarket-price-summary-item span,
+body[data-theme="dark"] .polymarket-price-summary-diff.flat {
+  color: #94a3b8;
+}
+
+body[data-theme="dark"] .polymarket-price-summary-item strong {
+  color: #cbd5e1;
+}
+
+body[data-theme="dark"] .polymarket-price-summary-item.current strong {
+  color: #f59e0b;
 }
 
 body[data-theme="dark"] .polymarket-market-pill,
