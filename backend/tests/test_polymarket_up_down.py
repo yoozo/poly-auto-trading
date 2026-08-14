@@ -153,12 +153,25 @@ def test_normalize_up_down_market_prefers_event_start_time_over_market_creation_
     assert market.start_time == datetime(2026, 6, 13, 5, 10, tzinfo=timezone.utc)
 
 
-def test_normalize_up_down_market_uses_5m_twap_window_even_if_event_contains_60s_url() -> None:
+def test_normalize_up_down_market_reads_5m_twap_window_from_resolution_url() -> None:
     now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
     event = make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")
     event["description"] = (
         "Resolution: https://data.chain.link/streams/btc-usd-twap-60s-streams"
     )
+
+    market = normalize_up_down_market(event, interval="5m", books={}, now=now)
+
+    assert market.twap_window_seconds == 60
+
+
+def test_normalize_up_down_market_keeps_historical_30s_rule() -> None:
+    now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
+    event = make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")
+    event["description"] = (
+        "Resolution: https://data.chain.link/streams/btc-usd-twap-30s-streams"
+    )
+    event["related"] = "https://data.chain.link/streams/btc-usd-twap-60s-streams"
 
     market = normalize_up_down_market(event, interval="5m", books={}, now=now)
 
@@ -168,6 +181,9 @@ def test_normalize_up_down_market_uses_5m_twap_window_even_if_event_contains_60s
 def test_normalize_up_down_market_uses_15m_twap_window() -> None:
     now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
     event = make_event("btc-updown-15m-1", "2026-06-13T05:00:00Z", "2026-06-13T05:15:00Z")
+    event["description"] = (
+        "Resolution: https://data.chain.link/streams/btc-usd-twap-60s-streams"
+    )
 
     market = normalize_up_down_market(event, interval="15m", books={}, now=now)
 

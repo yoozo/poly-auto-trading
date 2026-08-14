@@ -1560,13 +1560,15 @@ def normalize_up_down_market(
 
 
 def event_twap_window_seconds(event: dict[str, Any], *, interval: str) -> int | None:
-    # Polymarket BTC 5m/15m 分别固定使用 30s/60s，避免 event 关联文本中的其他 URL 误导模糊匹配。
-    if interval == "5m":
-        return 30
-    if interval == "15m":
-        return 60
-    match = TWAP_STREAM_WINDOW_RE.search(json.dumps(event, default=str))
-    return int(match.group(1)) if match else None
+    # TWAP window 以当前 market 的 resolution 文本为准；Polymarket 可能调整 5m 的 30s/60s 规则。
+    market = first_market(event)
+    for description in (event.get("description"), market.get("description")):
+        if not isinstance(description, str):
+            continue
+        match = TWAP_STREAM_WINDOW_RE.search(description)
+        if match:
+            return int(match.group(1))
+    return None
 
 
 def normalize_outcome_quote(

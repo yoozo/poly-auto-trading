@@ -307,6 +307,8 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
             "eventStartTime": iso_z(ensure_utc(market.start_time)),
             "variant": variant,
             "endDate": iso_z(ensure_utc(market.end_time)),
+            "twapEnabled": "true",
+            "twapLookbackSeconds": int(market.twap_window_seconds),
         }
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:

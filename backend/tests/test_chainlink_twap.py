@@ -342,6 +342,7 @@ async def test_closed_market_waits_when_polymarket_final_is_not_ready(monkeypatc
 @pytest.mark.asyncio
 async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkeypatch) -> None:
     start = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
+    requests = []
 
     class FakeResponse:
         def raise_for_status(self):
@@ -358,6 +359,7 @@ async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkey
             return None
 
         async def get(self, *args, **kwargs):
+            requests.append(kwargs)
             return FakeResponse()
 
     monkeypatch.setattr(chainlink_twap.httpx, "AsyncClient", lambda **kwargs: FakeClient())
@@ -373,6 +375,8 @@ async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkey
     value = await polymarket_price_to_beat(active_market)
 
     assert value == Decimal("65000.5")
+    assert requests[0]["params"]["twapEnabled"] == "true"
+    assert requests[0]["params"]["twapLookbackSeconds"] == 30
     assert chainlink_twap._price_to_beat_cache[active_market.id][1] <= before + timedelta(seconds=6)
 
 
