@@ -14,7 +14,8 @@ async def notify_twap_direction(
     session: AsyncSession, context: MarketPriceContext
 ) -> None:
     """每个 market、方向和质量状态只推送一次，避免 TWAP 高频更新刷屏。"""
-    direction = context.direction
+    # TG 方向优先采用结算 TWAP；页面顶部则继续展示 Polymarket 同款 spot 当前价。
+    direction = context.settlement_direction or context.direction
     if direction is None or context.current is None or context.baseline is None:
         return
     dedupe_key = (

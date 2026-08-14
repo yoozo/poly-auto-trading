@@ -7,8 +7,10 @@ export type Candle = {
   high: number;
   low: number;
   close: number;
-  volume: number;
+  volume: number | null;
   is_closed: boolean;
+  source: "binance" | "chainlink" | "binance_fallback";
+  is_complete: boolean;
   indicator?: MarketIndicatorPoint;
 };
 
@@ -427,7 +429,7 @@ export type PolymarketUpDownMarket = {
 export type PolymarketInterval = "5m" | "15m" | "1h" | "4h";
 
 export type PolymarketMarketPricePoint = {
-  source: "chainlink" | "binance";
+  source: "chainlink" | "polymarket" | "binance";
   value: number | string;
   observed_at: string;
 };
@@ -442,6 +444,9 @@ export type PolymarketMarketPriceContext = {
   current: PolymarketMarketPricePoint | null;
   difference: number | string | null;
   direction: "up" | "down" | null;
+  settlement_twap: PolymarketMarketPricePoint | null;
+  settlement_difference: number | string | null;
+  settlement_direction: "up" | "down" | null;
 };
 
 export type PolymarketWsMessage =
@@ -790,7 +795,7 @@ export const api = {
     const base = API_BASE_URL || window.location.origin;
     const url = new URL("/api/ws/market", base);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.searchParams.set("symbol", "BTCUSDT");
+    url.searchParams.set("symbol", "BTCUSD");
     url.searchParams.set("interval", interval);
     return url.toString();
   }

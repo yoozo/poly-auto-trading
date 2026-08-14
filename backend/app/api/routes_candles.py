@@ -16,7 +16,11 @@ from app.services.candle_backfill import (
     candle_sync_service,
 )
 from app.services.candle_intervals import CANDLE_INTERVAL_MS
-from app.services.candle_store import list_candles, list_candles_between
+from app.services.candle_store import (
+    get_earliest_candle_time,
+    list_candles,
+    list_candles_between,
+)
 from app.services.indicator_backfill import IndicatorBackfillStatus, indicator_backfill_runner
 from app.services.indicators import calculate_indicator_points
 from app.services.market_signal_pipeline import market_signal_pipeline
@@ -24,6 +28,7 @@ from app.services.market_ws_hub import market_ws_hub
 
 router = APIRouter(tags=["candles"])
 VALID_INTERVALS = set(get_args(Interval))
+CHAINLINK_CANDLE_SYMBOL = "BTCUSD"
 
 @router.get("/candles/backfill", response_model=CandleBackfillStatus)
 async def candle_backfill_status() -> CandleBackfillStatus:
@@ -285,9 +290,10 @@ async def load_candles_snapshot(
             0,
             start_ms - ((settings.candle_history_limit - 1) * CANDLE_INTERVAL_MS[interval]),
         )
+        sync_symbol = settings.binance_symbol if symbol == CHAINLINK_CANDLE_SYMBOL else symbol
         await candle_sync_service.ensure_range(
             session,
-            symbol=symbol,
+            symbol=sync_symbol,
             interval=interval,
             start_ms=warmup_start_ms,
             end_ms=end_ms,
@@ -302,6 +308,22 @@ async def load_candles_snapshot(
             start=warmup_start,
             end=end,
         )
+        if symbol == CHAINLINK_CANDLE_SYMBOL:
+            chainlink_started_at = await get_earliest_candle_time(
+                session, CHAINLINK_CANDLE_SYMBOL, "1m"
+            )
+            binance_candles = await list_candles_between(
+                session,
+                symbol=settings.binance_symbol,
+                interval=interval,
+                start=warmup_start,
+                end=end,
+            )
+            source_candles = merge_chainlink_history(
+                binance_candles,
+                source_candles,
+                chainlink_started_at=chainlink_started_at,
+            )
         candles = [candle for candle in source_candles if candle.open_time >= target_start]
         # warmup 只负责还原目标区间起点的指标状态，不能作为用户历史数据返回并画到图上。
         return CandleSnapshot(
@@ -311,11 +333,51 @@ async def load_candles_snapshot(
 
     # 指标递归依赖历史状态，快照内部使用后端实时窗口计算，再只返回请求的最后 limit 根。
     indicator_limit = max(limit, settings.candle_history_limit)
-    await candle_sync_service.ensure_latest_window(session, symbol=symbol, interval=interval, limit=indicator_limit)
+    sync_symbol = settings.binance_symbol if symbol == CHAINLINK_CANDLE_SYMBOL else symbol
+    await candle_sync_service.ensure_latest_window(
+        session, symbol=sync_symbol, interval=interval, limit=indicator_limit
+    )
     cached = await list_candles(session, symbol=symbol, interval=interval, limit=indicator_limit)
+    if symbol == CHAINLINK_CANDLE_SYMBOL:
+        chainlink_started_at = await get_earliest_candle_time(
+            session, CHAINLINK_CANDLE_SYMBOL, "1m"
+        )
+        binance_candles = await list_candles(
+            session,
+            symbol=settings.binance_symbol,
+            interval=interval,
+            limit=indicator_limit,
+        )
+        cached = merge_chainlink_history(
+            binance_candles,
+            cached,
+            chainlink_started_at=chainlink_started_at,
+        )
     live_candles = market_signal_pipeline.get_live_candles(symbol, interval, limit=indicator_limit)
     candles = merge_live_candles(cached, live_candles, indicator_limit)
     return CandleSnapshot("latest", attach_indicators(candles[-limit:], interval, source_candles=candles))
+
+
+def merge_chainlink_history(
+    binance_candles: list[Candle],
+    chainlink_candles: list[Candle],
+    *,
+    chainlink_started_at: datetime | None = None,
+) -> list[Candle]:
+    # Chainlink 部署前没有历史：同一 open_time 优先 Chainlink，其余用 Binance 补齐并显式标源。
+    by_open_time = {
+        candle.open_time: candle.model_copy(
+            update={
+                "symbol": CHAINLINK_CANDLE_SYMBOL,
+                "source": "binance_fallback",
+            }
+        )
+        for candle in binance_candles
+        if chainlink_started_at is None or candle.open_time < chainlink_started_at
+    }
+    for candle in chainlink_candles:
+        by_open_time[candle.open_time] = candle
+    return sorted(by_open_time.values(), key=lambda candle: candle.open_time)
 
 
 def merge_live_candles(cached: list[Candle], live_candles: list[Candle], limit: int) -> list[Candle]:

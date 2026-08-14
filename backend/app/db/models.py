@@ -212,8 +212,10 @@ class Candle(Base, TimestampMixin):
     high: Mapped[Decimal] = mapped_column(Numeric(28, 10))
     low: Mapped[Decimal] = mapped_column(Numeric(28, 10))
     close: Mapped[Decimal] = mapped_column(Numeric(28, 10))
-    volume: Mapped[Decimal] = mapped_column(Numeric(28, 10))
+    volume: Mapped[Decimal | None] = mapped_column(Numeric(28, 10))
     is_closed: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(32), default="binance")
+    is_complete: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class ChainlinkTwapObservation(Base):
@@ -234,7 +236,7 @@ class ChainlinkTwapObservation(Base):
     symbol: Mapped[str] = mapped_column(String(24))
     window_seconds: Mapped[int] = mapped_column(Integer)
     value: Mapped[Decimal] = mapped_column(Numeric(38, 18))
-    full_accuracy_value: Mapped[str] = mapped_column(String(96))
+    full_accuracy_value: Mapped[str | None] = mapped_column(String(96))
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     topic: Mapped[str] = mapped_column(String(64))

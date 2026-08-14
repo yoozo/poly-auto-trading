@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 Interval = Literal["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d", "1w"]
+CandleSource = Literal["binance", "chainlink", "binance_fallback"]
 
 
 class Candle(BaseModel):
@@ -19,25 +20,34 @@ class Candle(BaseModel):
     high: float
     low: float
     close: float
-    volume: float
+    volume: float | None
     is_closed: bool = True
+    source: CandleSource = "binance"
+    is_complete: bool = True
 
-    @field_validator("open", "high", "low", "close", "volume")
+    @field_validator("open", "high", "low", "close")
     @classmethod
     def finite_ohlcv(cls, value: float) -> float:
         if not isfinite(value):
             raise ValueError("OHLCV fields must be finite numbers")
         return value
 
+    @field_validator("volume")
+    @classmethod
+    def optional_finite_volume(cls, value: float | None) -> float | None:
+        if value is not None and not isfinite(value):
+            raise ValueError("volume must be finite or null")
+        return value
+
     @model_validator(mode="after")
     def valid_candle_shape(self) -> "Candle":
-        if self.volume < 0:
+        if self.volume is not None and self.volume < 0:
             raise ValueError("volume must be greater than or equal to 0")
         if self.high < max(self.open, self.close, self.low):
             raise ValueError("high must be greater than or equal to open, close and low")
         if self.low > min(self.open, self.close, self.high):
             raise ValueError("low must be less than or equal to open, close and high")
-        if self.open_time >= self.close_time and self.volume != 0:
+        if self.open_time >= self.close_time and self.volume not in {0, None}:
             raise ValueError("open_time must be before close_time unless the candle is a zero-volume placeholder")
         return self
 

@@ -46,8 +46,10 @@ def _model_to_candle(model: CandleModel) -> Candle:
         high=float(model.high),
         low=float(model.low),
         close=float(model.close),
-        volume=float(model.volume),
+        volume=float(model.volume) if model.volume is not None else None,
         is_closed=model.is_closed,
+        source=model.source,  # type: ignore[arg-type]
+        is_complete=model.is_complete,
     )
 
 
@@ -75,6 +77,8 @@ async def upsert_candle_batch(session: AsyncSession, candles: list[Candle]) -> N
                 "close": statement.excluded.close,
                 "volume": statement.excluded.volume,
                 "is_closed": statement.excluded.is_closed,
+                "source": statement.excluded.source,
+                "is_complete": statement.excluded.is_complete,
             },
         )
     )
@@ -90,8 +94,10 @@ def candle_to_row(candle: Candle) -> dict[str, object]:
         "high": Decimal(str(candle.high)),
         "low": Decimal(str(candle.low)),
         "close": Decimal(str(candle.close)),
-        "volume": Decimal(str(candle.volume)),
+        "volume": Decimal(str(candle.volume)) if candle.volume is not None else None,
         "is_closed": candle.is_closed,
+        "source": candle.source,
+        "is_complete": candle.is_complete,
     }
 
 

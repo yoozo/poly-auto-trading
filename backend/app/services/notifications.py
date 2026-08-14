@@ -436,8 +436,10 @@ def twap_delivery_message(signal: SignalRecord) -> str:
         f"{direction_emoji} BTC {metadata.get('interval', '')}：{direction_name}",
         f"市场：{signal.target_key}",
         f"参考价：${format_price(baseline.get('value'))} ({baseline.get('source', '-')})",
-        f"当前价：${format_price(current.get('value'))} (Chainlink {metadata.get('twap_window_seconds', '-')}s TWAP)",
-        f"价差：${format_signed_price(metadata.get('difference'))}",
+        f"当前价：${format_price(current.get('value'))} (Chainlink spot)",
+        f"现货价差：${format_signed_price(metadata.get('difference'))}",
+        f"结算 TWAP：${format_price((metadata.get('settlement_twap') or {}).get('value'))} ({metadata.get('twap_window_seconds', '-')}s)",
+        f"结算价差：${format_signed_price(metadata.get('settlement_difference'))}",
         f"数据质量：{quality_name}",
     ]
     if warning:

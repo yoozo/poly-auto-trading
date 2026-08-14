@@ -11,8 +11,10 @@ export type MarketCandle = {
   high: number;
   low: number;
   close: number;
-  volume: number;
+  volume: number | null;
   is_closed: boolean;
+  source: "binance" | "chainlink" | "binance_fallback";
+  is_complete: boolean;
   indicator?: MarketIndicatorPoint;
 };
 

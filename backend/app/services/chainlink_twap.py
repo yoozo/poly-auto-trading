@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,11 +17,19 @@ from app.core.config import settings
 from app.db.models import Candle as CandleModel
 from app.db.models import ChainlinkTwapObservation as ChainlinkTwapObservationModel
 from app.db.session import AsyncSessionLocal
+from app.schemas.candle import Candle, Interval
 from app.schemas.chainlink_twap import (
     ChainlinkTwapObservation,
     MarketPriceContext,
     MarketPricePoint,
 )
+from app.schemas.market_signal import MarketDataEvent
+from app.services.candle_intervals import (
+    align_interval_open_ms,
+    standard_close_time,
+)
+from app.services.candle_store import list_candles, list_candles_between, upsert_candles
+from app.services.market_signal_pipeline import market_signal_pipeline
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.service_health import service_health_store
 
@@ -34,6 +43,22 @@ INTERVAL_WINDOWS = {"5m": 30, "15m": 60}
 SYMBOL = "btc/usd"
 E18 = Decimal(10) ** 18
 BASELINE_TOLERANCE = timedelta(seconds=5)
+SPOT_WINDOW = 0
+POLYMARKET_CRYPTO_PRICE_URL = "https://polymarket.com/api/crypto/crypto-price"
+_price_to_beat_cache: dict[str, tuple[Decimal | None, datetime]] = {}
+_price_to_beat_lock = asyncio.Lock()
+CHAINLINK_CANDLE_SYMBOL = "BTCUSD"
+CHAINLINK_CANDLE_INTERVALS: tuple[Interval, ...] = (
+    "1m",
+    "5m",
+    "15m",
+    "30m",
+    "1h",
+    "4h",
+    "12h",
+    "1d",
+    "1w",
+)
 
 
 def subscription_payload() -> dict[str, Any]:
@@ -41,11 +66,18 @@ def subscription_payload() -> dict[str, Any]:
         "action": "subscribe",
         "subscriptions": [
             {
+                "topic": "crypto_prices_chainlink",
+                "type": "*",
+                "filters": json.dumps({"symbol": SYMBOL}, separators=(",", ":")),
+            },
+            *[
+            {
                 "topic": topic,
                 "type": "update",
                 "filters": json.dumps({"symbol": SYMBOL}, separators=(",", ":")),
             }
             for topic in TOPIC_WINDOWS
+            ],
         ],
     }
 
@@ -55,15 +87,22 @@ def parse_twap_message(raw: str | bytes) -> ChainlinkTwapObservation | None:
         message = json.loads(raw)
         topic = str(message.get("topic") or "")
         payload = message.get("payload")
-        if topic not in TOPIC_WINDOWS or message.get("type") != "update" or not isinstance(payload, dict):
+        if message.get("type") != "update" or not isinstance(payload, dict):
             return None
         if str(payload.get("symbol") or "").lower() != SYMBOL:
             return None
-        window_seconds = int(payload.get("window_s"))
-        if window_seconds != TOPIC_WINDOWS[topic]:
-            return None
-        full_accuracy_value = str(payload["full_accuracy_value"])
-        value = Decimal(full_accuracy_value) / E18
+        if topic == "crypto_prices_chainlink":
+            window_seconds = SPOT_WINDOW
+            full_accuracy_value = None
+            value = Decimal(str(payload["value"]))
+        else:
+            if topic not in TOPIC_WINDOWS:
+                return None
+            window_seconds = int(payload.get("window_s"))
+            if window_seconds != TOPIC_WINDOWS[topic]:
+                return None
+            full_accuracy_value = str(payload["full_accuracy_value"])
+            value = Decimal(full_accuracy_value) / E18
         return ChainlinkTwapObservation(
             symbol=SYMBOL,
             window_seconds=window_seconds,
@@ -116,9 +155,19 @@ async def market_price_context(
     now = ensure_utc(now or datetime.now(timezone.utc))
     start = ensure_utc(market.start_time)
     end = ensure_utc(market.end_time)
-    current = await latest_observation(session, window_seconds, start, min(now, end))
-    baseline = await baseline_observation(session, window_seconds, start)
-    baseline_point = observation_point(baseline) if baseline else await binance_baseline(session, start)
+    # Polymarket UI 的 Current Price 是 Chainlink spot；TWAP 仅用于结算估计，二者必须分开。
+    current = await latest_observation(session, SPOT_WINDOW, start, min(now, end))
+    settlement_twap = await latest_observation(
+        session, window_seconds, start, min(now, end)
+    )
+    price_to_beat = await polymarket_price_to_beat(market)
+    baseline = await baseline_observation(session, SPOT_WINDOW, start)
+    baseline_point = (
+        MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
+        if price_to_beat is not None
+        else observation_point(baseline) if baseline else await binance_baseline(session, start)
+    )
+    settlement_point = observation_point(settlement_twap) if settlement_twap else None
 
     if current is None:
         return MarketPriceContext(
@@ -126,8 +175,9 @@ async def market_price_context(
             interval=market.interval,
             twap_window_seconds=window_seconds,
             quality="waiting_chainlink",
-            warning="正在等待 Chainlink TWAP 实时数据，暂不生成方向信号",
+            warning="正在等待 Chainlink spot 实时数据，暂不生成方向信号",
             baseline=baseline_point,
+            settlement_twap=settlement_point,
         )
 
     current_point = observation_point(current)
@@ -140,6 +190,7 @@ async def market_price_context(
             warning="Chainlink TWAP 已过期，暂不生成方向信号",
             baseline=baseline_point,
             current=current_point,
+            settlement_twap=settlement_point,
         )
     if baseline_point is None:
         return MarketPriceContext(
@@ -149,10 +200,14 @@ async def market_price_context(
             quality="unavailable",
             warning="缺少市场起始参考价，暂不生成方向信号",
             current=current_point,
+            settlement_twap=settlement_point,
         )
 
     difference = current.value - baseline_point.value
     estimated = baseline_point.source == "binance"
+    settlement_difference = (
+        settlement_twap.value - baseline_point.value if settlement_twap else None
+    )
     return MarketPriceContext(
         market_id=market.id,
         interval=market.interval,
@@ -163,7 +218,55 @@ async def market_price_context(
         current=current_point,
         difference=difference,
         direction="up" if difference >= 0 else "down",
+        settlement_twap=settlement_point,
+        settlement_difference=settlement_difference,
+        settlement_direction=(
+            "up" if settlement_difference >= 0 else "down"
+        ) if settlement_difference is not None else None,
     )
+
+
+async def polymarket_price_to_beat(market: Any) -> Decimal | None:
+    now = datetime.now(timezone.utc)
+    cached = _price_to_beat_cache.get(market.id)
+    if cached and cached[1] > now:
+        return cached[0]
+    async with _price_to_beat_lock:
+        cached = _price_to_beat_cache.get(market.id)
+        if cached and cached[1] > now:
+            return cached[0]
+        variant = "fiveminute" if market.interval == "5m" else "fifteen"
+        params = {
+            "symbol": "BTC",
+            "eventStartTime": iso_z(ensure_utc(market.start_time)),
+            "variant": variant,
+            "endDate": iso_z(ensure_utc(market.end_time)),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    POLYMARKET_CRYPTO_PRICE_URL,
+                    params=params,
+                    headers={
+                        "Accept": "application/json",
+                        "Referer": "https://polymarket.com/",
+                        "User-Agent": "poly-auto-trading/1.0",
+                    },
+                )
+                response.raise_for_status()
+                value = Decimal(str(response.json()["openPrice"]))
+            # Price to Beat 对 market 生命周期不变，成功后无需再次请求。
+            expires_at = now + timedelta(days=3650)
+        except (httpx.HTTPError, KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            logger.warning("Failed to fetch Polymarket Price to Beat", exc_info=exc)
+            value = None
+            expires_at = now + timedelta(seconds=10)
+        _price_to_beat_cache[market.id] = (value, expires_at)
+        return value
+
+
+def iso_z(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
 async def latest_observation(
@@ -238,6 +341,7 @@ class ChainlinkTwapMonitor:
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
+        self._candle_aggregator = ChainlinkCandleAggregator()
 
     async def start(self) -> None:
         if not settings.chainlink_twap_enabled or self._task is not None:
@@ -290,12 +394,18 @@ class ChainlinkTwapMonitor:
     async def handle_observation(self, observation: ChainlinkTwapObservation) -> None:
         async with AsyncSessionLocal() as session:
             await upsert_observation(session, observation)
-        interval = "5m" if observation.window_seconds == 30 else "15m"
+        if observation.window_seconds == SPOT_WINDOW:
+            await self._candle_aggregator.handle(observation)
+        if observation.window_seconds == SPOT_WINDOW:
+            intervals = ("5m", "15m")
+        else:
+            intervals = ("5m",) if observation.window_seconds == 30 else ("15m",)
         # 价格变化复用现有 market 快照通道，前端无需再维护第三条 WS。
         from app.services.polymarket_monitor import polymarket_market_monitor
 
-        await polymarket_market_monitor.broadcast_active_market_snapshots(interval)
-        await self.notify_current_market(interval)
+        for interval in intervals:
+            await polymarket_market_monitor.broadcast_active_market_snapshots(interval)
+            await self.notify_current_market(interval)
 
     async def notify_current_market(self, interval: str) -> None:
         market = await polymarket_up_down_store.current_market(interval)
@@ -307,6 +417,177 @@ class ChainlinkTwapMonitor:
                 from app.services.chainlink_twap_notifications import notify_twap_direction
 
                 await notify_twap_direction(session, context)
+
+
+class ChainlinkCandleAggregator:
+    """把 Chainlink spot tick 聚合成 OHLC；TWAP 数据不参与普通 K 线。"""
+
+    def __init__(self) -> None:
+        self._initialized = False
+        self._lock = asyncio.Lock()
+        self._current: dict[Interval, Candle] = {}
+        self._last_tick_at: dict[Interval, datetime] = {}
+
+    async def handle(self, observation: ChainlinkTwapObservation) -> None:
+        async with self._lock:
+            await self._initialize()
+            updated: list[Candle] = []
+            closed: list[Candle] = []
+            for interval in CHAINLINK_CANDLE_INTERVALS:
+                previous = self._current.get(interval)
+                open_time = interval_open_time(observation.observed_at, interval)
+                if previous is None or previous.open_time != open_time:
+                    if previous is not None:
+                        last_tick = self._last_tick_at.get(interval)
+                        complete = bool(
+                            previous.is_complete
+                            and last_tick
+                            and previous.close_time - last_tick
+                            <= timedelta(seconds=settings.chainlink_twap_stale_seconds)
+                        )
+                        closed.append(
+                            previous.model_copy(
+                                update={"is_closed": True, "is_complete": complete}
+                            )
+                        )
+                    current = aggregate_spot_candle(None, observation, interval)
+                else:
+                    current = aggregate_spot_candle(previous, observation, interval)
+                self._current[interval] = current
+                self._last_tick_at[interval] = observation.observed_at
+                updated.append(current)
+
+            # 1m 是重放权威数据；高周期只在闭合时物化，实时态始终可由 1m 重建。
+            persisted = candles_to_persist(closed, updated)
+            async with AsyncSessionLocal() as session:
+                await upsert_candles(session, persisted)
+            for candle in closed:
+                await market_signal_pipeline.handle_market_event(
+                    MarketDataEvent(source="chainlink_spot", candle=candle)
+                )
+            for candle in updated:
+                await market_signal_pipeline.handle_market_event(
+                    MarketDataEvent(source="chainlink_spot", candle=candle),
+                    notify=False,
+                )
+
+    async def _initialize(self) -> None:
+        if self._initialized:
+            return
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            oldest_current_open = min(
+                interval_open_time(now, interval)
+                for interval in CHAINLINK_CANDLE_INTERVALS
+            )
+            minute_window = await list_candles_between(
+                session,
+                symbol=CHAINLINK_CANDLE_SYMBOL,
+                interval="1m",
+                start=oldest_current_open,
+                end=now,
+            )
+            for interval in CHAINLINK_CANDLE_INTERVALS:
+                candles = await list_candles(
+                    session,
+                    symbol=CHAINLINK_CANDLE_SYMBOL,
+                    interval=interval,
+                    limit=settings.candle_history_limit,
+                )
+                if interval != "1m":
+                    current = aggregate_one_minute_window(
+                        minute_window, interval, now=now
+                    )
+                    if current is not None:
+                        candles = [
+                            candle
+                            for candle in candles
+                            if candle.open_time != current.open_time
+                        ]
+                        candles.append(current)
+                market_signal_pipeline.replace_live_candles(
+                    CHAINLINK_CANDLE_SYMBOL, interval, candles
+                )
+                if candles and not candles[-1].is_closed:
+                    self._current[interval] = candles[-1]
+        self._initialized = True
+
+
+def interval_open_time(observed_at: datetime, interval: Interval) -> datetime:
+    observed_ms = int(ensure_utc(observed_at).timestamp() * 1000)
+    open_ms = align_interval_open_ms(observed_ms, interval)
+    return datetime.fromtimestamp(open_ms / 1000, timezone.utc)
+
+
+def aggregate_spot_candle(
+    previous: Candle | None,
+    observation: ChainlinkTwapObservation,
+    interval: Interval,
+) -> Candle:
+    price = float(observation.value)
+    open_time = interval_open_time(observation.observed_at, interval)
+    if previous is not None and previous.open_time == open_time:
+        return previous.model_copy(
+            update={
+                "high": max(previous.high, price),
+                "low": min(previous.low, price),
+                "close": price,
+            }
+        )
+    return Candle(
+        symbol=CHAINLINK_CANDLE_SYMBOL,
+        interval=interval,
+        open_time=open_time,
+        close_time=standard_close_time(open_time, interval),
+        open=price,
+        high=price,
+        low=price,
+        close=price,
+        volume=None,
+        is_closed=False,
+        source="chainlink",
+        is_complete=observation.observed_at - open_time
+        <= timedelta(seconds=settings.chainlink_twap_stale_seconds),
+    )
+
+
+def candles_to_persist(closed: list[Candle], updated: list[Candle]) -> list[Candle]:
+    """1m 每个 tick 更新以抗重启；高周期仅保存闭合物化结果。"""
+    return [*closed, *(candle for candle in updated if candle.interval == "1m")]
+
+
+def aggregate_one_minute_window(
+    candles: list[Candle], interval: Interval, *, now: datetime
+) -> Candle | None:
+    if not candles:
+        return None
+    open_time = interval_open_time(now, interval)
+    rows = sorted(
+        (candle for candle in candles if candle.open_time >= open_time),
+        key=lambda candle: candle.open_time,
+    )
+    if not rows:
+        return None
+    expected_time = open_time
+    complete = True
+    for candle in rows:
+        if candle.open_time != expected_time or not candle.is_complete:
+            complete = False
+        expected_time = candle.open_time + timedelta(minutes=1)
+    return Candle(
+        symbol=CHAINLINK_CANDLE_SYMBOL,
+        interval=interval,
+        open_time=open_time,
+        close_time=standard_close_time(open_time, interval),
+        open=rows[0].open,
+        high=max(candle.high for candle in rows),
+        low=min(candle.low for candle in rows),
+        close=rows[-1].close,
+        volume=None,
+        is_closed=False,
+        source="chainlink",
+        is_complete=complete and rows[0].open_time == open_time,
+    )
 
 
 chainlink_twap_monitor = ChainlinkTwapMonitor()

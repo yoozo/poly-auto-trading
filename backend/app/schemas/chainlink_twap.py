@@ -9,16 +9,16 @@ from pydantic import BaseModel
 
 class ChainlinkTwapObservation(BaseModel):
     symbol: str
-    window_seconds: Literal[30, 60]
+    window_seconds: Literal[0, 30, 60]
     value: Decimal
-    full_accuracy_value: str
+    full_accuracy_value: str | None = None
     observed_at: datetime
     published_at: datetime
     topic: str
 
 
 class MarketPricePoint(BaseModel):
-    source: Literal["chainlink", "binance"]
+    source: Literal["chainlink", "polymarket", "binance"]
     value: Decimal
     observed_at: datetime
 
@@ -35,3 +35,6 @@ class MarketPriceContext(BaseModel):
     current: MarketPricePoint | None = None
     difference: Decimal | None = None
     direction: Literal["up", "down"] | None = None
+    settlement_twap: MarketPricePoint | None = None
+    settlement_difference: Decimal | None = None
+    settlement_direction: Literal["up", "down"] | None = None

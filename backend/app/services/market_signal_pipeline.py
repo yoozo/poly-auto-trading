@@ -23,11 +23,16 @@ class MarketSignalPipeline:
         # 实时窗口只保存内存态，用于给指标计算提供最近 N 根 K 线。
         self._live_candles: dict[tuple[str, str], list[Candle]] = {}
 
-    async def handle_market_event(self, event: MarketDataEvent) -> SignalInput:
+    async def handle_market_event(
+        self, event: MarketDataEvent, *, notify: bool = True
+    ) -> SignalInput:
         # 入口保持数据源无关：调用方只需要提交 MarketDataEvent。
         candles = self._merge_live_candle(event.candle)
         signal_input = self.build_signal_input(event, candles)
-        await self.dispatch(signal_input)
+        if notify:
+            await self.dispatch(signal_input)
+        else:
+            await self.dispatch(signal_input, notify=False)
         return signal_input
 
     def build_signal_input(self, event: MarketDataEvent, candles: list[Candle]) -> SignalInput:
@@ -44,9 +49,10 @@ class MarketSignalPipeline:
             },
         )
 
-    async def dispatch(self, signal_input: SignalInput) -> None:
+    async def dispatch(self, signal_input: SignalInput, *, notify: bool = True) -> None:
         # 下游只消费 SignalInput，避免通知、WS 等模块回头依赖 Binance。
-        await self._check_notifications(signal_input)
+        if notify:
+            await self._check_notifications(signal_input)
         await self._broadcast_market_update(signal_input)
 
     def replace_live_candles(self, symbol: str, interval: str, candles: list[Candle]) -> None:
