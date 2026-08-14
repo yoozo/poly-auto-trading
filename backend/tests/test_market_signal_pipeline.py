@@ -54,6 +54,66 @@ def test_latest_market_payload_uses_live_window_snapshot() -> None:
     assert payload["indicator"]["candle_time"] == "2026-01-01T00:39:00Z"  # type: ignore[index]
 
 
+def test_pending_close_correction_hides_snapshot_indicator() -> None:
+    pipeline = MarketSignalPipeline()
+    candles = [make_candle(index) for index in range(40)]
+    pipeline.replace_live_candles("BTCUSDT", "1m", candles)
+    pipeline.mark_close_correction_pending(candles[-2])
+
+    payload = pipeline.latest_market_payload("BTCUSDT", "1m")
+
+    assert payload is not None
+    assert payload["candle"]["open_time"] == "2026-01-01T00:39:00Z"  # type: ignore[index]
+    assert "indicator" not in payload
+
+
+@pytest.mark.asyncio
+async def test_pending_close_correction_skips_indicators_and_dispatch(monkeypatch) -> None:
+    pipeline = MarketSignalPipeline()
+    candles = [make_candle(index) for index in range(40)]
+    pipeline.replace_live_candles("BTCUSDT", "1m", candles)
+    pipeline.mark_close_correction_pending(candles[-2])
+    dispatched = []
+
+    async def fake_dispatch(signal_input):
+        dispatched.append(signal_input)
+
+    monkeypatch.setattr(pipeline, "dispatch", fake_dispatch)
+    signal_input = await pipeline.handle_market_event(
+        MarketDataEvent(source="chainlink_spot", candle=candles[-1])
+    )
+
+    assert signal_input.indicator is None
+    assert dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_corrected_close_calculates_matching_historical_indicator(monkeypatch) -> None:
+    pipeline = MarketSignalPipeline()
+    candles = [make_candle(index) for index in range(40)]
+    pipeline.replace_live_candles("BTCUSDT", "1m", candles)
+    corrected = candles[-2].model_copy(update={"close": 88, "low": 88})
+    pipeline.mark_close_correction_pending(corrected)
+    dispatched = []
+
+    async def fake_dispatch(signal_input):
+        dispatched.append(signal_input)
+
+    monkeypatch.setattr(pipeline, "dispatch", fake_dispatch)
+    signal_input = await pipeline.handle_market_event(
+        MarketDataEvent(
+            source="chainlink_spot",
+            candle=corrected,
+            metadata={"price_to_beat_corrected": True},
+        )
+    )
+
+    assert pipeline.close_correction_pending("BTCUSDT", "1m") is False
+    assert signal_input.indicator is not None
+    assert signal_input.indicator.candle_time == corrected.open_time
+    assert dispatched == [signal_input]
+
+
 @pytest.mark.asyncio
 async def test_handle_market_event_merges_candle_window_then_dispatches(monkeypatch) -> None:
     dispatched = []

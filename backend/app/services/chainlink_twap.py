@@ -27,6 +27,7 @@ from app.schemas.chainlink_twap import (
 )
 from app.schemas.market_signal import MarketDataEvent
 from app.services.candle_intervals import (
+    CANDLE_INTERVAL_MS,
     align_interval_open_ms,
     standard_close_time,
 )
@@ -54,6 +55,8 @@ POLYMARKET_PAST_RESULTS_URL = "https://polymarket.com/api/past-results"
 POLYMARKET_EVENT_URL = "https://polymarket.com/event/{slug}"
 _price_to_beat_cache: dict[str, tuple[Decimal | None, datetime]] = {}
 _price_to_beat_lock = asyncio.Lock()
+_confirmed_price_to_beat_market_ids: set[str] = set()
+_corrected_previous_candle_market_ids: set[str] = set()
 _past_result_cache: dict[str, "PolymarketPastResult"] = {}
 _past_result_retry_after: dict[str, datetime] = {}
 _past_result_lock = asyncio.Lock()
@@ -223,11 +226,12 @@ async def market_price_context(
         )
 
     # market 展示价、方向和结算都必须使用规则指定的同一 TWAP window；spot 只负责聚合 K 线。
+    # Price To Beat 以 Polymarket 页面使用的 openPrice 为准；本地起始观测仅在接口不可用时兜底。
+    price_to_beat = await polymarket_price_to_beat(market)
     current = await latest_observation(
         session, window_seconds, start, min(now, end)
     )
-    # Price To Beat 以 Polymarket 页面使用的 openPrice 为准；本地起始观测仅在接口不可用时兜底。
-    price_to_beat = await polymarket_price_to_beat(market)
+    await correct_previous_candle_from_market(session, market, price_to_beat)
     baseline = None if price_to_beat is not None else await baseline_observation(session, window_seconds, start)
     baseline_point = (
         MarketPricePoint(source="polymarket", value=price_to_beat, observed_at=start)
@@ -329,6 +333,8 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
                     value = Decimal(str(payload["openPrice"]))
             # 未完成响应会继续变化，短缓存重试；完成后 Price To Beat 在 market 生命周期内不变。
             completed = payload.get("completed") is True and payload.get("incomplete") is not True
+            if completed and value is not None:
+                _confirmed_price_to_beat_market_ids.add(market.id)
             expires_at = now + (timedelta(days=3650) if completed else timedelta(seconds=5))
         except (httpx.HTTPError, KeyError, TypeError, ValueError, InvalidOperation) as exc:
             logger.warning("Failed to fetch Polymarket Price to Beat", exc_info=exc)
@@ -336,6 +342,75 @@ async def polymarket_price_to_beat(market: Any) -> Decimal | None:
             expires_at = now + timedelta(seconds=10)
         _price_to_beat_cache[market.id] = (value, expires_at)
         return value
+
+
+async def correct_previous_candle_close(
+    session: AsyncSession,
+    market: Any,
+    next_price_to_beat: Decimal,
+) -> None:
+    if market.interval not in {"5m", "15m"}:
+        return
+    if (
+        market.id in _corrected_previous_candle_market_ids
+        and not market_signal_pipeline.close_correction_pending(
+            CHAINLINK_CANDLE_SYMBOL, market.interval
+        )
+    ):
+        return
+    start = ensure_utc(market.start_time)
+    previous_open = start - timedelta(milliseconds=CANDLE_INTERVAL_MS[market.interval])
+    candles = await list_candles_between(
+        session,
+        symbol=CHAINLINK_CANDLE_SYMBOL,
+        interval=market.interval,
+        start=previous_open,
+        end=previous_open,
+    )
+    if not candles or not candles[0].is_closed:
+        return
+
+    previous = candles[0]
+    corrected_close = float(next_price_to_beat)
+    corrected = previous.model_copy(
+        update={
+            "close": corrected_close,
+            "high": max(previous.high, corrected_close),
+            "low": min(previous.low, corrected_close),
+        }
+    )
+    if corrected != previous:
+        # 只改上一根的边界价，保留 Chainlink Spot 的 open/high/low 和 source。
+        await upsert_candles(session, [corrected])
+    # 校正事件解锁指标计算，TG 只会看到这次修正后的收盘 K 线。
+    await market_signal_pipeline.handle_market_event(
+        MarketDataEvent(
+            source="chainlink_spot",
+            candle=corrected,
+            metadata={"price_to_beat_corrected": True},
+        )
+    )
+    _corrected_previous_candle_market_ids.add(market.id)
+
+
+async def correct_previous_candle_from_market(
+    session: AsyncSession,
+    market: Any,
+    price_to_beat: Decimal | None = None,
+) -> None:
+    if price_to_beat is None:
+        price_to_beat = await polymarket_price_to_beat(market)
+    if price_to_beat is None or market.id not in _confirmed_price_to_beat_market_ids:
+        return
+    try:
+        await correct_previous_candle_close(session, market, price_to_beat)
+    except Exception:
+        await session.rollback()
+        logger.warning(
+            "Failed to correct previous Chainlink candle close",
+            extra={"market_id": market.id, "interval": market.interval},
+            exc_info=True,
+        )
 
 
 async def polymarket_past_result(market: Any) -> PolymarketPastResult | None:
@@ -735,6 +810,8 @@ class ChainlinkCandleAggregator:
             async with AsyncSessionLocal() as session:
                 await upsert_candles(session, persisted)
             for candle in closed:
+                if candle.interval in {"5m", "15m"}:
+                    market_signal_pipeline.mark_close_correction_pending(candle)
                 await market_signal_pipeline.handle_market_event(
                     MarketDataEvent(source="chainlink_spot", candle=candle)
                 )
@@ -781,6 +858,21 @@ class ChainlinkCandleAggregator:
                 market_signal_pipeline.replace_live_candles(
                     CHAINLINK_CANDLE_SYMBOL, interval, candles
                 )
+                if interval in {"5m", "15m"}:
+                    previous_open = interval_open_time(now, interval) - timedelta(
+                        milliseconds=CANDLE_INTERVAL_MS[interval]
+                    )
+                    previous = next(
+                        (
+                            candle
+                            for candle in reversed(candles)
+                            if candle.open_time == previous_open and candle.is_closed
+                        ),
+                        None,
+                    )
+                    if previous is not None:
+                        # 重启后也先等待当前 market 的官方开盘价重新确认上一根 close。
+                        market_signal_pipeline.mark_close_correction_pending(previous)
                 if candles and not candles[-1].is_closed:
                     self._current[interval] = candles[-1]
         self._initialized = True

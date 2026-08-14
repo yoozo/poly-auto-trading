@@ -11,7 +11,11 @@ from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.services.chainlink_twap import finalize_closed_market, market_price_context
+from app.services.chainlink_twap import (
+    correct_previous_candle_from_market,
+    finalize_closed_market,
+    market_price_context,
+)
 from app.services.polymarket_client import PolymarketClient, UP_DOWN_INTERVAL_TAGS
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
@@ -121,6 +125,9 @@ class PolymarketMarketMonitor:
                     for market in markets:
                         # finalize 内部统一规范化时区并过滤未结束 market。
                         await finalize_closed_market(session, market, now=now)
+                        if market.window == "current":
+                            # 新周期的 Price To Beat 就是上一根 K 线的官方边界 close。
+                            await correct_previous_candle_from_market(session, market)
             await polymarket_up_down_store.replace_markets(interval, markets)
             await self.broadcast_markets_snapshot(interval)
         current_tokens = set(await self.subscription_token_ids())
