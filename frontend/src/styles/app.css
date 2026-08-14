@@ -610,6 +610,27 @@ body[data-theme="dark"] .performance-tooltip-trigger {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.watch-page-fullscreen .watch-chart-card {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.watch-page-fullscreen .watch-chart-card .ant-card-body {
+  display: flex;
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.watch-page-fullscreen .watch-chart-card .btc-watch-chart {
+  /* 全屏高度要从 grid item 经 Card body 传到图表，不能依赖百分比高度的隐式解析。 */
+  flex: 1;
+  width: 100%;
+}
+
 .page-stack {
   display: grid;
   gap: 16px;

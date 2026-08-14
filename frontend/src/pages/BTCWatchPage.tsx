@@ -319,6 +319,16 @@ export default function BTCWatchPage() {
       })
     : null;
   const displayedComparisonLine = usesChainlinkTwap ? chainlinkComparisonLine : comparisonLine;
+  const displayedMarketPriceLine = usesChainlinkTwap && contextMatchesMarket && marketPriceContext?.current
+    ? {
+        id: `market-current:${selectedPolymarket?.id ?? "unknown"}`,
+        price: Number(marketPriceContext.current.value),
+        title: marketPriceContext.current.source === "polymarket"
+          ? "Final"
+          : `TWAP ${marketPriceContext.twap_window_seconds}s`,
+        color: "#06b6d4",
+      }
+    : null;
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
   const marketDiffInterval = selectedPolymarket?.interval ?? polymarketInterval;
@@ -1087,7 +1097,7 @@ export default function BTCWatchPage() {
     <div className="watch-toolbar-inner">
       <div className="watch-toolbar-controls">
         <Typography.Text strong>
-          {candleSymbol === "BTCUSD" ? "BTC/USD · Chainlink" : "BTC/USDT · Binance"}
+          {candleSymbol === "BTCUSD" ? "BTC/USD · Chainlink Spot" : "BTC/USDT · Binance"}
         </Typography.Text>
         {chainlinkSourceAvailable && (
           <Segmented
@@ -1218,6 +1228,7 @@ export default function BTCWatchPage() {
             fitAnchorVersion={fitAnchorVersion}
             initialVisibleCandles={initialVisibleCandles}
             comparisonLine={displayedComparisonLine}
+            marketPriceLine={displayedMarketPriceLine}
             focusTimeMs={chartFocusTimeMs}
             focusKey={chartFocusKey}
             focusPlacement={timeJumpFocus ? "center" : "anchor"}
@@ -1478,7 +1489,11 @@ function MarketPriceSummary({ context }: { context: PolymarketMarketPriceContext
         <strong>{baseline === null ? "--" : `$${formatBtcPrice(baseline)}`}</strong>
       </div>
       <div className="polymarket-price-summary-item current">
-        <span>{context?.current?.source === "polymarket" ? "Final Price" : "Current Price"}</span>
+        <span>
+          {context?.current?.source === "polymarket"
+            ? "Final Price"
+            : `Current TWAP${context ? ` (${context.twap_window_seconds}s)` : ""}`}
+        </span>
         <strong>{current === null ? "--" : `$${formatBtcPrice(current)}`}</strong>
       </div>
       <div className={`polymarket-price-summary-diff ${tone}`}>
