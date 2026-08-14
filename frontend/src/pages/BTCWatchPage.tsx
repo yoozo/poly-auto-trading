@@ -17,6 +17,7 @@ import {
   type PolymarketAccountTrade,
   type PolymarketCredentialProfile,
   type PolymarketInterval,
+  type PolymarketMarketPriceContext,
   type PolymarketOutcomeQuote,
   type PolymarketUpDownMarket,
   type PolymarketWsMessage,
@@ -142,6 +143,7 @@ export default function BTCWatchPage() {
   const [polymarketMarkets, setPolymarketMarkets] = useState<PolymarketUpDownMarket[]>([]);
   const [polymarketMarketsLoading, setPolymarketMarketsLoading] = useState(false);
   const [selectedPolymarketSnapshot, setSelectedPolymarketSnapshot] = useState<PolymarketUpDownMarket | null>(null);
+  const [marketPriceContext, setMarketPriceContext] = useState<PolymarketMarketPriceContext | null>(null);
   const [comparisonLine, setComparisonLine] = useState<ChartComparisonLine | null>(null);
   const [comparisonRetryNonce, setComparisonRetryNonce] = useState(0);
   const comparisonRequestKeyRef = useRef<string | null>(null);
@@ -283,7 +285,25 @@ export default function BTCWatchPage() {
   }, [indicatorPeriod, initialVisibleCandles, interval, polymarketChartFocusAnchorMs, timeJumpFocus]);
   const candleSnapshotModeRef = useRef<"latest" | "focus">(candleSnapshotQuery.mode);
   const [candleSnapshotError, setCandleSnapshotError] = useState<string | null>(null);
-  const marketPriceDiff = latest && comparisonLine ? latest.close - comparisonLine.price : null;
+  const usesChainlinkTwap = selectedPolymarket?.interval === "5m" || selectedPolymarket?.interval === "15m";
+  const contextMatchesMarket = Boolean(
+    selectedPolymarket && marketPriceContext?.market_id === selectedPolymarket.id,
+  );
+  const chainlinkPriceDiff = contextMatchesMarket && marketPriceContext?.difference != null
+    ? Number(marketPriceContext.difference)
+    : null;
+  const marketPriceDiff = usesChainlinkTwap
+    ? chainlinkPriceDiff != null && Number.isFinite(chainlinkPriceDiff) ? chainlinkPriceDiff : null
+    : latest && comparisonLine ? latest.close - comparisonLine.price : null;
+  const chainlinkComparisonLine = contextMatchesMarket && marketPriceContext?.baseline && selectedPolymarket?.start_time
+    ? marketComparisonLine({
+        marketId: selectedPolymarket.id,
+        startMs: new Date(selectedPolymarket.start_time).getTime(),
+        price: Number(marketPriceContext.baseline.value),
+        interval: `Chainlink ${marketPriceContext.twap_window_seconds}s`,
+      })
+    : null;
+  const displayedComparisonLine = usesChainlinkTwap ? chainlinkComparisonLine : comparisonLine;
   const marketDiffTone =
     marketPriceDiff !== null && marketPriceDiff > 0 ? "up" : marketPriceDiff !== null && marketPriceDiff < 0 ? "down" : "flat";
   const marketDiffInterval = selectedPolymarket?.interval ?? polymarketInterval;
@@ -361,6 +381,7 @@ export default function BTCWatchPage() {
     setPolymarketMarkets(cachedMarkets);
     setPolymarketMarketsLoading(cachedMarkets.length === 0);
     setSelectedPolymarketSnapshot(null);
+    setMarketPriceContext(null);
     setComparisonLine(null);
     comparisonRequestKeyRef.current = null;
     activeComparisonKeyRef.current = null;
@@ -379,11 +400,13 @@ export default function BTCWatchPage() {
     selectedPolymarketIdRef.current = selectedPolymarketId;
     if (!selectedPolymarketId) {
       setSelectedPolymarketSnapshot(null);
+      setMarketPriceContext(null);
       return;
     }
+    if (marketPriceContext?.market_id !== selectedPolymarketId) setMarketPriceContext(null);
     const freshMarket = polymarketMarkets.find((market) => market.id === selectedPolymarketId);
     if (freshMarket) setSelectedPolymarketSnapshot(freshMarket);
-  }, [polymarketMarkets, selectedPolymarketId]);
+  }, [polymarketMarkets, selectedPolymarketId, marketPriceContext?.market_id]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
@@ -421,6 +444,10 @@ export default function BTCWatchPage() {
           polymarketMarketsCacheRef.current.set(message.interval, next);
           return next;
         });
+        if (selectedPolymarketIdRef.current === message.market.id) {
+          setSelectedPolymarketSnapshot(message.market);
+          setMarketPriceContext(message.price_context ?? null);
+        }
         setPolymarketMarketsLoading(false);
       };
       socket.onclose = () => {
@@ -488,6 +515,13 @@ export default function BTCWatchPage() {
     clearComparisonRetryTimer();
 
     if (!comparisonTarget || !comparisonKey) {
+      setComparisonLine(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (comparisonTarget.marketInterval === "5m" || comparisonTarget.marketInterval === "15m") {
+      // 5m/15m 的 target 由后端 Chainlink 价格上下文统一提供，禁止前端自行用 Binance 覆盖。
       setComparisonLine(null);
       return () => {
         cancelled = true;
@@ -936,6 +970,7 @@ export default function BTCWatchPage() {
       setPolymarketFocusNowMs(Date.now());
       setPolymarketFocusNonce((value) => value + 1);
       setSelectedPolymarketSnapshot(polymarketMarkets.find((market) => market.id === marketId) ?? null);
+      setMarketPriceContext(null);
       setSelectedPolymarketId(marketId);
       // 选中当前窗口代表回到实时跟随；选中历史或未来窗口则固定查看该窗口。
       setAutoSwitchPolymarket(followCurrent);
@@ -1057,7 +1092,7 @@ export default function BTCWatchPage() {
         </label>
       </div>
       <div className="watch-toolbar-status">
-        {latest && (
+        {selectedPolymarket && (
           <Typography.Text className={`watch-market-diff watch-market-diff-${marketDiffTone}`}>
             <span className="watch-market-diff-interval">{marketDiffInterval}</span>
             <span className="watch-market-diff-value">
@@ -1070,6 +1105,14 @@ export default function BTCWatchPage() {
                 </>
               )}
             </span>
+            {usesChainlinkTwap && (
+              <span
+                className={`watch-market-price-quality watch-market-price-quality-${marketPriceContext?.quality ?? "waiting_chainlink"}`}
+                title={marketPriceContext?.warning ?? "Polymarket Chainlink TWAP 结算源"}
+              >
+                {marketPriceQualityLabel(marketPriceContext)}
+              </span>
+            )}
           </Typography.Text>
         )}
         {isLoadingMore && <Typography.Text type="secondary">加载历史中...</Typography.Text>}
@@ -1116,7 +1159,7 @@ export default function BTCWatchPage() {
             latestStreamStatus={streamStatus}
             fitAnchorVersion={fitAnchorVersion}
             initialVisibleCandles={initialVisibleCandles}
-            comparisonLine={comparisonLine}
+            comparisonLine={displayedComparisonLine}
             focusTimeMs={chartFocusTimeMs}
             focusKey={chartFocusKey}
             focusPlacement={timeJumpFocus ? "center" : "anchor"}
@@ -2151,6 +2194,15 @@ function previousOneMinuteCandle(rows: MarketCandle[], baselineStartMs: number) 
 function formatProbability(value: number | null) {
   if (value == null) return "-";
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function marketPriceQualityLabel(context: PolymarketMarketPriceContext | null) {
+  if (!context) return "等待 Chainlink";
+  if (context.quality === "exact") return `Chainlink ${context.twap_window_seconds}s`;
+  if (context.quality === "estimated_baseline") return "Binance 补齐 · 可能有误差";
+  if (context.quality === "stale") return "Chainlink 已过期";
+  if (context.quality === "unavailable") return "缺少参考价";
+  return "等待 Chainlink";
 }
 
 function formatCents(value: number | null) {

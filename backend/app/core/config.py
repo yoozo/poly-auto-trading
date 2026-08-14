@@ -96,6 +96,9 @@ class PolymarketConfig(BaseModel):
     market_empty_retry_seconds: int = 5
     market_signal_refresh_min_seconds: int = 30
     ws_broadcast_interval_seconds: float = 0.2
+    chainlink_twap_enabled: bool = True
+    chainlink_twap_ws_url: str = "wss://ws-live-data.polymarket.com"
+    chainlink_twap_stale_seconds: int = 20
 
 
 class SignalConfig(BaseModel):
@@ -202,6 +205,9 @@ class Settings:
         self.polymarket_ws_broadcast_interval_seconds = (
             yaml_config.polymarket.ws_broadcast_interval_seconds
         )
+        self.chainlink_twap_enabled = yaml_config.polymarket.chainlink_twap_enabled
+        self.chainlink_twap_ws_url = yaml_config.polymarket.chainlink_twap_ws_url
+        self.chainlink_twap_stale_seconds = yaml_config.polymarket.chainlink_twap_stale_seconds
 
         self.telegram_bot_token = secrets.telegram_bot_token
         self.telegram_chat_id = secrets.telegram_chat_id

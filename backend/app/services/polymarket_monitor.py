@@ -10,6 +10,8 @@ import websockets
 from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
+from app.db.session import AsyncSessionLocal
+from app.services.chainlink_twap import market_price_context
 from app.services.polymarket_client import PolymarketClient, UP_DOWN_INTERVAL_TAGS
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
@@ -280,12 +282,15 @@ class PolymarketMarketMonitor:
             market = await polymarket_up_down_store.get_market_in_interval(interval, market_id)
             if market is None:
                 continue
+            async with AsyncSessionLocal() as session:
+                price_context = await market_price_context(session, market)
             await polymarket_ws_hub.broadcast_market(
                 market_id,
                 {
                     "type": "polymarket.btc_up_down.market.snapshot",
                     "interval": interval,
                     "market": jsonable_encoder(market),
+                    "price_context": jsonable_encoder(price_context),
                 },
             )
 

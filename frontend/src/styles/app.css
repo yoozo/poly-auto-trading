@@ -2022,6 +2022,22 @@ body[data-theme="dark"] .app-account-login-action {
   color: #64748b;
 }
 
+.watch-market-price-quality {
+  padding-left: 7px;
+  border-left: 1px solid #d8e0ea;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.watch-market-price-quality-estimated_baseline,
+.watch-market-price-quality-stale,
+.watch-market-price-quality-unavailable,
+.watch-market-price-quality-waiting_chainlink {
+  color: #d97706;
+}
+
 .watch-fullscreen-button {
   flex: 0 0 auto;
 }

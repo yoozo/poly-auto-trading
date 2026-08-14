@@ -63,6 +63,10 @@ polymarket:
   market_signal_refresh_min_seconds: 30
   # 后端向前端广播 Polymarket 快照的节流间隔；不影响 Polymarket 上游 REST/WS 拉取频率。
   ws_broadcast_interval_seconds: 0.3
+  # Polymarket 免费 RTDS：5m 使用 30s TWAP，15m 使用 60s TWAP。
+  chainlink_twap_enabled: true
+  chainlink_twap_ws_url: wss://ws-live-data.polymarket.com
+  chainlink_twap_stale_seconds: 20
 signals:
   interval_base_scores:
     1m: 1

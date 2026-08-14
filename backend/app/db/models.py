@@ -216,6 +216,31 @@ class Candle(Base, TimestampMixin):
     is_closed: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class ChainlinkTwapObservation(Base):
+    __tablename__ = "chainlink_twap_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "symbol", "window_seconds", "observed_at", name="uq_chainlink_twap_observation"
+        ),
+        Index(
+            "ix_chainlink_twap_symbol_window_observed",
+            "symbol",
+            "window_seconds",
+            "observed_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(24))
+    window_seconds: Mapped[int] = mapped_column(Integer)
+    value: Mapped[Decimal] = mapped_column(Numeric(38, 18))
+    full_accuracy_value: Mapped[str] = mapped_column(String(96))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    topic: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class CandleUnavailableRange(Base, TimestampMixin):
     __tablename__ = "candle_unavailable_ranges"
     __table_args__ = (

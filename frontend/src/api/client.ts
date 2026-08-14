@@ -426,6 +426,24 @@ export type PolymarketUpDownMarket = {
 
 export type PolymarketInterval = "5m" | "15m" | "1h" | "4h";
 
+export type PolymarketMarketPricePoint = {
+  source: "chainlink" | "binance";
+  value: number | string;
+  observed_at: string;
+};
+
+export type PolymarketMarketPriceContext = {
+  market_id: string;
+  interval: "5m" | "15m";
+  twap_window_seconds: 30 | 60;
+  quality: "exact" | "estimated_baseline" | "waiting_chainlink" | "stale" | "unavailable";
+  warning: string | null;
+  baseline: PolymarketMarketPricePoint | null;
+  current: PolymarketMarketPricePoint | null;
+  difference: number | string | null;
+  direction: "up" | "down" | null;
+};
+
 export type PolymarketWsMessage =
   | {
       type: "polymarket.btc_up_down.markets.snapshot";
@@ -438,6 +456,7 @@ export type PolymarketWsMessage =
       interval: PolymarketInterval;
       request_id?: string;
       market: PolymarketUpDownMarket;
+      price_context?: PolymarketMarketPriceContext | null;
     }
   | {
       type: "polymarket.btc_up_down.error";

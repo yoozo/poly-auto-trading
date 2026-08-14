@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.db.session import AsyncSessionLocal
 from app.cron.scheduler import start_cron_scheduler, stop_cron_scheduler
 from app.services.binance_monitor import binance_monitor
+from app.services.chainlink_twap import chainlink_twap_monitor
 from app.services.polymarket_account_monitor import polymarket_account_monitor
 from app.services.polymarket_monitor import polymarket_market_monitor
 from app.services.report_store import fail_interrupted_running_tasks
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
     await binance_monitor.start()
     await polymarket_market_monitor.start()
+    await chainlink_twap_monitor.start()
     await polymarket_account_monitor.start()
     start_cron_scheduler()
     try:
@@ -33,5 +35,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         stop_cron_scheduler()
         await polymarket_account_monitor.stop()
+        await chainlink_twap_monitor.stop()
         await polymarket_market_monitor.stop()
         await binance_monitor.stop()

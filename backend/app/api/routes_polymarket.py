@@ -10,7 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import require_websocket_auth
-from app.db.session import get_session
+from app.db.session import AsyncSessionLocal, get_session
 from app.schemas.polymarket import (
     PolymarketAccountState,
     PolymarketCancelOrderResponse,
@@ -40,6 +40,7 @@ from app.services.polymarket_credentials import (
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
 from app.services.polymarket_status import get_polymarket_status
+from app.services.chainlink_twap import market_price_context
 
 router = APIRouter(tags=["polymarket"])
 logger = logging.getLogger(__name__)
@@ -356,10 +357,13 @@ async def send_btc_up_down_market_snapshot(
     *,
     request_id: str | None = None,
 ) -> None:
+    async with AsyncSessionLocal() as session:
+        price_context = await market_price_context(session, market)
     payload = {
         "type": "polymarket.btc_up_down.market.snapshot",
         "interval": interval,
         "market": jsonable_encoder(market),
+        "price_context": jsonable_encoder(price_context),
     }
     if request_id:
         payload["request_id"] = request_id
