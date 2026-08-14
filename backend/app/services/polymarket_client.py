@@ -1527,7 +1527,7 @@ def normalize_up_down_market(
         title=string_or_none(market.get("question") or event.get("title")) or "Bitcoin Up or Down",
         series_slug=string_or_none(event.get("seriesSlug")),
         interval=interval,
-        twap_window_seconds=event_twap_window_seconds(event),
+        twap_window_seconds=event_twap_window_seconds(event, interval=interval),
         start_time=start_time,
         end_time=end_time,
         window=market_window(start_time=start_time, end_time=end_time, now=now),
@@ -1559,8 +1559,12 @@ def normalize_up_down_market(
     )
 
 
-def event_twap_window_seconds(event: dict[str, Any]) -> int | None:
-    # 市场规则会切换 30s/60s，必须从该 market 的 resolution URL 读取，不能按 5m/15m 猜测。
+def event_twap_window_seconds(event: dict[str, Any], *, interval: str) -> int | None:
+    # Polymarket BTC 5m/15m 分别固定使用 30s/60s，避免 event 关联文本中的其他 URL 误导模糊匹配。
+    if interval == "5m":
+        return 30
+    if interval == "15m":
+        return 60
     match = TWAP_STREAM_WINDOW_RE.search(json.dumps(event, default=str))
     return int(match.group(1)) if match else None
 
