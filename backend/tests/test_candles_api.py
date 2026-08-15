@@ -29,9 +29,6 @@ class EmptyMarketSignalPipeline:
     def latest_market_payload(self, symbol, interval):  # noqa: ANN001
         return None
 
-    def indicators_ready_through(self, symbol, interval, candle_time):  # noqa: ANN001
-        return True
-
 
 class RecordingJsonWebSocket:
     def __init__(self) -> None:
@@ -335,20 +332,6 @@ def test_attach_indicators_reuses_same_rolling_window_calculation(monkeypatch) -
     assert len(result) == 300
     # 300 个目标都从同一窗口起点计算，应该复用为一次 500 根指标计算。
     assert calls == [500]
-
-
-def test_attach_indicators_waits_for_pending_close_correction(monkeypatch) -> None:
-    source = [make_candle(index) for index in range(40)]
-
-    monkeypatch.setattr(
-        routes_candles.market_signal_pipeline,
-        "indicators_ready_through",
-        lambda symbol, interval, candle_time: False,
-    )
-
-    result = routes_candles.attach_indicators(source[-10:], "1m", source_candles=source)
-
-    assert all(candle.indicator is None for candle in result)
 
 
 def test_candles_limit_mode_merges_live_open_candle(monkeypatch) -> None:

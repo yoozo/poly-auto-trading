@@ -395,18 +395,6 @@ def attach_indicators(
     source_candles: list[Candle] | None = None,
 ) -> list[MarketCandle]:
     calculation_candles = source_candles or candles
-    indicators_ready = getattr(market_signal_pipeline, "indicators_ready_through", None)
-    if (
-        calculation_candles
-        and indicators_ready is not None
-        and not indicators_ready(
-            calculation_candles[-1].symbol,
-            interval,
-            calculation_candles[-1].open_time,
-        )
-    ):
-        # 待校正 close 会污染其后的递推指标；校正完成前只返回原始 K 线。
-        return [MarketCandle.model_validate(candle.model_dump()) for candle in candles]
     source_index_by_time = {
         candle.open_time: index for index, candle in enumerate(calculation_candles)
     }

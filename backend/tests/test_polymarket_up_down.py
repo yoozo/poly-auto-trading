@@ -165,7 +165,7 @@ def test_normalize_up_down_market_reads_5m_twap_window_from_resolution_url() -> 
     assert market.twap_window_seconds == 60
 
 
-def test_normalize_up_down_market_keeps_historical_30s_rule() -> None:
+def test_normalize_up_down_market_uses_60s_even_when_description_mentions_30s() -> None:
     now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
     event = make_event("btc-updown-5m-1", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z")
     event["description"] = (
@@ -175,7 +175,7 @@ def test_normalize_up_down_market_keeps_historical_30s_rule() -> None:
 
     market = normalize_up_down_market(event, interval="5m", books={}, now=now)
 
-    assert market.twap_window_seconds == 30
+    assert market.twap_window_seconds == 60
 
 
 def test_normalize_up_down_market_uses_15m_twap_window() -> None:

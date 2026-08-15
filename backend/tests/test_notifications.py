@@ -225,6 +225,53 @@ def test_analyze_signal_input_marks_negative_rsi_diff_as_buy_long() -> None:
     assert diff_rule.direction == "long"
 
 
+@pytest.mark.parametrize(
+    ("interval", "candle_open", "candle_close", "price_to_beat", "close_twap", "expected"),
+    [
+        ("5m", 100, 101, "200", "201", "✅ 是（Close UP / TWAP UP）"),
+        ("15m", 100, 99, "200", "201", "❌ 否（Close DOWN / TWAP UP）"),
+        ("5m", 100, 100, "200", "199", "⚪ 无法判断（Close FLAT / TWAP DOWN）"),
+    ],
+)
+def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_final(
+    interval,
+    candle_open,
+    candle_close,
+    price_to_beat,
+    close_twap,
+    expected,
+) -> None:
+    occurred_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signal = make_signal_record(
+        1,
+        "rsi_ema_diff",
+        "RSI-EMA diff = 13",
+        occurred_at,
+        interval=interval,
+        source="chainlink_spot",
+    ).model_copy(
+        update={
+            "input_snapshot": {
+                "candle": {"open": candle_open, "close": candle_close},
+                "market_events": [
+                    {
+                        "source": "chainlink_spot",
+                        "metadata": {
+                            "polymarket_final": {
+                                "price_to_beat": price_to_beat,
+                                "close_twap": close_twap,
+                            }
+                        },
+                    }
+                ],
+            }
+        }
+    )
+
+    assert notifications.delivery_direction_consistency(signal) == expected
+    assert f"方向一致：{expected}" in notifications.delivery_message([signal])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("interval", "source"),

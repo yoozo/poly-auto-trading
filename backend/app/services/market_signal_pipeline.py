@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import cast
 
 from app.core.config import settings
@@ -23,21 +22,12 @@ class MarketSignalPipeline:
     def __init__(self) -> None:
         # 实时窗口只保存内存态，用于给指标计算提供最近 N 根 K 线。
         self._live_candles: dict[tuple[str, str], list[Candle]] = {}
-        self._pending_close_corrections: dict[tuple[str, str], datetime] = {}
 
     async def handle_market_event(
         self, event: MarketDataEvent, *, notify: bool = True
     ) -> SignalInput:
         # 入口保持数据源无关：调用方只需要提交 MarketDataEvent。
         candles = self._merge_live_candle(event.candle)
-        self._resolve_close_correction(event)
-        if self.close_correction_pending(event.candle.symbol, event.candle.interval):
-            # Price To Beat 尚未校正时不计算指标，避免 TG 使用错误 close。
-            return SignalInput(
-                candle=event.candle,
-                market_events=[event],
-                factors={"technical_indicators": None, "sources": [event.source]},
-            )
         signal_input = self.build_signal_input(event, candles)
         if notify:
             await self.dispatch(signal_input)
@@ -77,28 +67,6 @@ class MarketSignalPipeline:
         key = (symbol.upper(), interval)
         self._live_candles[key] = candles[-settings.candle_history_limit :]
 
-    def mark_close_correction_pending(self, candle: Candle) -> None:
-        self._pending_close_corrections[(candle.symbol.upper(), candle.interval)] = candle.open_time
-
-    def close_correction_pending(self, symbol: str, interval: str) -> bool:
-        return (symbol.upper(), interval) in self._pending_close_corrections
-
-    def indicators_ready_through(
-        self,
-        symbol: str,
-        interval: str,
-        candle_time: datetime,
-    ) -> bool:
-        pending_time = self._pending_close_corrections.get((symbol.upper(), interval))
-        return pending_time is None or candle_time < pending_time
-
-    def _resolve_close_correction(self, event: MarketDataEvent) -> None:
-        if event.metadata.get("price_to_beat_corrected") is not True:
-            return
-        key = (event.candle.symbol.upper(), event.candle.interval)
-        if self._pending_close_corrections.get(key) == event.candle.open_time:
-            self._pending_close_corrections.pop(key, None)
-
     def get_live_candles(self, symbol: str, interval: str, limit: int | None = None) -> list[Candle]:
         key = (symbol.upper(), interval)
         candles = self._live_candles.get(key, [])
@@ -116,9 +84,6 @@ class MarketSignalPipeline:
     ) -> dict[str, object] | None:
         if not candles:
             return None
-        if not self.indicators_ready_through(symbol, interval, candles[-1].open_time):
-            # 首屏也遵守校正屏障：K 线仍可显示，但不能携带由旧 close 算出的指标。
-            return self._serialize_market_candle(symbol, interval, candles[-1])
         indicator_points = calculate_indicator_points(candles, cast(Interval, interval))
         return self._serialize_market_candle(
             symbol,

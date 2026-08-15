@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal, InvalidOperation
 import logging
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -425,13 +426,45 @@ def delivery_message(signals: list[SignalRecord]) -> str:
         f"K线时间：{format_signal_time(signals[0].occurred_at)}",
         f"总分：{format_optional(total_score)}",
         f"方向：{direction_emoji}{direction_name}",
-        f"信号提醒：{'，'.join(reminders)}",
     ]
+    consistency = delivery_direction_consistency(signals[0])
+    if consistency is not None:
+        lines.append(f"方向一致：{consistency}")
+    lines.append(f"信号提醒：{'，'.join(reminders)}")
     for signal, reminder in zip(signals, reminders):
         lines.append(
             f"- {reminder}  Score={format_score(signal.score)}"
         )
     return "\n".join(lines)
+
+
+def delivery_direction_consistency(signal: SignalRecord) -> str | None:
+    if signal.metadata.get("interval") not in {"5m", "15m"}:
+        return None
+    candle = signal.input_snapshot.get("candle")
+    events = signal.input_snapshot.get("market_events")
+    if not isinstance(candle, dict) or not isinstance(events, list) or not events:
+        return None
+    event = events[0]
+    final = event.get("metadata", {}).get("polymarket_final") if isinstance(event, dict) else None
+    if not isinstance(final, dict):
+        return None
+    try:
+        candle_open = Decimal(str(candle["open"]))
+        candle_close = Decimal(str(candle["close"]))
+        price_to_beat = Decimal(str(final["price_to_beat"]))
+        close_twap = Decimal(str(final["close_twap"]))
+    except (KeyError, InvalidOperation, TypeError, ValueError):
+        return None
+
+    close_direction = (
+        "UP" if candle_close > candle_open else "DOWN" if candle_close < candle_open else "FLAT"
+    )
+    final_direction = "UP" if close_twap >= price_to_beat else "DOWN"
+    if close_direction == "FLAT":
+        return f"⚪ 无法判断（Close {close_direction} / TWAP {final_direction}）"
+    marker = "✅ 是" if close_direction == final_direction else "❌ 否"
+    return f"{marker}（Close {close_direction} / TWAP {final_direction}）"
 
 
 def delivery_market_name(signals: list[SignalRecord]) -> str:

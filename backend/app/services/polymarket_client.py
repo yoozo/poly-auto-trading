@@ -78,7 +78,6 @@ UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
 }
-TWAP_STREAM_WINDOW_RE = re.compile(r"twap[-_: ]+(30|60)s(?:-streams)?", re.IGNORECASE)
 CLOSE_ONLY_COUNTRIES = {"PL", "SG", "TH", "TW"}
 GEOBLOCK_URL = "https://polymarket.com/api/geoblock"
 
@@ -1560,15 +1559,8 @@ def normalize_up_down_market(
 
 
 def event_twap_window_seconds(event: dict[str, Any], *, interval: str) -> int | None:
-    # TWAP window 以当前 market 的 resolution 文本为准；Polymarket 可能调整 5m 的 30s/60s 规则。
-    market = first_market(event)
-    for description in (event.get("description"), market.get("description")):
-        if not isinstance(description, str):
-            continue
-        match = TWAP_STREAM_WINDOW_RE.search(description)
-        if match:
-            return int(match.group(1))
-    return None
+    # 当前 5m/15m market 统一以 Chainlink 60s TWAP 作为 Price To Beat 与 Final 口径。
+    return 60 if interval in {"5m", "15m"} else None
 
 
 def normalize_outcome_quote(

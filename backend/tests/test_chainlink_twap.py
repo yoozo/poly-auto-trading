@@ -13,8 +13,8 @@ from app.services.chainlink_twap import (
     PolymarketPastResult,
     aggregate_spot_candle,
     candles_to_persist,
-    correct_previous_candle_close,
     market_price_context,
+    notify_closed_market_signal,
     parse_polymarket_past_result,
     parse_polymarket_page_open_price,
     parse_twap_message,
@@ -25,13 +25,12 @@ from app.services.chainlink_twap import (
 )
 
 
-def test_subscription_payload_subscribes_both_twap_windows() -> None:
+def test_subscription_payload_subscribes_spot_and_60s_twap() -> None:
     payload = subscription_payload()
 
     assert payload["action"] == "subscribe"
     assert {item["topic"] for item in payload["subscriptions"]} == {
         "crypto_prices_chainlink",
-        "crypto_prices_twap_thirty",
         "crypto_prices_twap_sixty",
     }
     assert all(
@@ -40,7 +39,6 @@ def test_subscription_payload_subscribes_both_twap_windows() -> None:
     )
     assert {item["topic"]: item["type"] for item in payload["subscriptions"]} == {
         "crypto_prices_chainlink": "*",
-        "crypto_prices_twap_thirty": "update",
         "crypto_prices_twap_sixty": "update",
     }
 
@@ -48,7 +46,7 @@ def test_subscription_payload_subscribes_both_twap_windows() -> None:
 def test_parse_twap_message_uses_full_accuracy_e18_value() -> None:
     message = json.dumps(
         {
-            "topic": "crypto_prices_twap_thirty",
+            "topic": "crypto_prices_twap_sixty",
             "type": "update",
             "timestamp": 1_785_178_800_123,
             "payload": {
@@ -56,7 +54,7 @@ def test_parse_twap_message_uses_full_accuracy_e18_value() -> None:
                 "value": 65000.4,
                 "full_accuracy_value": "65000500000000000000000",
                 "timestamp": 1_785_178_800_000,
-                "window_s": 30,
+                "window_s": 60,
             },
         }
     )
@@ -65,7 +63,7 @@ def test_parse_twap_message_uses_full_accuracy_e18_value() -> None:
 
     assert observation is not None
     assert observation.value == Decimal("65000.5")
-    assert observation.window_seconds == 30
+    assert observation.window_seconds == 60
     assert observation.observed_at == datetime.fromtimestamp(
         1_785_178_800, timezone.utc
     )
@@ -186,41 +184,41 @@ def test_polymarket_past_result_builds_missing_candle_from_official_open_close()
 
 
 @pytest.mark.asyncio
-async def test_next_price_to_beat_corrects_previous_chainlink_candle_close(monkeypatch) -> None:
-    start = datetime(2026, 8, 14, 4, 0, tzinfo=timezone.utc)
-    active_market = market(start=start, interval="5m", twap_window_seconds=60)
-    previous = candle_at(start - timedelta(minutes=5), source="chainlink").model_copy(
-        update={"interval": "5m", "high": 65010, "low": 64990, "close": 65005}
+async def test_closed_market_signal_keeps_chainlink_close_and_adds_final_twap(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 55, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    raw_candle = candle_at(start, source="chainlink").model_copy(
+        update={"interval": "5m", "open": 65000, "high": 65010, "low": 64990, "close": 65005}
     )
-    writes = []
+    result = PolymarketPastResult(
+        start_time=start,
+        end_time=closed_market.end_time,
+        open_price=Decimal("65020.25"),
+        close_price=Decimal("65010.75"),
+    )
     signal_events = []
 
     async def fake_list(*args, **kwargs):
-        assert kwargs["start"] == start - timedelta(minutes=5)
-        assert kwargs["end"] == start - timedelta(minutes=5)
-        return [previous]
-
-    async def fake_upsert(session, candles):
-        writes.extend(candles)
+        assert kwargs["start"] == start
+        assert kwargs["end"] == start
+        return [raw_candle]
 
     monkeypatch.setattr(chainlink_twap, "list_candles_between", fake_list)
-    monkeypatch.setattr(chainlink_twap, "upsert_candles", fake_upsert)
     async def fake_handle(event):
         signal_events.append(event)
 
     monkeypatch.setattr(chainlink_twap.market_signal_pipeline, "handle_market_event", fake_handle)
-    chainlink_twap._corrected_previous_candle_market_ids.discard(active_market.id)
+    chainlink_twap._notified_past_result_market_ids.discard(closed_market.id)
 
-    await correct_previous_candle_close(object(), active_market, Decimal("65020.25"))
+    await notify_closed_market_signal(object(), closed_market, result)
 
-    assert len(writes) == 1
-    assert writes[0].close == 65020.25
-    assert writes[0].high == 65020.25
-    assert writes[0].low == 64990
-    assert writes[0].source == "chainlink"
     assert len(signal_events) == 1
-    assert signal_events[0].candle == writes[0]
-    assert signal_events[0].metadata["price_to_beat_corrected"] is True
+    assert signal_events[0].candle == raw_candle
+    assert signal_events[0].candle.close == 65005
+    assert signal_events[0].metadata["polymarket_final"] == {
+        "price_to_beat": "65020.25",
+        "close_twap": "65010.75",
+    }
 
 
 def test_chainlink_spot_ticks_aggregate_ohlc_without_volume() -> None:
@@ -409,14 +407,12 @@ async def test_incomplete_polymarket_price_to_beat_is_only_cached_briefly(monkey
     chainlink_twap._price_to_beat_cache.clear()
     before = datetime.now(timezone.utc)
     active_market = market(start=start, interval="5m")
-    chainlink_twap._confirmed_price_to_beat_market_ids.discard(active_market.id)
 
     value = await polymarket_price_to_beat(active_market)
 
     assert value == Decimal("65000.5")
     assert requests[0]["params"]["twapEnabled"] == "true"
-    assert requests[0]["params"]["twapLookbackSeconds"] == 30
-    assert active_market.id not in chainlink_twap._confirmed_price_to_beat_market_ids
+    assert requests[0]["params"]["twapLookbackSeconds"] == 60
     assert chainlink_twap._price_to_beat_cache[active_market.id][1] <= before + timedelta(seconds=6)
 
 
@@ -430,9 +426,9 @@ def market(*, start: datetime, interval: str, twap_window_seconds: int | None = 
         id=f"btc-{interval}-{int(start.timestamp())}",
         slug=f"btc-updown-{interval}-{int(start.timestamp())}",
         interval=interval,
-        twap_window_seconds=twap_window_seconds or (30 if interval == "5m" else 60),
+        twap_window_seconds=twap_window_seconds or 60,
         start_time=start,
-        end_time=start.replace(minute=start.minute + minutes),
+        end_time=start + timedelta(minutes=minutes),
     )
 
 
