@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import httpcore
@@ -280,6 +281,39 @@ def test_sdk_event_adapter_keeps_existing_up_down_normalizer_shape() -> None:
     assert event["markets"][0]["conditionId"] == "0xabc"
     assert market.outcome_quotes[0].name == "Up"
     assert market.outcome_quotes[0].token_id == "up-token"
+
+
+@pytest.mark.asyncio
+async def test_event_fetch_paginates_until_requested_limit(monkeypatch) -> None:
+    pages_read = []
+
+    class FakePaginator:
+        async def __aiter__(self):
+            for page_number in range(3):
+                pages_read.append(page_number)
+                yield SimpleNamespace(
+                    items=[{"id": page_number * 100 + index} for index in range(100)]
+                )
+
+    class FakeClient:
+        def list_events(self, **params):
+            assert params["page_size"] == 100
+            return FakePaginator()
+
+    monkeypatch.setattr(
+        "app.services.polymarket_client.sdk_event_to_gamma_dict",
+        lambda item: item,
+    )
+
+    events = await PolymarketClient()._fetch_event_page_with_sdk(
+        FakeClient(),
+        limit=150,
+    )
+
+    assert len(events) == 150
+    assert events[0]["id"] == 0
+    assert events[-1]["id"] == 149
+    assert pages_read == [0, 1]
 
 
 def test_sdk_order_book_adapter_keeps_asset_id_and_epoch_ms() -> None:

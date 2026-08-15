@@ -12,6 +12,7 @@ const scenarioSource = `
     candleAtOpenTime,
     marketCandleSymbol,
     marketChartFocusKey,
+    marketCountdownTargetMs,
     marketComparisonTarget,
     marketFocusAnchorMs,
     polymarketDisplayWindow,
@@ -113,8 +114,18 @@ const scenarioSource = `
   assert.equal(marketFocusAnchorMs(window4h, "4h", currentTimeIn4hMarket), Date.parse("2026-06-18T16:00:00.000Z"));
   assert.equal(
     marketFocusAnchorMs(window4h, "1m", Date.parse("2026-06-18T15:59:00.000Z")),
-    Date.parse("2026-06-18T16:00:00.000Z"),
-    "future market focus clamps to market start"
+    null,
+    "future market must not move the chart away from the live window"
+  );
+  assert.equal(
+    marketCountdownTargetMs(window4h, Date.parse("2026-06-18T15:59:00.000Z")),
+    null,
+    "future market must not show a long close countdown"
+  );
+  assert.equal(
+    marketCountdownTargetMs(window4h, currentTimeIn4hMarket),
+    window4h.endMs,
+    "current market counts down to its close"
   );
   assert.equal(
     marketFocusAnchorMs(window4h, "1m", Date.parse("2026-06-18T20:01:00.000Z")),

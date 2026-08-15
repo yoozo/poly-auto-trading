@@ -41,6 +41,7 @@ import {
   hasCandleAtTime,
   marketCandleSymbol,
   marketChartFocusKey,
+  marketCountdownTargetMs,
   marketComparisonTarget,
   marketFocusAnchorMs,
   ONE_MINUTE_MS,
@@ -222,6 +223,10 @@ export default function BTCWatchPage() {
   const candleSymbol = marketCandleSymbol(selectedPolymarket?.interval, interval, preferredCandleSource);
   const activeCandleSymbolRef = useRef(candleSymbol);
   const selectedPolymarketWindow = selectedPolymarket ? polymarketDisplayWindow(selectedPolymarket) : null;
+  const selectedMarketPending = Boolean(selectedPolymarketWindow && selectedPolymarketWindow.startMs > Date.now());
+  const countdownTargetMs = selectedPolymarketWindow
+    ? marketCountdownTargetMs(selectedPolymarketWindow)
+    : null;
   const comparisonTarget = selectedPolymarket ? marketComparisonTarget(selectedPolymarket) : null;
   const selectedPolymarketConditionId = selectedPolymarket?.condition_id ?? null;
   const { data: credentialData } = useQuery({
@@ -1153,10 +1158,10 @@ export default function BTCWatchPage() {
             </span>
             {usesChainlinkTwap && (
               <span
-                className={`watch-market-price-quality watch-market-price-quality-${marketPriceContext?.quality ?? "waiting_chainlink"}`}
+                className={`watch-market-price-quality watch-market-price-quality-${selectedMarketPending ? "pending_market" : marketPriceContext?.quality ?? "waiting_chainlink"}`}
                 title={marketPriceContext?.warning ?? "Polymarket Chainlink TWAP 结算源"}
               >
-                {marketPriceQualityLabel(marketPriceContext)}
+                {marketPriceQualityLabel(marketPriceContext, selectedMarketPending)}
               </span>
             )}
           </Typography.Text>
@@ -1210,7 +1215,7 @@ export default function BTCWatchPage() {
             focusTimeMs={chartFocusTimeMs}
             focusKey={chartFocusKey}
             focusPlacement={timeJumpFocus ? "center" : "anchor"}
-            countdownTargetMs={selectedPolymarketWindow?.endMs ?? null}
+            countdownTargetMs={countdownTargetMs}
             toolbar={chartToolbar}
             timeAxisLeftControl={timeJumpControl}
           />
@@ -1321,6 +1326,8 @@ function PolymarketBtcPanel({
     [activeMarket?.id, markets, selectedMarketId]
   );
   const activePastMarket = railModel.pastMarkets.find((market) => market.id === activeMarket?.id);
+  const activeMarketWindow = activeMarket ? polymarketDisplayWindow(activeMarket) : null;
+  const activeMarketPending = Boolean(activeMarketWindow && activeMarketWindow.startMs > Date.now());
   const [tradeDraft, setTradeDraft] = useState<TradeDraft | null>(null);
   const historicalMenuItems = useMemo<MenuProps["items"]>(
     () =>
@@ -1368,6 +1375,7 @@ function PolymarketBtcPanel({
               {(activeMarket.interval === "5m" || activeMarket.interval === "15m") && (
                 <MarketPriceSummary
                   context={priceContext?.market_id === activeMarket.id ? priceContext : null}
+                  pending={activeMarketPending}
                 />
               )}
             </>
@@ -1475,7 +1483,13 @@ function PolymarketBtcPanel({
   );
 }
 
-function MarketPriceSummary({ context }: { context: PolymarketMarketPriceContext | null }) {
+function MarketPriceSummary({
+  context,
+  pending,
+}: {
+  context: PolymarketMarketPriceContext | null;
+  pending: boolean;
+}) {
   const baseline = finiteNumber(context?.baseline?.value);
   const current = finiteNumber(context?.current?.value);
   const difference = finiteNumber(context?.difference);
@@ -1495,7 +1509,9 @@ function MarketPriceSummary({ context }: { context: PolymarketMarketPriceContext
         <strong>{current === null ? "--" : `$${formatBtcPrice(current)}`}</strong>
       </div>
       <div className={`polymarket-price-summary-diff ${tone}`}>
-        {difference === null ? "等待 Chainlink" : `${difference >= 0 ? "▲" : "▼"} $${formatMarketPriceDiff(difference)}`}
+        {difference === null
+          ? pending ? "Market 未开始" : "等待 Chainlink"
+          : `${difference >= 0 ? "▲" : "▼"} $${formatMarketPriceDiff(difference)}`}
       </div>
     </div>
   );
@@ -2301,7 +2317,8 @@ function formatProbability(value: number | null) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function marketPriceQualityLabel(context: PolymarketMarketPriceContext | null) {
+function marketPriceQualityLabel(context: PolymarketMarketPriceContext | null, pending = false) {
+  if (pending) return "Market 未开始";
   if (!context) return "等待 Chainlink";
   if (context.quality === "exact") {
     return context.current?.source === "polymarket"

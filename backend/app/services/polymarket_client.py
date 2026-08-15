@@ -48,6 +48,7 @@ ACTIVITY_PARALLEL_REQUESTS = 15
 # The public docs still show a wider offset range, but the live data API rejects
 # historical activity windows at the 3000 boundary.
 ACTIVITY_MAX_OFFSET = 3000
+GAMMA_EVENT_PAGE_SIZE = 100
 CLOB_INITIAL_CURSOR = "MA=="
 CLOB_END_CURSOR = "LTE="
 POLYMARKET_USDC_DECIMALS = Decimal("1000000")
@@ -778,9 +779,18 @@ class PolymarketClient:
     ) -> list[dict[str, Any]]:
         limit = int(params.pop("limit"))
         closed = params.pop("closed", False)
-        paginator = client.list_events(closed=closed, page_size=limit, **params)
-        page = await paginator.first_page()
-        return [sdk_event_to_gamma_dict(item) for item in page.items]
+        paginator = client.list_events(
+            closed=closed,
+            page_size=min(limit, GAMMA_EVENT_PAGE_SIZE),
+            **params,
+        )
+        items: list[dict[str, Any]] = []
+        # Gamma 单页最多 100 条；扩大历史窗口后必须继续翻页，否则多资产 tag 会在当前 BTC market 前截断。
+        async for page in paginator:
+            items.extend(sdk_event_to_gamma_dict(item) for item in page.items)
+            if len(items) >= limit:
+                break
+        return items[:limit]
 
     def _log_up_down_series_fallback(self, *, interval: str, series_slug: str, exc: Exception) -> None:
         metadata = {

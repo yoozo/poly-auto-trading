@@ -84,12 +84,18 @@ export function candleOpenAnchorMs(timeMs: number, interval: CandleInterval) {
 
 function marketFocusTimeMs(window: PolymarketDisplayWindow, nowMs = Date.now()) {
   if (!Number.isFinite(nowMs)) return window.startMs;
+  if (nowMs < window.startMs) return null;
   const latestWindowMs = Math.max(window.startMs, window.endMs - 1);
-  return Math.min(Math.max(nowMs, window.startMs), latestWindowMs);
+  return Math.min(nowMs, latestWindowMs);
 }
 
 export function marketFocusAnchorMs(window: PolymarketDisplayWindow, interval: CandleInterval, nowMs = Date.now()) {
-  return candleOpenAnchorMs(marketFocusTimeMs(window, nowMs), interval);
+  const focusTimeMs = marketFocusTimeMs(window, nowMs);
+  return focusTimeMs === null ? null : candleOpenAnchorMs(focusTimeMs, interval);
+}
+
+export function marketCountdownTargetMs(window: PolymarketDisplayWindow, nowMs = Date.now()) {
+  return window.startMs <= nowMs && nowMs < window.endMs ? window.endMs : null;
 }
 
 export function marketChartFocusKey({
