@@ -67,11 +67,8 @@ const candleIntervalLabels: Record<CandleInterval, string> = {
 const INTERVAL_KEY = "poly-auto.btcWatch.interval";
 const BOLL_KEY = "poly-auto.btcWatch.boll";
 const RSI_KEY = "poly-auto.btcWatch.rsi";
-const INDICATOR_PERIOD_KEY = "poly-auto.btcWatch.rsiPeriod";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
 const CANDLE_SOURCE_KEY = "poly-auto.btcWatch.candleSource";
-const MIN_INDICATOR_PERIOD = 2;
-const MAX_INDICATOR_PERIOD = 200;
 const MAX_VISIBLE_MARKET_PILLS = 5;
 const COMPACT_VISIBLE_CANDLES = 50;
 const WIDE_VISIBLE_CANDLES = 100;
@@ -113,9 +110,7 @@ export default function BTCWatchPage() {
   });
   const [showBollinger, setShowBollinger] = useState(() => localStorage.getItem(BOLL_KEY) !== "0");
   const [showRsi, setShowRsi] = useState(() => localStorage.getItem(RSI_KEY) !== "0");
-  const [indicatorPeriod, setIndicatorPeriod] = useState(() =>
-    readIndicatorPeriod(INDICATOR_PERIOD_KEY, DEFAULT_INDICATOR_PERIOD)
-  );
+  const indicatorPeriod = DEFAULT_INDICATOR_PERIOD;
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
   const [marketSocketOpenNonce, setMarketSocketOpenNonce] = useState(0);
   const [candles, setCandles] = useState<MarketCandle[]>([]);
@@ -200,8 +195,6 @@ export default function BTCWatchPage() {
   const activeIndicators = useMemo(
     () => {
       const calculated = calculateIndicatorPoints(activeCandles, interval, indicatorPeriod);
-      // 后端只持久化默认 14/14 指标；自定义 period 时必须完全使用当前 K 线重算结果。
-      if (indicatorPeriod !== DEFAULT_INDICATOR_PERIOD) return calculated;
       const backendByTime = new Map(
         activeCandles
           .filter((candle) => candle.indicator)
@@ -407,10 +400,6 @@ export default function BTCWatchPage() {
   useEffect(() => {
     localStorage.setItem(RSI_KEY, showRsi ? "1" : "0");
   }, [showRsi]);
-
-  useEffect(() => {
-    localStorage.setItem(INDICATOR_PERIOD_KEY, String(indicatorPeriod));
-  }, [indicatorPeriod]);
 
   useEffect(() => {
     activePolymarketIntervalRef.current = polymarketInterval;
@@ -1099,22 +1088,6 @@ export default function BTCWatchPage() {
         <Typography.Text strong>
           {candleSymbol === "BTCUSD" ? "BTC/USD · Chainlink Spot" : "BTC/USDT · Binance"}
         </Typography.Text>
-        {chainlinkSourceAvailable && (
-          <Segmented
-            size="small"
-            aria-label="K 线数据源"
-            options={[
-              { label: "Chainlink", value: "chainlink" },
-              { label: "Binance", value: "binance" },
-            ]}
-            value={preferredCandleSource}
-            onChange={(value) => {
-              const source = value as ChartCandleSource;
-              localStorage.setItem(CANDLE_SOURCE_KEY, source);
-              setPreferredCandleSource(source);
-            }}
-          />
-        )}
         {latest?.source === "binance_fallback" && (
           <Typography.Text type="warning">Binance 历史补齐</Typography.Text>
         )}
@@ -1146,18 +1119,22 @@ export default function BTCWatchPage() {
         >
           RSI
         </Button>
-        <label className="watch-indicator-period">
-          Period
-          <InputNumber
-            aria-label="RSI 和 Diff period"
-            min={MIN_INDICATOR_PERIOD}
-            max={MAX_INDICATOR_PERIOD}
-            precision={0}
+        {chainlinkSourceAvailable && (
+          <Segmented
             size="small"
-            value={indicatorPeriod}
-            onChange={(value) => typeof value === "number" && setIndicatorPeriod(value)}
+            aria-label="K 线数据源"
+            options={[
+              { label: "Chainlink", value: "chainlink" },
+              { label: "Binance", value: "binance" },
+            ]}
+            value={preferredCandleSource}
+            onChange={(value) => {
+              const source = value as ChartCandleSource;
+              localStorage.setItem(CANDLE_SOURCE_KEY, source);
+              setPreferredCandleSource(source);
+            }}
           />
-        </label>
+        )}
       </div>
       <div className="watch-toolbar-status">
         {selectedPolymarket && (
@@ -2823,9 +2800,4 @@ function buildMarketRailModel(
 
 function marketWindowStartMs(market: PolymarketUpDownMarket) {
   return polymarketDisplayWindow(market)?.startMs ?? Number.POSITIVE_INFINITY;
-}
-
-function readIndicatorPeriod(key: string, fallback: number) {
-  const value = Number(localStorage.getItem(key));
-  return Number.isInteger(value) && value >= MIN_INDICATOR_PERIOD && value <= MAX_INDICATOR_PERIOD ? value : fallback;
 }
