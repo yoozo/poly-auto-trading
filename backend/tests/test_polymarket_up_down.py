@@ -141,6 +141,20 @@ def test_selects_recent_closed_current_and_next_btc_windows() -> None:
     assert [event["slug"] for event in selected] == ["closed", "current", "next", "future"]
 
 
+def test_selects_configured_number_of_historical_btc_windows() -> None:
+    now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
+    events = [
+        make_event("older", "2026-06-13T04:55:00Z", "2026-06-13T05:00:00Z"),
+        make_event("closed", "2026-06-13T05:00:00Z", "2026-06-13T05:05:00Z"),
+        make_event("current", "2026-06-13T05:05:00Z", "2026-06-13T05:10:00Z"),
+        make_event("next", "2026-06-13T05:10:00Z", "2026-06-13T05:15:00Z"),
+    ]
+
+    selected = select_up_down_windows(events, now=now, limit=4, history_limit=2)
+
+    assert [event["slug"] for event in selected] == ["closed", "older", "current", "next"]
+
+
 def test_normalize_up_down_market_prefers_event_start_time_over_market_creation_time() -> None:
     now = datetime(2026, 6, 13, 5, 6, tzinfo=timezone.utc)
     event = make_event("future", "2026-06-13T05:10:00Z", "2026-06-13T05:15:00Z")
@@ -483,10 +497,10 @@ def test_sdk_profile_and_activity_adapters_keep_legacy_keys() -> None:
 
 @pytest.mark.asyncio
 async def test_btc_up_down_ws_market_list_uses_fixed_fetch_options(monkeypatch) -> None:
-    calls: list[tuple[str, int, bool]] = []
+    calls: list[tuple[str, int, bool, int]] = []
 
-    async def fake_fetch(self, interval, limit, include_recent_closed=True):
-        calls.append((interval, limit, include_recent_closed))
+    async def fake_fetch(self, interval, limit, include_recent_closed=True, history_limit=1):
+        calls.append((interval, limit, include_recent_closed, history_limit))
         now = datetime.now(timezone.utc)
         return [
             normalize_up_down_market(
@@ -506,7 +520,7 @@ async def test_btc_up_down_ws_market_list_uses_fixed_fetch_options(monkeypatch) 
 
     markets = await routes_polymarket.ensure_btc_up_down_markets("15m")
 
-    assert calls == [("15m", 12, True)]
+    assert calls == [("15m", 41, True, 30)]
     assert markets[0].window == "current"
     assert markets[0].interval == "15m"
     assert markets[0].outcome_quotes[0].name == "Up"

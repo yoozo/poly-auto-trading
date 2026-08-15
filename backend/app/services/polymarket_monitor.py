@@ -11,8 +11,17 @@ from fastapi.encoders import jsonable_encoder
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.services.chainlink_twap import finalize_closed_market, market_price_context
-from app.services.polymarket_client import PolymarketClient, UP_DOWN_INTERVAL_TAGS
+from app.services.chainlink_twap import (
+    finalize_closed_market,
+    market_price_context,
+    polymarket_boundary_result,
+)
+from app.services.polymarket_client import (
+    UP_DOWN_HISTORY_MARKET_LIMIT,
+    UP_DOWN_INTERVAL_TAGS,
+    UP_DOWN_MARKET_LIST_LIMIT,
+    PolymarketClient,
+)
 from app.services.polymarket_market_store import polymarket_up_down_store
 from app.services.polymarket_ws_hub import polymarket_ws_hub
 from app.services.service_health import service_health_store
@@ -111,16 +120,48 @@ class PolymarketMarketMonitor:
         for interval in UP_DOWN_INTERVAL_TAGS:
             markets = await self._client.fetch_btc_up_down_markets(
                 interval=interval,
-                limit=12,
+                limit=UP_DOWN_MARKET_LIST_LIMIT,
                 include_recent_closed=True,
+                history_limit=UP_DOWN_HISTORY_MARKET_LIMIT,
             )
             if interval in {"5m", "15m"}:
                 # 刷新跨过 market 边界时主动读取官方 Final price，不等待下一条 RTDS 推送触发。
                 now = datetime.now(timezone.utc)
+                closed_markets = [
+                    market
+                    for market in markets
+                    if market.end_time is not None and market.end_time <= now
+                ]
+                latest_closed_market = max(
+                    closed_markets,
+                    key=lambda market: market.end_time or datetime.min.replace(tzinfo=timezone.utc),
+                    default=None,
+                )
+                next_market = next(
+                    (
+                        market
+                        for market in markets
+                        if latest_closed_market is not None
+                        and market.start_time is not None
+                        and latest_closed_market.end_time is not None
+                        and market.start_time == latest_closed_market.end_time
+                    ),
+                    None,
+                )
+                boundary_result = (
+                    await polymarket_boundary_result(latest_closed_market, next_market)
+                    if latest_closed_market is not None and next_market is not None
+                    else None
+                )
                 async with AsyncSessionLocal() as session:
-                    for market in markets:
-                        # finalize 内部统一规范化时区并过滤未结束 market。
-                        await finalize_closed_market(session, market, now=now)
+                    # 历史下拉不应触发批量 Final 请求，信号链路只处理刚结束的最近一盘。
+                    if latest_closed_market is not None:
+                        await finalize_closed_market(
+                            session,
+                            latest_closed_market,
+                            now=now,
+                            official_result=boundary_result,
+                        )
             await polymarket_up_down_store.replace_markets(interval, markets)
             await self.broadcast_markets_snapshot(interval)
         current_tokens = set(await self.subscription_token_ids())
@@ -270,7 +311,7 @@ class PolymarketMarketMonitor:
             self._pending_broadcast_intervals.update(intervals)
 
     async def broadcast_markets_snapshot(self, interval: str) -> None:
-        markets = await polymarket_up_down_store.list_markets(interval, limit=12)
+        markets = await polymarket_up_down_store.list_markets(interval, limit=UP_DOWN_MARKET_LIST_LIMIT)
         await polymarket_ws_hub.broadcast_markets(
             interval,
             {

@@ -410,15 +410,43 @@ def parse_polymarket_past_result(payload: Any, market: Any) -> PolymarketPastRes
     return None
 
 
+async def polymarket_boundary_result(
+    closed_market: Any,
+    next_market: Any,
+) -> PolymarketPastResult | None:
+    if (
+        closed_market.interval not in {"5m", "15m"}
+        or closed_market.interval != next_market.interval
+        or closed_market.start_time is None
+        or closed_market.end_time is None
+        or next_market.start_time is None
+        or closed_market.twap_window_seconds != next_market.twap_window_seconds
+        or ensure_utc(closed_market.end_time) != ensure_utc(next_market.start_time)
+    ):
+        return None
+    open_price = await polymarket_price_to_beat(closed_market)
+    close_price = await polymarket_price_to_beat(next_market)
+    if open_price is None or close_price is None or not open_price.is_finite() or not close_price.is_finite():
+        return None
+    # 连续 market 共享同一个边界；新盘官方 Price To Beat 即上一盘的收盘 TWAP。
+    return PolymarketPastResult(
+        start_time=ensure_utc(closed_market.start_time),
+        end_time=ensure_utc(closed_market.end_time),
+        open_price=open_price,
+        close_price=close_price,
+    )
+
+
 async def finalize_closed_market(
     session: AsyncSession,
     market: Any,
     *,
     now: datetime | None = None,
+    official_result: PolymarketPastResult | None = None,
 ) -> PolymarketPastResult | None:
     if market.end_time is None or ensure_utc(now or datetime.now(timezone.utc)) < ensure_utc(market.end_time):
         return None
-    result = await polymarket_past_result(market)
+    result = official_result or await polymarket_past_result(market)
     if result is None:
         return None
     # 同一 market 的价格上下文会随盘口广播高频重算；官方收盘 K 线只尝试落库一次。

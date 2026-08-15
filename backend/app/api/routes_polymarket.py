@@ -23,7 +23,12 @@ from app.schemas.polymarket import (
 )
 from app.schemas.polymarket_status import PolymarketStatusResponse
 from app.services.polymarket_account_monitor import polymarket_account_monitor
-from app.services.polymarket_client import PolymarketClient, PolymarketInputError
+from app.services.polymarket_client import (
+    UP_DOWN_HISTORY_MARKET_LIMIT,
+    UP_DOWN_MARKET_LIST_LIMIT,
+    PolymarketClient,
+    PolymarketInputError,
+)
 from app.services.polymarket_account_store import polymarket_account_store
 from app.services.polymarket_account_ws_hub import polymarket_account_ws_hub
 from app.services.polymarket_credentials import (
@@ -45,7 +50,7 @@ from app.services.chainlink_twap import market_price_context
 router = APIRouter(tags=["polymarket"])
 logger = logging.getLogger(__name__)
 POLYMARKET_BTC_UP_DOWN_INTERVALS = {"5m", "15m", "1h", "4h"}
-POLYMARKET_BTC_UP_DOWN_LIST_LIMIT = 12
+POLYMARKET_BTC_UP_DOWN_LIST_LIMIT = UP_DOWN_MARKET_LIST_LIMIT
 POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED = True
 SENSITIVE_ERROR_MESSAGE_PATTERN = re.compile(
     r"(api[_ -]?(?:secret|passphrase|key)|secret|passphrase|private[_ -]?key|seed[_ -]?phrase|signature|signed[_ -]?order)",
@@ -382,6 +387,7 @@ async def ensure_btc_up_down_markets(interval: str) -> list[PolymarketUpDownMark
         interval=interval,
         limit=POLYMARKET_BTC_UP_DOWN_LIST_LIMIT,
         include_recent_closed=POLYMARKET_BTC_UP_DOWN_INCLUDE_RECENT_CLOSED,
+        history_limit=UP_DOWN_HISTORY_MARKET_LIMIT,
     )
     await polymarket_up_down_store.replace_markets(interval, markets)
     return await polymarket_up_down_store.list_markets(interval, limit=POLYMARKET_BTC_UP_DOWN_LIST_LIMIT)

@@ -13,8 +13,10 @@ from app.services.chainlink_twap import (
     PolymarketPastResult,
     aggregate_spot_candle,
     candles_to_persist,
+    finalize_closed_market,
     market_price_context,
     notify_closed_market_signal,
+    polymarket_boundary_result,
     parse_polymarket_past_result,
     parse_polymarket_page_open_price,
     parse_twap_message,
@@ -181,6 +183,91 @@ def test_polymarket_past_result_builds_missing_candle_from_official_open_close()
     assert candle.source == "polymarket"
     assert candle.is_closed is True
     assert candle.is_complete is False
+
+
+@pytest.mark.asyncio
+async def test_boundary_result_uses_next_market_price_to_beat_as_close(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    next_market = market(start=closed_market.end_time, interval="5m", twap_window_seconds=60)
+    prices = {
+        closed_market.id: Decimal("63300.70"),
+        next_market.id: Decimal("63318.67"),
+    }
+    monkeypatch.setattr(
+        chainlink_twap,
+        "polymarket_price_to_beat",
+        lambda item: async_value(prices[item.id]),
+    )
+
+    result = await polymarket_boundary_result(closed_market, next_market)
+
+    assert result == PolymarketPastResult(
+        start_time=closed_market.start_time,
+        end_time=closed_market.end_time,
+        open_price=Decimal("63300.70"),
+        close_price=Decimal("63318.67"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_boundary_result_rejects_non_contiguous_market(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    next_market = market(
+        start=closed_market.end_time + timedelta(minutes=5),
+        interval="5m",
+        twap_window_seconds=60,
+    )
+    monkeypatch.setattr(
+        chainlink_twap,
+        "polymarket_price_to_beat",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("non-contiguous market must not fetch prices")
+        ),
+    )
+
+    assert await polymarket_boundary_result(closed_market, next_market) is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_closed_market_prefers_boundary_result(monkeypatch) -> None:
+    start = datetime(2026, 8, 14, 3, 40, tzinfo=timezone.utc)
+    closed_market = market(start=start, interval="5m", twap_window_seconds=60)
+    result = PolymarketPastResult(
+        start_time=start,
+        end_time=closed_market.end_time,
+        open_price=Decimal("63300.70"),
+        close_price=Decimal("63318.67"),
+    )
+    persisted = []
+    notified = []
+    monkeypatch.setattr(
+        chainlink_twap,
+        "polymarket_past_result",
+        lambda *args: (_ for _ in ()).throw(AssertionError("boundary result must win")),
+    )
+
+    async def fake_insert(session, candles):
+        persisted.extend(candles)
+
+    async def fake_notify(session, selected_market, selected_result):
+        notified.append((selected_market, selected_result))
+
+    monkeypatch.setattr(chainlink_twap, "insert_candles_if_missing", fake_insert)
+    monkeypatch.setattr(chainlink_twap, "notify_closed_market_signal", fake_notify)
+    chainlink_twap._persisted_past_result_market_ids.discard(closed_market.id)
+
+    finalized = await finalize_closed_market(
+        object(),
+        closed_market,
+        now=closed_market.end_time,
+        official_result=result,
+    )
+
+    assert finalized == result
+    assert len(persisted) == 1
+    assert notified == [(closed_market, result)]
 
 
 @pytest.mark.asyncio

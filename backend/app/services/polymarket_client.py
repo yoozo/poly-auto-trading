@@ -78,6 +78,8 @@ UP_DOWN_INTERVAL_LOOKBACK_SECONDS = {
     "1h": 60 * 60,
     "4h": 4 * 60 * 60,
 }
+UP_DOWN_HISTORY_MARKET_LIMIT = 30
+UP_DOWN_MARKET_LIST_LIMIT = UP_DOWN_HISTORY_MARKET_LIMIT + 11
 CLOSE_ONLY_COUNTRIES = {"PL", "SG", "TH", "TW"}
 GEOBLOCK_URL = "https://polymarket.com/api/geoblock"
 
@@ -600,6 +602,7 @@ class PolymarketClient:
         interval: str = "5m",
         limit: int = 6,
         include_recent_closed: bool = True,
+        history_limit: int = 1,
         now: datetime | None = None,
     ) -> list[PolymarketUpDownMarket]:
         if interval not in UP_DOWN_INTERVAL_TAGS:
@@ -610,14 +613,22 @@ class PolymarketClient:
             now=current_time,
             limit=max(limit * 8, 20),
             include_recent_closed=include_recent_closed,
+            history_limit=history_limit,
         )
         candidates = [
             event
             for event in events
             if is_btc_up_down_event(event, interval=interval)
         ]
-        selected = select_up_down_windows(candidates, now=current_time, limit=limit)
-        books = await self.fetch_order_books(token_ids_for_events(selected))
+        selected = select_up_down_windows(
+            candidates,
+            now=current_time,
+            limit=limit,
+            history_limit=history_limit,
+        )
+        # 历史 market 只用于下拉回看，不再为已经关闭的 token 批量请求订单簿。
+        active_events = [event for event in selected if (event_end_time(event) or current_time) > current_time]
+        books = await self.fetch_order_books(token_ids_for_events(active_events))
         markets = [
             normalize_up_down_market(event, interval=interval, books=books, now=current_time)
             for event in selected
@@ -631,12 +642,13 @@ class PolymarketClient:
         now: datetime,
         limit: int,
         include_recent_closed: bool = True,
+        history_limit: int = 1,
     ) -> list[dict[str, Any]]:
         tag_slug = UP_DOWN_INTERVAL_TAGS[interval]
         series_slug = UP_DOWN_INTERVAL_SERIES[interval]
         end_date_min = now
         if include_recent_closed:
-            lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval]
+            lookback_seconds = UP_DOWN_INTERVAL_LOOKBACK_SECONDS[interval] * max(1, history_limit)
             end_date_min = now.replace() - timedelta(seconds=lookback_seconds)
         params = {
             "limit": limit,
@@ -1449,6 +1461,7 @@ def select_up_down_windows(
     *,
     now: datetime,
     limit: int,
+    history_limit: int = 1,
 ) -> list[dict[str, Any]]:
     valid = [
         event
@@ -1474,8 +1487,8 @@ def select_up_down_windows(
         [event for event in valid if (event_start_time(event) or datetime.min.replace(tzinfo=timezone.utc)) > now],
         key=lambda event: event_start_time(event) or datetime.max.replace(tzinfo=timezone.utc),
     )
-    # 前端需要最近历史盘、当前盘和未来盘；不要再用简单截断，否则会把远期盘误当主数据。
-    ordered = historical[:1] + current + future
+    # 历史数量由展示层明确限制，同时保留当前盘和未来盘的选择窗口。
+    ordered = historical[:max(0, history_limit)] + current + future
     seen: set[str] = set()
     selected: list[dict[str, Any]] = []
     for event in ordered:

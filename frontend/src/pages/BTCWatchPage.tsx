@@ -70,6 +70,7 @@ const RSI_KEY = "poly-auto.btcWatch.rsi";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
 const CANDLE_SOURCE_KEY = "poly-auto.btcWatch.candleSource";
 const MAX_VISIBLE_MARKET_PILLS = 5;
+const HISTORICAL_MARKET_LIMIT = 30;
 const COMPACT_VISIBLE_CANDLES = 50;
 const WIDE_VISIBLE_CANDLES = 100;
 const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
@@ -1319,7 +1320,16 @@ function PolymarketBtcPanel({
     () => buildMarketRailModel(markets, activeMarket?.id, selectedMarketId),
     [activeMarket?.id, markets, selectedMarketId]
   );
+  const activePastMarket = railModel.pastMarkets.find((market) => market.id === activeMarket?.id);
   const [tradeDraft, setTradeDraft] = useState<TradeDraft | null>(null);
+  const historicalMenuItems = useMemo<MenuProps["items"]>(
+    () =>
+      railModel.pastMarkets.map((market) => ({
+        key: market.id,
+        label: formatHistoricalMarketLabel(market),
+      })),
+    [railModel.pastMarkets]
+  );
   const moreMenuItems = useMemo<MenuProps["items"]>(
     () =>
       railModel.moreMarkets.map((market) => ({
@@ -1372,15 +1382,26 @@ function PolymarketBtcPanel({
           </div>
         )}
         <div className="polymarket-market-rail" role="tablist" aria-label="Polymarket 市场窗口">
-          {railModel.latestPastMarket && (
-            <button
-              type="button"
-              className={railModel.latestPastMarket.id === activeMarket?.id ? "polymarket-market-pill active" : "polymarket-market-pill"}
-              onClick={() => onSelectedMarketId(railModel.latestPastMarket!.id, false)}
-              aria-pressed={railModel.latestPastMarket.id === activeMarket?.id}
+          {railModel.pastMarkets.length > 0 && (
+            <Dropdown
+              menu={{
+                items: historicalMenuItems,
+                selectable: true,
+                selectedKeys: activePastMarket ? [activePastMarket.id] : [],
+                onClick: ({ key }) => onSelectedMarketId(String(key), false),
+              }}
+              trigger={["click"]}
             >
-              <span className="polymarket-market-pill-time">{formatMarketEndTime(railModel.latestPastMarket)}</span>
-            </button>
+              <Button
+                className={activePastMarket ? "polymarket-market-pill active" : "polymarket-market-pill"}
+                size="small"
+              >
+                <span className="polymarket-market-pill-time">
+                  {activePastMarket ? formatMarketEndTime(activePastMarket) : "历史"}
+                </span>
+                <DownOutlined />
+              </Button>
+            </Dropdown>
           )}
           {railModel.visibleMarkets.map((market) => {
             const isActive = market.id === activeMarket?.id;
@@ -2722,6 +2743,15 @@ function formatMarketEndTime(market: PolymarketUpDownMarket) {
   }).format(new Date(window.endMs));
 }
 
+function formatHistoricalMarketLabel(market: PolymarketUpDownMarket) {
+  const window = polymarketDisplayWindow(market);
+  if (!window) return market.window;
+  const date = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(
+    new Date(window.endMs)
+  );
+  return `${date} ${formatMarketTime(market)}`;
+}
+
 function marketWindowLabel(market: PolymarketUpDownMarket, markets: PolymarketUpDownMarket[] = []) {
   const window = polymarketDisplayWindow(market);
   if (window) {
@@ -2759,8 +2789,10 @@ function buildMarketRailModel(
     ? sortedMarkets.find((market) => market.id === selectedMarketId)
     : undefined;
 
-  const pastMarkets = sortedMarkets.filter((market) => marketWindowLabel(market, sortedMarkets) === "已结束");
-  const latestPastMarket = pastMarkets.at(-1);
+  const pastMarkets = sortedMarkets
+    .filter((market) => marketWindowLabel(market, sortedMarkets) === "已结束")
+    .slice(-HISTORICAL_MARKET_LIMIT)
+    .reverse();
   const futureMarkets = sortedMarkets.filter(
     (market) =>
       market.id !== currentMarketId &&
@@ -2770,7 +2802,7 @@ function buildMarketRailModel(
   const visibleMarkets: PolymarketUpDownMarket[] = [];
   const appendUnique = (market: PolymarketUpDownMarket | undefined) => {
     if (!market) return;
-    if (latestPastMarket && market.id === latestPastMarket.id) return;
+    if (pastMarkets.some((pastMarket) => market.id === pastMarket.id)) return;
     if (visibleMarkets.some((item) => item.id === market.id)) return;
     visibleMarkets.push(market);
   };
@@ -2792,7 +2824,7 @@ function buildMarketRailModel(
   const moreMarkets = futureMarkets.filter((market) => !visibleIds.has(market.id));
 
   return {
-    latestPastMarket,
+    pastMarkets,
     visibleMarkets,
     moreMarkets,
   };
