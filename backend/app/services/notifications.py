@@ -462,9 +462,8 @@ def delivery_direction_consistency(signal: SignalRecord) -> str | None:
     )
     final_direction = "UP" if close_twap >= price_to_beat else "DOWN"
     if close_direction == "FLAT":
-        return f"⚪ 无法判断（Close {close_direction} / TWAP {final_direction}）"
-    marker = "✅ 是" if close_direction == final_direction else "❌ 否"
-    return f"{marker}（Close {close_direction} / TWAP {final_direction}）"
+        return "⚪"
+    return "✅" if close_direction == final_direction else "❌"
 
 
 def delivery_market_name(signals: list[SignalRecord]) -> str:
