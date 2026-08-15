@@ -1401,7 +1401,11 @@ function PolymarketBtcPanel({
               trigger={["click"]}
             >
               <Button
-                className={activePastMarket ? "polymarket-market-pill active" : "polymarket-market-pill"}
+                className={
+                  activePastMarket
+                    ? "polymarket-market-pill polymarket-market-pill-history active"
+                    : "polymarket-market-pill polymarket-market-pill-history"
+                }
                 size="small"
                 icon={<DownOutlined />}
                 aria-label="选择历史 Market"
@@ -1409,22 +1413,24 @@ function PolymarketBtcPanel({
               />
             </Dropdown>
           )}
-          {railModel.visibleMarkets.map((market) => {
-            const isActive = market.id === activeMarket?.id;
-            const isLive = marketWindowLabel(market, markets) === "当前";
-            return (
-              <button
-                key={market.id}
-                type="button"
-                className={isActive ? "polymarket-market-pill active" : "polymarket-market-pill"}
-                onClick={() => onSelectedMarketId(market.id, isLive)}
-                aria-pressed={isActive}
-              >
-                {isLive && <span className="polymarket-market-pill-live-dot" aria-hidden="true" />}
-                <span className="polymarket-market-pill-time">{formatMarketEndTime(market)}</span>
-              </button>
-            );
-          })}
+          <div className="polymarket-market-window-list">
+            {railModel.visibleMarkets.map((market) => {
+              const isActive = market.id === activeMarket?.id;
+              const isLive = marketWindowLabel(market, markets) === "当前";
+              return (
+                <button
+                  key={market.id}
+                  type="button"
+                  className={isActive ? "polymarket-market-pill active" : "polymarket-market-pill"}
+                  onClick={() => onSelectedMarketId(market.id, isLive)}
+                  aria-pressed={isActive}
+                >
+                  {isLive && <span className="polymarket-market-pill-live-dot" aria-hidden="true" />}
+                  <span className="polymarket-market-pill-time">{formatMarketEndTime(market)}</span>
+                </button>
+              );
+            })}
+          </div>
           {moreMenuItems && moreMenuItems.length > 0 && (
             <Dropdown
               menu={{

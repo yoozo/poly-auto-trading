@@ -2232,13 +2232,21 @@ body[data-theme="dark"] .app-account-login-action {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.polymarket-market-window-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 2px;
   scrollbar-width: none;
 }
 
-.polymarket-market-rail::-webkit-scrollbar {
+.polymarket-market-window-list::-webkit-scrollbar {
   display: none;
 }
 
@@ -2259,6 +2267,20 @@ body[data-theme="dark"] .app-account-login-action {
   white-space: nowrap;
   transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
   cursor: pointer;
+}
+
+.polymarket-market-window-list .polymarket-market-pill {
+  flex: 1 1 64px;
+  min-width: 56px;
+  justify-content: center;
+  padding: 0 10px;
+}
+
+.polymarket-market-pill-history.ant-btn {
+  flex: 0 0 34px;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
 }
 
 .polymarket-market-pill:hover {
