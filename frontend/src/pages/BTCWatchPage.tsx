@@ -71,7 +71,7 @@ const RSI_KEY = "poly-auto.btcWatch.rsi";
 const POLY_INTERVAL_KEY = "poly-auto.btcWatch.polymarketInterval";
 const CANDLE_SOURCE_KEY = "poly-auto.btcWatch.candleSource";
 const MAX_VISIBLE_MARKET_PILLS = 5;
-const HISTORICAL_MARKET_LIMIT = 30;
+const HISTORICAL_MARKET_LIMIT = 15;
 const COMPACT_VISIBLE_CANDLES = 50;
 const WIDE_VISIBLE_CANDLES = 100;
 const WIDE_LAYOUT_QUERY = "(min-width: 1361px)";
@@ -1403,12 +1403,10 @@ function PolymarketBtcPanel({
               <Button
                 className={activePastMarket ? "polymarket-market-pill active" : "polymarket-market-pill"}
                 size="small"
-              >
-                <span className="polymarket-market-pill-time">
-                  {activePastMarket ? formatMarketEndTime(activePastMarket) : "历史"}
-                </span>
-                <DownOutlined />
-              </Button>
+                icon={<DownOutlined />}
+                aria-label="选择历史 Market"
+                title="选择历史 Market"
+              />
             </Dropdown>
           )}
           {railModel.visibleMarkets.map((market) => {

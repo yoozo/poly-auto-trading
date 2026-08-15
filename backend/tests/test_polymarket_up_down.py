@@ -554,7 +554,7 @@ async def test_btc_up_down_ws_market_list_uses_fixed_fetch_options(monkeypatch) 
 
     markets = await routes_polymarket.ensure_btc_up_down_markets("15m")
 
-    assert calls == [("15m", 41, True, 30)]
+    assert calls == [("15m", 26, True, 15)]
     assert markets[0].window == "current"
     assert markets[0].interval == "15m"
     assert markets[0].outcome_quotes[0].name == "Up"
