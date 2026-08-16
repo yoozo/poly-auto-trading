@@ -270,9 +270,13 @@ def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_fin
     )
 
     assert notifications.delivery_direction_consistency(signal) == expected
-    assert f"方向一致：{expected}" in notifications.delivery_message([signal])
+    message = notifications.delivery_message([signal])
+    assert (f"方向一致：{expected}" in message) is (expected == "❌")
     market_line = "market：btc-updown-5m-1767236400"
-    assert (market_line in notifications.delivery_message([signal])) is (expected == "❌")
+    assert (market_line in message) is (expected == "❌")
+    assert message.count("K线时间：") == 1
+    if expected == "❌":
+        assert f"{market_line}\nK线时间：2026-01-01 08:00:00\n方向一致：❌" in message
 
 
 @pytest.mark.asyncio

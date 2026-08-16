@@ -421,18 +421,22 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     market_name = delivery_market_name(signals)
     direction_emoji, direction_name = delivery_direction(signals)
     reminders = [delivery_signal_reminder(signal) for signal in signals]
+    candle_time = f"K线时间：{format_signal_time(signals[0].occurred_at)}"
+    consistency = delivery_direction_consistency(signals[0])
     lines = [
         f"{score_marker(total_score)}市场：{market_name}",
-        f"K线时间：{format_signal_time(signals[0].occurred_at)}",
+    ]
+    if consistency != "❌":
+        lines.append(candle_time)
+    lines.extend([
         f"总分：{format_optional(total_score)}",
         f"方向：{direction_emoji}{direction_name}",
-    ]
-    consistency = delivery_direction_consistency(signals[0])
-    if consistency is not None:
-        if consistency == "❌":
-            market = delivery_settlement_market(signals[0])
-            if market:
-                lines.append(f"market：{market}")
+    ])
+    if consistency == "❌":
+        market = delivery_settlement_market(signals[0])
+        if market:
+            lines.append(f"market：{market}")
+        lines.append(candle_time)
         lines.append(f"方向一致：{consistency}")
     lines.append(f"信号提醒：{'，'.join(reminders)}")
     for signal, reminder in zip(signals, reminders):
