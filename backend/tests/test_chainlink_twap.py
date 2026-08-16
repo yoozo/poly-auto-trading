@@ -303,6 +303,7 @@ async def test_closed_market_signal_keeps_chainlink_close_and_adds_final_twap(mo
     assert signal_events[0].candle == raw_candle
     assert signal_events[0].candle.close == 65005
     assert signal_events[0].metadata["polymarket_final"] == {
+        "market": closed_market.slug or closed_market.title or closed_market.id,
         "price_to_beat": "65020.25",
         "close_twap": "65010.75",
     }

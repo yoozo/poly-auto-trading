@@ -258,6 +258,7 @@ def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_fin
                         "source": "chainlink_spot",
                         "metadata": {
                             "polymarket_final": {
+                                "market": "btc-updown-5m-1767236400",
                                 "price_to_beat": price_to_beat,
                                 "close_twap": close_twap,
                             }
@@ -270,6 +271,8 @@ def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_fin
 
     assert notifications.delivery_direction_consistency(signal) == expected
     assert f"方向一致：{expected}" in notifications.delivery_message([signal])
+    market_line = "market：btc-updown-5m-1767236400"
+    assert (market_line in notifications.delivery_message([signal])) is (expected == "❌")
 
 
 @pytest.mark.asyncio

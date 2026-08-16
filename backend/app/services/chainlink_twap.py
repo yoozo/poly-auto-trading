@@ -475,13 +475,14 @@ async def notify_closed_market_signal(
     )
     if not candles or candles[0].source != "chainlink" or not candles[0].is_closed:
         return
-    # 指标使用原始 Chainlink OHLC；Polymarket Final 只作为 TG 一致性上下文。
+    # 指标使用原始 Chainlink OHLC；Polymarket Final 和 market 标识只作为 TG 一致性上下文。
     await market_signal_pipeline.handle_market_event(
         MarketDataEvent(
             source="chainlink_spot",
             candle=candles[0],
             metadata={
                 "polymarket_final": {
+                    "market": market.slug or market.title or market.id,
                     "price_to_beat": str(result.open_price),
                     "close_twap": str(result.close_price),
                 }

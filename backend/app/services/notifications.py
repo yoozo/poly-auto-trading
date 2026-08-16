@@ -429,6 +429,10 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     ]
     consistency = delivery_direction_consistency(signals[0])
     if consistency is not None:
+        if consistency == "❌":
+            market = delivery_settlement_market(signals[0])
+            if market:
+                lines.append(f"market：{market}")
         lines.append(f"方向一致：{consistency}")
     lines.append(f"信号提醒：{'，'.join(reminders)}")
     for signal, reminder in zip(signals, reminders):
@@ -464,6 +468,15 @@ def delivery_direction_consistency(signal: SignalRecord) -> str | None:
     if close_direction == "FLAT":
         return "⚪"
     return "✅" if close_direction == final_direction else "❌"
+
+
+def delivery_settlement_market(signal: SignalRecord) -> str | None:
+    events = signal.input_snapshot.get("market_events")
+    if not isinstance(events, list) or not events or not isinstance(events[0], dict):
+        return None
+    final = events[0].get("metadata", {}).get("polymarket_final")
+    market = final.get("market") if isinstance(final, dict) else None
+    return market if isinstance(market, str) and market else None
 
 
 def delivery_market_name(signals: list[SignalRecord]) -> str:
