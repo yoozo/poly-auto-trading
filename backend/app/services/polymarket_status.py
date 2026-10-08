@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 POLYMARKET_COMPONENTS_URL = "https://status.polymarket.com/v3/components.json"
 POLYMARKET_SUMMARY_URL = "https://status.polymarket.com/v3/summary.json"
-CLOB_API_COMPONENT_NAMES = {"CLOB API", "Trading API (CLOB)"}
+CLOB_API_COMPONENT_NAMES = {"CLOB API", "Trading API (CLOB)", "Predictions Trading API (CLOB)"}
 
 
 async def get_polymarket_status() -> PolymarketStatusResponse:
@@ -81,7 +81,7 @@ def find_clob_component(payload: dict[str, Any]) -> dict[str, Any]:
     components = payload.get("components")
     if not isinstance(components, list):
         raise ValueError("Polymarket components response is missing components")
-    # 状态页会用名称前置空格表达组件层级，并可能调整展示名称；兼容已知的新旧 CLOB 名称。
+    # 状态页会用名称前置空格表达组件层级，并可能调整展示名称；兼容已知的 CLOB 名称。
     component = next(
         (
             item

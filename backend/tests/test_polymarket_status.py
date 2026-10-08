@@ -78,6 +78,13 @@ def test_legacy_clob_component_name_remains_supported() -> None:
     assert result.component_name == "CLOB API"
 
 
+def test_current_clob_component_name_is_supported() -> None:
+    result = normalize(components_payload(clob_name="  Predictions Trading API (CLOB)"))
+
+    assert result.healthy is True
+    assert result.component_name == "  Predictions Trading API (CLOB)"
+
+
 def test_clob_incident_is_unhealthy() -> None:
     incident = incident_payload()
     result = normalize(components_payload(incidents=[incident]))

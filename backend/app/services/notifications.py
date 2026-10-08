@@ -131,8 +131,20 @@ async def process_signal_notifications(
     ]
     if not telegram_signals:
         return []
-    delivery = await process_telegram_delivery(session, telegram_signals)
-    return [delivery] if delivery is not None else []
+    deliveries = [await process_telegram_delivery(session, telegram_signals)]
+    mismatch_signals = [
+        signal for signal in telegram_signals if delivery_direction_consistency(signal) == "❌"
+    ]
+    if mismatch_signals:
+        # 普通信号与结算不一致告警分开投递，使用不同 key 独立去重。
+        deliveries.append(
+            await process_telegram_delivery(
+                session,
+                mismatch_signals,
+                settlement_mismatch=True,
+            )
+        )
+    return [delivery for delivery in deliveries if delivery is not None]
 
 
 def telegram_signal_uses_expected_source(signal: SignalRecord) -> bool:
@@ -150,11 +162,17 @@ def telegram_signal_uses_expected_source(signal: SignalRecord) -> bool:
 async def process_telegram_delivery(
     session: AsyncSession,
     signals: list[SignalRecord],
+    *,
+    settlement_mismatch: bool = False,
 ) -> NotificationDelivery | None:
     target_type, target_key = delivery_target(signals)
-    delivery_key = build_delivery_key(signals)
-    title = delivery_title(signals)
-    message = delivery_message(signals)
+    delivery_key = build_delivery_key(signals, settlement_mismatch=settlement_mismatch)
+    title = "❌ 信号与 market 方向不一致" if settlement_mismatch else delivery_title(signals)
+    message = (
+        settlement_mismatch_message(signals[0])
+        if settlement_mismatch
+        else delivery_message(signals)
+    )
     enabled = await get_telegram_enabled(session)
     configured, missing = telegram_config_state()
     status: DeliveryStatus
@@ -404,9 +422,14 @@ def delivery_target(signals: list[SignalRecord]) -> tuple[str, str]:
     return first.target_type, first.target_key
 
 
-def build_delivery_key(signals: list[SignalRecord]) -> str:
+def build_delivery_key(
+    signals: list[SignalRecord],
+    *,
+    settlement_mismatch: bool = False,
+) -> str:
     first = signals[0]
-    return f"telegram:{first.dedupe_key}"
+    kind = "settlement-mismatch:" if settlement_mismatch else ""
+    return f"telegram:{kind}{first.dedupe_key}"
 
 
 def delivery_title(signals: list[SignalRecord]) -> str:
@@ -421,23 +444,12 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     market_name = delivery_market_name(signals)
     direction_emoji, direction_name = delivery_direction(signals)
     reminders = [delivery_signal_reminder(signal) for signal in signals]
-    candle_time = f"K线时间：{format_signal_time(signals[0].occurred_at)}"
-    consistency = delivery_direction_consistency(signals[0])
     lines = [
         f"{score_marker(total_score)}市场：{market_name}",
-    ]
-    if consistency != "❌":
-        lines.append(candle_time)
-    lines.extend([
+        f"K线时间：{format_signal_time(signals[0].occurred_at)}",
         f"总分：{format_optional(total_score)}",
         f"方向：{direction_emoji}{direction_name}",
-    ])
-    if consistency == "❌":
-        market = delivery_settlement_market(signals[0])
-        if market:
-            lines.append(f"market：{market}")
-        lines.append(candle_time)
-        lines.append(f"方向一致：{consistency}")
+    ]
     lines.append(f"信号提醒：{'，'.join(reminders)}")
     for signal, reminder in zip(signals, reminders):
         lines.append(
@@ -446,32 +458,40 @@ def delivery_message(signals: list[SignalRecord]) -> str:
     return "\n".join(lines)
 
 
+def settlement_mismatch_message(signal: SignalRecord) -> str:
+    market = delivery_settlement_market(signal) or "-"
+    return "\n".join(
+        [
+            f"market：{market}",
+            f"K线时间：{format_signal_time(signal.occurred_at)}",
+            "方向一致：❌",
+        ]
+    )
+
+
 def delivery_direction_consistency(signal: SignalRecord) -> str | None:
     if signal.metadata.get("interval") not in {"5m", "15m"}:
         return None
-    candle = signal.input_snapshot.get("candle")
     events = signal.input_snapshot.get("market_events")
-    if not isinstance(candle, dict) or not isinstance(events, list) or not events:
+    if not isinstance(events, list) or not events:
         return None
     event = events[0]
     final = event.get("metadata", {}).get("polymarket_final") if isinstance(event, dict) else None
     if not isinstance(final, dict):
         return None
     try:
-        candle_open = Decimal(str(candle["open"]))
-        candle_close = Decimal(str(candle["close"]))
         price_to_beat = Decimal(str(final["price_to_beat"]))
         close_twap = Decimal(str(final["close_twap"]))
     except (KeyError, InvalidOperation, TypeError, ValueError):
         return None
 
-    close_direction = (
-        "UP" if candle_close > candle_open else "DOWN" if candle_close < candle_open else "FLAT"
+    signal_direction = (
+        "UP" if signal.direction == "long" else "DOWN" if signal.direction == "short" else None
     )
+    if signal_direction is None:
+        return None
     final_direction = "UP" if close_twap >= price_to_beat else "DOWN"
-    if close_direction == "FLAT":
-        return "⚪"
-    return "✅" if close_direction == final_direction else "❌"
+    return "✅" if signal_direction == final_direction else "❌"
 
 
 def delivery_settlement_market(signal: SignalRecord) -> str | None:

@@ -226,17 +226,16 @@ def test_analyze_signal_input_marks_negative_rsi_diff_as_buy_long() -> None:
 
 
 @pytest.mark.parametrize(
-    ("interval", "candle_open", "candle_close", "price_to_beat", "close_twap", "expected"),
+    ("interval", "direction", "price_to_beat", "close_twap", "expected"),
     [
-        ("5m", 100, 101, "200", "201", "✅"),
-        ("15m", 100, 99, "200", "201", "❌"),
-        ("5m", 100, 100, "200", "199", "⚪"),
+        ("5m", "long", "200", "201", "✅"),
+        ("15m", "short", "200", "201", "❌"),
+        ("5m", "long", "200", "199", "❌"),
     ],
 )
-def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_final(
+def test_delivery_direction_consistency_uses_signal_and_polymarket_final(
     interval,
-    candle_open,
-    candle_close,
+    direction,
     price_to_beat,
     close_twap,
     expected,
@@ -251,8 +250,8 @@ def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_fin
         source="chainlink_spot",
     ).model_copy(
         update={
+            "direction": direction,
             "input_snapshot": {
-                "candle": {"open": candle_open, "close": candle_close},
                 "market_events": [
                     {
                         "source": "chainlink_spot",
@@ -265,18 +264,16 @@ def test_delivery_direction_consistency_uses_chainlink_candle_and_polymarket_fin
                         },
                     }
                 ],
-            }
+            },
         }
     )
 
     assert notifications.delivery_direction_consistency(signal) == expected
-    message = notifications.delivery_message([signal])
-    assert (f"方向一致：{expected}" in message) is (expected == "❌")
-    market_line = "market：btc-updown-5m-1767236400"
-    assert (market_line in message) is (expected == "❌")
-    assert message.count("K线时间：") == 1
+    assert "方向一致" not in notifications.delivery_message([signal])
     if expected == "❌":
-        assert f"{market_line}\nK线时间：2026-01-01 08:00:00\n方向一致：❌" in message
+        assert notifications.settlement_mismatch_message(signal) == (
+            "market：btc-updown-5m-1767236400\nK线时间：2026-01-01 08:00:00\n方向一致：❌"
+        )
 
 
 @pytest.mark.asyncio
@@ -310,6 +307,57 @@ async def test_process_signal_notifications_keeps_rsi_diff_from_expected_source(
     await notifications.process_signal_notifications(object(), signals)
 
     assert calls == [[signals[1]]]
+
+
+@pytest.mark.asyncio
+async def test_process_signal_notifications_sends_mismatch_as_separate_delivery(
+    monkeypatch,
+) -> None:
+    candle_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    signal = make_signal_record(
+        1,
+        "rsi_ema_diff",
+        "RSI-EMA diff = 13",
+        candle_time,
+        interval="5m",
+        source="chainlink_spot",
+    ).model_copy(
+        update={
+            "input_snapshot": {
+                "market_events": [
+                    {
+                        "source": "chainlink_spot",
+                        "metadata": {
+                            "polymarket_final": {
+                                "market": "btc-updown-5m-1767236400",
+                                "price_to_beat": "200",
+                                "close_twap": "201",
+                            }
+                        },
+                    }
+                ]
+            }
+        }
+    )
+    calls = []
+
+    async def fake_process_telegram_delivery(
+        session,
+        signal_records,
+        *,
+        settlement_mismatch=False,
+    ):
+        calls.append((signal_records, settlement_mismatch))
+        return None
+
+    monkeypatch.setattr(notifications, "process_telegram_delivery", fake_process_telegram_delivery)
+
+    await notifications.process_signal_notifications(object(), [signal])
+
+    assert calls == [([signal], False), ([signal], True)]
+    assert notifications.build_delivery_key([signal]) != notifications.build_delivery_key(
+        [signal], settlement_mismatch=True
+    )
 
 
 @pytest.mark.asyncio
